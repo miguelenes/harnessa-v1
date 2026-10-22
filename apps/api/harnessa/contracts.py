@@ -964,6 +964,7 @@ class RepositoryIndexSyncRequest(BaseModel):
 
 class RepositoryIndexSyncResponse(BaseModel):
     dry_run: bool
+    snapshot_complete: bool
     revision: str
     considered: int = Field(ge=0)
     source_count: int = Field(ge=0)

@@ -111,11 +111,13 @@ async def test_repository_sync_preview_duplicate_update_and_deletion_tombstone(
             db, project_id=project_id, repository_id=repository_id, actor=actor, manager=manager, dry_run=True
         )
         assert preview["dry_run"] is True
+        assert preview["snapshot_complete"] is True
         assert preview["considered"] == 3
         first = await sync_repository_index(
             db, project_id=project_id, repository_id=repository_id, actor=actor, manager=manager, dry_run=False
         )
         assert first["chunk_count"] >= 2
+        assert first["snapshot_complete"] is True
         second = await sync_repository_index(
             db, project_id=project_id, repository_id=repository_id, actor=actor, manager=manager, dry_run=False
         )
@@ -143,6 +145,51 @@ async def test_repository_sync_preview_duplicate_update_and_deletion_tombstone(
                 RetrievalSource.source_uri.endswith("/docs/guide.md"), RetrievalSource.state == "tombstoned"
             )
         ) is not None
+
+
+async def test_incomplete_bounded_snapshot_marks_unseen_sources_stale_not_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, project_id, repository_id, actor, manager = await _source_fixture(tmp_path, monkeypatch)
+    async with SessionLocal() as db:
+        await sync_repository_index(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            manager=manager,
+            dry_run=False,
+        )
+
+        class BoundedSnapshot:
+            async def snapshot(self, repository: Repository, approved_skill_paths: tuple[str, ...] = ()):
+                revision, files, omitted = await manager.snapshot(repository, approved_skill_paths)
+                return (
+                    revision,
+                    tuple(item for item in files if item.path != "docs/guide.md"),
+                    {**omitted, "file_limit": 1},
+                )
+
+        result = await sync_repository_index(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            manager=BoundedSnapshot(),  # type: ignore[arg-type]
+            dry_run=False,
+        )
+        assert result["snapshot_complete"] is False
+        guide = await db.scalar(
+            select(RetrievalSource).where(RetrievalSource.source_uri.endswith("/docs/guide.md"))
+        )
+        assert guide is not None
+        assert guide.state == "stale"
+        assert await db.scalar(
+            select(RetrievalSource.id).where(
+                RetrievalSource.source_uri.endswith("/docs/guide.md"),
+                RetrievalSource.state == "tombstoned",
+            )
+        ) is None
 
 
 async def test_connector_outage_is_recorded_without_losing_current_index(
@@ -189,6 +236,24 @@ async def test_repository_search_rechecks_membership_after_revocation(
             limit=5,
         )
         assert result.citations
+        secret_search = await search_repository(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            query="OPENAI_API_KEY sk-123456789012345678901234567890",
+            limit=5,
+        )
+        hidden_eval_search = await search_repository(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            query="hidden grader answer",
+            limit=5,
+        )
+        assert secret_search.citations == ()
+        assert hidden_eval_search.citations == ()
         project = await db.get(Project, project_id)
         assert project is not None
         await db.execute(
@@ -239,7 +304,7 @@ async def test_mcp_result_is_suppressed_when_project_grant_is_revoked_during_cal
         grant_id = grant.id
 
         class RevokingMCPClient:
-            def __init__(self, _: dict[str, str]) -> None:
+            def __init__(self, _: dict[str, str], **__: object) -> None:
                 pass
 
             async def discover(self, *_: object) -> tuple[MCPTool, ...]:

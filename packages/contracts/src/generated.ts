@@ -1810,6 +1810,8 @@ export interface components {
         RepositoryIndexSyncResponse: {
             /** Dry Run */
             dry_run: boolean;
+            /** Snapshot Complete */
+            snapshot_complete: boolean;
             /** Revision */
             revision: string;
             /** Considered */

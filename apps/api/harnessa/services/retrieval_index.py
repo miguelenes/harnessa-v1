@@ -110,6 +110,7 @@ async def sync_repository_index(
         raise HTTPException(503, "Repository connector is unavailable") from exc
 
     omitted: dict[str, int] = dict(snapshot_omitted)
+    snapshot_complete = not snapshot_omitted
     candidates: list[tuple[SourceDocument, tuple[IndexedChunk, ...]]] = []
     for item in files:
         source_type = source_type_for(item.path)
@@ -143,6 +144,7 @@ async def sync_repository_index(
     if dry_run:
         return {
             "dry_run": True,
+            "snapshot_complete": snapshot_complete,
             "revision": current_revision,
             "considered": len(files) + sum(snapshot_omitted.values()),
             "source_count": len(candidates),
@@ -179,7 +181,7 @@ async def sync_repository_index(
     current_keys = {document.source_id for document, _ in candidates}
     for source in existing_sources:
         if source.source_key not in current_keys:
-            source.state = "tombstoned"
+            source.state = "tombstoned" if snapshot_complete else "stale"
         elif source.revision != current_revision:
             source.state = "stale"
         else:
@@ -245,6 +247,7 @@ async def sync_repository_index(
     await db.commit()
     return {
         "dry_run": False,
+        "snapshot_complete": snapshot_complete,
         "revision": current_revision,
         "considered": len(files) + sum(snapshot_omitted.values()),
         "source_count": len(candidates),

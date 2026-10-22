@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     model_gateway_url: str = ""
     mcp_servers_json: str = "{}"
     mcp_read_only_tools_json: str = "{}"
+    mcp_secret_references_json: str = "{}"
     retrieval_approved_skill_paths_json: str = "{}"
     model_max_attempts: int = 3
     model_http_timeout_seconds: float = 60.0

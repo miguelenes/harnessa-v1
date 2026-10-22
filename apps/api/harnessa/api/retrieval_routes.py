@@ -68,6 +68,21 @@ def _configured_read_only_tools() -> dict[str, set[str]]:
     return {server_id: set(names) for server_id, names in value.items()}
 
 
+def _configured_secret_references() -> dict[str, set[str]]:
+    try:
+        value = json.loads(settings.mcp_secret_references_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(503, "MCP secret-reference policy is invalid") from exc
+    if not isinstance(value, dict) or any(
+        not isinstance(server_id, str)
+        or not isinstance(names, list)
+        or any(not isinstance(name, str) or not name for name in names)
+        for server_id, names in value.items()
+    ):
+        raise HTTPException(503, "MCP secret-reference policy must map server IDs to environment-name lists")
+    return {server_id: set(names) for server_id, names in value.items()}
+
+
 def _grant_read(grant: MCPProjectGrant) -> MCPGrantRead:
     return MCPGrantRead(
         id=grant.id,
@@ -217,6 +232,8 @@ async def create_mcp_grant(
     if body.server_id not in configured:
         raise HTTPException(404, "MCP server is not deployment-allowlisted")
     configured_read_only = _configured_read_only_tools().get(body.server_id, set())
+    if body.secret_reference and body.secret_reference not in _configured_secret_references().get(body.server_id, set()):
+        raise HTTPException(422, "MCP secret reference is not deployment-approved for this server")
     if body.protocol_version not in SUPPORTED_MCP_PROTOCOLS:
         raise HTTPException(422, "Unsupported MCP protocol version")
     if not set(body.read_only_tools).issubset(body.allowed_tools):
@@ -321,7 +338,10 @@ async def invoke_mcp(
     request_bytes = json.dumps(body.arguments, sort_keys=True, separators=(",", ":")).encode()
     if len(request_bytes) > 16_000:
         raise HTTPException(413, "MCP tool arguments exceed 16,000 bytes")
-    client = StreamableHTTPMCPClient(_configured_servers())
+    secret_references = _configured_secret_references()
+    if grant.secret_reference and grant.secret_reference not in secret_references.get(server_id, set()):
+        raise HTTPException(403, "MCP secret reference is not deployment-approved for this server")
+    client = StreamableHTTPMCPClient(_configured_servers(), secret_references=secret_references)
     request_hash = hashlib.sha256(request_bytes).hexdigest()
     response_hash: str | None = None
     outcome = "failed"

@@ -60,6 +60,7 @@ async def test_streamable_http_mcp_negotiates_discovers_and_invokes_with_secret_
     client = StreamableHTTPMCPClient(
         {"fixture": "https://mcp.test"},
         transport_factory=lambda: httpx.MockTransport(handler),
+        secret_references={"fixture": {"TEST_MCP_TOKEN"}},
     )
     tools = await client.discover("fixture", "2025-11-25", "TEST_MCP_TOKEN")
     assert [tool.name for tool in tools] == ["read_status"]
@@ -77,6 +78,19 @@ async def test_streamable_http_mcp_negotiates_discovers_and_invokes_with_secret_
     assert [method for method, _, _ in calls].count("initialize") == 2
     assert all(version == "2025-11-25" for _, version, _ in calls if version)
     assert all(auth == "Bearer fixture-only-secret" for _, _, auth in calls)
+
+
+@pytest.mark.anyio
+async def test_streamable_http_mcp_rejects_unapproved_environment_secret() -> None:
+    client = StreamableHTTPMCPClient(
+        {"fixture": "https://mcp.test"},
+        transport_factory=lambda: httpx.MockTransport(
+            lambda _: httpx.Response(500)
+        ),
+        secret_references={"fixture": {"FIXTURE_MCP_TOKEN"}},
+    )
+    with pytest.raises(MCPRemoteError, match="not allowed for this server"):
+        await client.discover("fixture", "2025-11-25", "DATABASE_URL")
 
 
 @pytest.mark.anyio
@@ -107,7 +121,7 @@ async def test_streamable_http_mcp_fails_closed_on_protocol_mismatch_output_over
 
     monkeypatch.delenv("TEST_MCP_MISSING", raising=False)
     secret_client = StreamableHTTPMCPClient({"fixture": "https://mcp.test"})
-    with pytest.raises(MCPRemoteError, match="credential reference is unavailable"):
+    with pytest.raises(MCPRemoteError, match="not allowed for this server"):
         await secret_client.discover("fixture", "2025-11-25", "TEST_MCP_MISSING")
 
 

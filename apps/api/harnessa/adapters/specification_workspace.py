@@ -18,6 +18,7 @@ from uuid import UUID
 from harnessa.config import settings
 from harnessa.db.models import Repository
 from harnessa.domain.retrieval import RepositoryCitation, RepositorySearchResult
+from harnessa.services.retrieval_governance import eligible_path, safe_retrieval_content
 
 _CHANGE_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _GIT_TIMEOUT_SECONDS = 60
@@ -497,7 +498,7 @@ class SpecificationWorkspaceManager:
             fields = metadata.split()
             if len(fields) != 3 or fields[1] != "blob" or fields[0] not in {"100644", "100755"}:
                 continue
-            if self._searchable_path(relative):
+            if self._searchable_path(relative) and eligible_path(relative):
                 blobs.append((fields[2], relative))
             if len(blobs) >= _SEARCH_FILE_LIMIT:
                 break
@@ -537,6 +538,8 @@ class SpecificationWorkspaceManager:
             bounded, cast(list[bytes], object_contents), strict=True
         ):
             content = raw_content.decode("utf-8", errors="replace")
+            if not safe_retrieval_content(content):
+                continue
             for line_number, line in enumerate(content.splitlines(), start=1):
                 folded = line.casefold()
                 matched = tuple(term for term in terms if term in folded)

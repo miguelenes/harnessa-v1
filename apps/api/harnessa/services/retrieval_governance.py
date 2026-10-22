@@ -33,6 +33,11 @@ _HIDDEN_EVAL_PARTS = frozenset(
 _SECRET_NAMES = frozenset({".env", ".env.local", "id_rsa", "id_ed25519", "credentials.json"})
 
 
+def safe_retrieval_content(content: str) -> bool:
+    """Apply the same secret-content exclusion at every retrieval boundary."""
+    return _SECRET_WORDS.search(content) is None
+
+
 @dataclass(frozen=True)
 class RetrievalScope:
     organization_id: str
@@ -161,7 +166,7 @@ def split_chunks(document: SourceDocument, max_bytes: int = MAX_CHUNK_BYTES) -> 
         return ()
     if not document.approved or document.hidden_evaluation or document.stale:
         return ()
-    if _SECRET_WORDS.search(document.content):
+    if not safe_retrieval_content(document.content):
         return ()
     lines = document.content.splitlines()
     chunks: list[IndexedChunk] = []

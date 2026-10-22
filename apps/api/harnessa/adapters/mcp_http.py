@@ -28,10 +28,12 @@ class StreamableHTTPMCPClient:
         *,
         timeout_seconds: float = 15.0,
         transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None,
+        secret_references: dict[str, set[str]] | None = None,
     ) -> None:
         self._servers = servers
         self._timeout = min(max(timeout_seconds, 0.1), 15.0)
         self._transport_factory = transport_factory
+        self._secret_references = secret_references or {}
 
     async def discover(self, server_id: str, protocol_version: str, secret_reference: str | None) -> tuple[MCPTool, ...]:
         result, headers = await self._initialize(server_id, protocol_version, secret_reference)
@@ -210,8 +212,8 @@ class StreamableHTTPMCPClient:
             if isinstance(params, dict) and isinstance(params.get("name"), str):
                 headers["Mcp-Name"] = str(params["name"])
         if secret_reference:
-            if not secret_reference.replace("_", "").isalnum() or not secret_reference[0].isalpha():
-                raise MCPRemoteError("MCP secret reference must be an environment variable name")
+            if secret_reference not in self._secret_references.get(server_id, set()):
+                raise MCPRemoteError("MCP secret reference is not allowed for this server")
             token = os.environ.get(secret_reference)
             if not token:
                 raise MCPRemoteError("MCP credential reference is unavailable")
