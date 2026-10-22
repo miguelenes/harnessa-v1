@@ -1,0 +1,1 @@
+{"name":"@harnessa/contracts","version":"0.1.0","private":true,"type":"module","exports":"./src/index.ts","scripts":{"generate":"openapi-typescript ${HARNESSA_API_URL:-http://localhost:8010}/openapi.json -o src/generated.ts"},"devDependencies":{"openapi-typescript":"7.13.0","typescript":"5.9.3"}}

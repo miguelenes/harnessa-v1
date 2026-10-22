@@ -1,0 +1,12 @@
+.env
+.venv/
+node_modules/
+.next/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+ruff_cache/
+coverage.xml
+**/__pycache__/
+.ruff_cache/
+*.tsbuildinfo

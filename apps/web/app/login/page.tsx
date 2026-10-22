@@ -1,0 +1,9 @@
+"use client";
+import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8010";
+export default function Login() {
+ const [error,setError]=useState(""); const router=useRouter();
+ async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();setError("");const fd=new FormData(e.currentTarget);const csrf=await fetch(`${API}/auth/csrf`,{credentials:"include"}).then(r=>r.json());const r=await fetch(`${API}/auth/cookie/login`,{method:"POST",credentials:"include",headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRF-Token":csrf.csrf_token},body:new URLSearchParams({username:String(fd.get("email")),password:String(fd.get("password"))})});if(!r.ok){setError("Sign in failed. Check your credentials.");return}sessionStorage.setItem("csrf_token",csrf.csrf_token);router.push("/projects")}
+ return <main className="flex min-h-screen items-center justify-center px-6"><form onSubmit={submit} className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-8 shadow-sm"><p className="text-sm font-semibold uppercase tracking-[.2em] text-emerald-800">Harnessa</p><h1 className="mt-3 text-3xl font-semibold">Sign in</h1><p className="mt-2 text-stone-600">Use your installation account.</p><label className="mt-7 block text-sm font-medium">Email<input className="mt-2 w-full rounded-lg border border-stone-300 px-3 py-2" type="email" name="email" required autoComplete="username" /></label><label className="mt-4 block text-sm font-medium">Password<input className="mt-2 w-full rounded-lg border border-stone-300 px-3 py-2" type="password" name="password" required autoComplete="current-password" /></label>{error&&<p role="alert" className="mt-4 text-sm text-red-700">{error}</p>}<button className="mt-6 w-full rounded-lg bg-emerald-800 px-4 py-3 font-medium text-white">Sign in</button></form></main>
+}

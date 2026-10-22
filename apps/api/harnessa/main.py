@@ -1,0 +1,180 @@
+from contextlib import asynccontextmanager
+import secrets
+from uuid import uuid4
+from fastapi import FastAPI, Request
+from fastapi import HTTPException
+from fastapi.openapi.utils import get_openapi
+from pydantic.json_schema import models_json_schema
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from redis.asyncio import Redis
+from harnessa.config import settings
+from harnessa.api.routes import router
+from harnessa.contracts import (
+    ArtifactMetadata,
+    AuthorizationContext,
+    ErrorResponse,
+    EventEnvelope,
+    Identity,
+    SpecificationRevision,
+    TaskState,
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.app_env == "production" and (
+        len(settings.secret_key) < 32 or not settings.bootstrap_token or not settings.cookie_secure
+    ):
+        raise RuntimeError(
+            "Production requires SECRET_KEY, BOOTSTRAP_TOKEN, and COOKIE_SECURE=true"
+        )
+    app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    yield
+    await app.state.redis.aclose()
+
+
+app = FastAPI(title="Harnessa API", version="0.1.0", lifespan=lifespan)
+
+# These contracts are canonical even before their milestone-specific endpoints exist.
+# Keep them server-owned and publish them in OpenAPI for generated client types.
+CONTRACT_MODELS = (
+    EventEnvelope,
+    ErrorResponse,
+    Identity,
+    AuthorizationContext,
+    TaskState,
+    SpecificationRevision,
+    ArtifactMetadata,
+)
+
+
+def openapi_with_canonical_contracts():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+    _, definitions = models_json_schema(
+        [(model, "validation") for model in CONTRACT_MODELS],
+        ref_template="#/components/schemas/{model}",
+    )
+    schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+    schemas.update(definitions.pop("$defs", {}))
+    schemas.update(definitions)
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = openapi_with_canonical_contracts
+origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=[
+        "Content-Type",
+        "X-CSRF-Token",
+        "X-Bootstrap-Token",
+        "Idempotency-Key",
+        "If-Match",
+    ],
+)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    request_id = str(uuid4())
+    request.state.request_id = request_id
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = request.headers.get("origin")
+        path = request.url.path
+        if path != "/auth/bootstrap" and (not origin or origin not in origins):
+            return JSONResponse(
+                ErrorResponse(
+                    code="origin_denied",
+                    message="Origin is not allowed",
+                    request_id=request_id,
+                ).model_dump(),
+                status_code=403,
+                headers={"X-Request-ID": request_id},
+            )
+        if path not in {"/auth/bootstrap", "/auth/csrf"}:
+            cookie = request.cookies.get("harnessa_csrf", "")
+            header = request.headers.get("x-csrf-token", "")
+            if not cookie or not secrets.compare_digest(cookie, header):
+                return JSONResponse(
+                    ErrorResponse(
+                        code="csrf_failed",
+                        message="CSRF validation failed",
+                        request_id=request_id,
+                    ).model_dump(),
+                    status_code=403,
+                    headers={"X-Request-ID": request_id},
+                )
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_error(request: Request, exc: HTTPException):
+    status_codes = {
+        401: "unauthorized",
+        403: "forbidden",
+        404: "not_found",
+        409: "conflict",
+        422: "validation_error",
+    }
+    return JSONResponse(
+        ErrorResponse(
+            code=status_codes.get(exc.status_code, "http_error"),
+            message=str(exc.detail),
+            request_id=getattr(request.state, "request_id", None),
+        ).model_dump(),
+        status_code=exc.status_code,
+        headers={**(exc.headers or {}), "X-Request-ID": getattr(request.state, "request_id", "")},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError):
+    errors = [
+        {"location": list(error["loc"]), "message": error["msg"], "type": error["type"]}
+        for error in exc.errors()
+    ]
+    request_id = getattr(request.state, "request_id", None)
+    return JSONResponse(
+        ErrorResponse(
+            code="validation_error",
+            message="Request validation failed",
+            request_id=request_id,
+            details={"errors": errors},
+        ).model_dump(),
+        status_code=422,
+        headers={"X-Request-ID": request_id or ""},
+    )
+
+
+app.include_router(router)
+
+
+@app.get("/health/live", tags=["health"])
+async def live():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", tags=["health"])
+async def ready(request: Request):
+    from sqlalchemy import text
+    from harnessa.db.session import engine
+
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+        await request.app.state.redis.ping()
+    except Exception:
+        return JSONResponse({"status": "unavailable"}, status_code=503)
+    return {"status": "ready"}
