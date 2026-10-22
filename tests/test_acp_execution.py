@@ -12,7 +12,7 @@ from harnessa.adapters.acp_execution import ACPExecutionAdapter, _load_owner_id
 from harnessa.adapters.execution import ExecutionFailure, RunInput, TaskInput
 from harnessa.adapters.podman_sandbox import SandboxIdentity
 
-IMAGE = "ghcr.io/anomalyco/opencode:1.19.4@sha256:" + "a" * 64
+IMAGE = "ghcr.io/anomalyco/opencode:2.0.32@sha256:" + "a" * 64
 
 
 def _adapter(tmp_path: Path, *, enabled: bool = True) -> ACPExecutionAdapter:

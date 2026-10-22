@@ -33,6 +33,7 @@ class AgentCompatibility:
     terminal: bool
     model_route_compatibility: str
     source_url: str | None
+    supported_versions: tuple[str, ...] = ()
 
 
 # The OpenCode client is intentionally the only enabled native path. The other
@@ -44,7 +45,7 @@ AGENT_COMPATIBILITY: tuple[AgentCompatibility, ...] = (
         transport=AgentTransport.NATIVE_ACP,
         status=CompatibilityStatus.VERIFIED,
         command=("opencode", "acp"),
-        package_version="1.19.4",
+        package_version="2.0.32",
         protocol_version=1,
         resume=True,
         permissions=True,
@@ -52,6 +53,7 @@ AGENT_COMPATIBILITY: tuple[AgentCompatibility, ...] = (
         terminal=True,
         model_route_compatibility="run-scoped Harnessa ModelRouter broker; disabled by default",
         source_url="https://opencode.ai/docs/acp/",
+        supported_versions=("2.0.32", "1.19.4"),
     ),
     AgentCompatibility(
         agent_id="codex",

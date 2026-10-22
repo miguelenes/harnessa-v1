@@ -222,7 +222,7 @@ async def main() -> None:
                 assert inaccessible.returncode == 0, f"sandbox can access {forbidden_path}"
             assert initialized.protocol_version == 1
             assert initialized.agent_info is not None
-            assert initialized.agent_info.version == agent.package_version
+            assert initialized.agent_info.version in agent.supported_versions
             assert router.scope == (organization_id, task.project_id)
             # This ACP release may make a setup stream before its prompt stream.
             # Bound both and verify every request remains scoped and token-capped.

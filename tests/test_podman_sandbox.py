@@ -15,7 +15,7 @@ from harnessa.adapters.podman_sandbox import (
 )
 from harnessa.adapters.sandbox_policy import SandboxPolicyError
 
-IMAGE = "ghcr.io/anomalyco/opencode:1.19.4@sha256:" + "a" * 64
+IMAGE = "ghcr.io/anomalyco/opencode:2.0.32@sha256:" + "a" * 64
 
 
 def _backend() -> PodmanSandboxBackend:
