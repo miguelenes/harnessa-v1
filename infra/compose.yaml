@@ -123,7 +123,7 @@ services:
       litellm:
         condition: service_healthy
   litellm:
-    image: ghcr.io/berriai/litellm:v1.83.3-stable@sha256:1bc003a50e5c9177909975e1523cf780a5f385c76216e26e96c50fb02611209f
+    image: ghcr.io/berriai/litellm:v1.83.14-stable@sha256:c81eb79cd4333c6cfe374c0ec929110fd23f0ee5f7fd198855a6fbddc77b83ba
     command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
