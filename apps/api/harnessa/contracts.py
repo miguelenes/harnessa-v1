@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from enum import StrEnum
 from datetime import datetime
+from decimal import Decimal
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
-from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -245,6 +245,8 @@ class ModelPoolRouteCreate(BaseModel):
 
 
 class ModelPoolRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     name: str
     kind: ModelPoolKind
@@ -708,3 +710,150 @@ class RepositoryRead(RepositoryCreate):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     project_id: UUID
+
+
+class SpecificationInterviewCreate(BaseModel):
+    topic: str = Field(min_length=8, max_length=10_000)
+    repository_id: UUID
+
+
+class SpecificationInterviewRead(BaseModel):
+    id: UUID
+    task_id: UUID
+    project_id: UUID
+    repository_id: UUID
+    topic: str
+    revision: int
+    artifact_revision: int
+    base_sha: str
+    head_sha: str
+    artifact_hash: str
+    readiness_state: str
+    policy_revision: str
+
+
+class SpecificationQuestionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    interview_id: UUID
+    task_id: UUID
+    run_id: UUID | None = None
+    attempt: int | None = None
+    fencing_token: int | None = None
+    source_revision: int
+    source: str
+    classification: str
+    status: str
+    question: str
+    proposed_assumption: str | None = None
+    recommended_options: list[dict[str, Any]] = Field(default_factory=list)
+    affected_artifacts: list[str] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SpecificationAnswerCreate(BaseModel):
+    expected_revision: int = Field(ge=1)
+    answer: str = Field(min_length=1, max_length=10_000)
+    changes_scope: bool = False
+
+
+class SpecificationAnswerRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    question_id: UUID
+    actor_id: UUID | None = None
+    answer_revision: int
+    answer: str
+    provenance: dict[str, Any]
+    created_at: datetime
+
+
+class SpecificationAnswerResult(BaseModel):
+    answer: SpecificationAnswerRead
+    interview: SpecificationInterviewRead
+
+
+class SpecificationArtifactUpdate(BaseModel):
+    expected_revision: int = Field(ge=1)
+    proposal_md: str = Field(min_length=1, max_length=100_000)
+    spec_md: str = Field(min_length=1, max_length=100_000)
+    design_md: str = Field(min_length=1, max_length=100_000)
+    tasks_md: str = Field(min_length=1, max_length=100_000)
+
+
+class SpecificationArtifactRead(BaseModel):
+    interview_id: UUID
+    revision: int
+    base_sha: str
+    commit_sha: str
+    content_hash: str
+    paths: list[str]
+    change_summary: str
+    diff: str = Field(max_length=100_000)
+    proposal_md: str = Field(max_length=100_000)
+    spec_md: str = Field(max_length=100_000)
+    design_md: str = Field(max_length=100_000)
+    tasks_md: str = Field(max_length=100_000)
+
+
+class SpecificationReadinessRead(BaseModel):
+    interview_id: UUID
+    interview_revision: int
+    artifact_revision: int
+    content_hash: str
+    base_sha: str
+    policy_revision: str
+    score: float = Field(ge=0, le=1)
+    state: str
+    gates: dict[str, Any]
+    signed_off_by: UUID | None = None
+
+
+class SpecificationReadinessSignoff(BaseModel):
+    expected_revision: int = Field(ge=1)
+    expected_artifact_revision: int = Field(ge=1)
+
+
+class SpecificationArchitectRequest(BaseModel):
+    expected_revision: int = Field(ge=1)
+    authorize_model_generation: bool = False
+
+
+class SpecificationArchitectRead(BaseModel):
+    interview_id: UUID
+    revision: int
+    artifact_revision: int
+    questions: list[SpecificationQuestionRead]
+
+
+class SpecificationExplorerEntry(BaseModel):
+    revision: str
+    path: str
+    section: str
+    archived: bool = False
+
+
+class SpecificationExplorerRead(BaseModel):
+    revision: str
+    entries: list[SpecificationExplorerEntry]
+
+
+class RepositorySearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=500)
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class RepositoryCitation(BaseModel):
+    revision: str
+    path: str
+    line: int = Field(ge=1)
+    snippet: str = Field(max_length=800)
+    matched_terms: list[str]
+    untrusted_source_content: bool = True
+
+
+class RepositorySearchResponse(BaseModel):
+    revision: str
+    results: list[RepositoryCitation]

@@ -1,8 +1,9 @@
 import os
 from collections.abc import AsyncIterator
 
-from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
 from harnessa.config import settings
 
 engine_options: dict[str, object] = {"pool_pre_ping": True}

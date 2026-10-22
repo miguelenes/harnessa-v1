@@ -11,13 +11,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
-    func,
     Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 

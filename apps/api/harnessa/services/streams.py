@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import json
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
-
-from redis.asyncio import Redis
-from sqlalchemy import delete, or_, select
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
 from harnessa.config import settings
 from harnessa.db.models import Task
 from harnessa.db.orchestration import ConsumerInbox, DomainEvent, OutboxMessage
 from harnessa.db.session import SessionLocal
+from redis.asyncio import Redis
+from sqlalchemy import delete, or_, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 STREAM_NAME = "harnessa:domain-events:v1"
 CONSUMER_GROUP = "harnessa-domain-consumers-v1"
@@ -45,7 +44,7 @@ class OutboxPublisher:
         self.owner_id = owner_id
 
     async def claim_batch(self, limit: int = 100) -> list[OutboxItem]:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self.sessions() as db:
             rows = (
                 await db.execute(
@@ -83,28 +82,28 @@ class OutboxPublisher:
         items = await self.claim_batch(limit)
         published = 0
         for item in items:
+            fields = {
+                "event_id": str(item.event_id),
+                "event_type": item.event_type,
+                "project_id": str(item.project_id),
+                "project_sequence": str(item.project_sequence),
+                "payload": json.dumps(item.payload, sort_keys=True, separators=(",", ":")),
+            }
             try:
-                fields = {
-                    "event_id": str(item.event_id),
-                    "event_type": item.event_type,
-                    "project_id": str(item.project_id),
-                    "project_sequence": str(item.project_sequence),
-                    "payload": json.dumps(item.payload, sort_keys=True, separators=(",", ":")),
-                }
                 await self.redis.xadd(
                     STREAM_NAME,
                     cast(Any, fields),
                     maxlen=settings.redis_stream_maxlen,
                     approximate=True,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - failed publishes must remain retryable.
                 async with self.sessions() as db:
                     row = await db.get(OutboxMessage, item.id)
                     if row and row.lease_owner == self.owner_id and row.published_at is None:
                         row.last_error = str(exc)[:2000]
                         row.lease_owner = None
                         row.lease_until = None
-                        row.next_attempt_at = datetime.now(timezone.utc) + timedelta(
+                        row.next_attempt_at = datetime.now(UTC) + timedelta(
                             seconds=min(300, 2 ** min(row.attempts, 8))
                         )
                         await db.commit()
@@ -112,7 +111,7 @@ class OutboxPublisher:
             async with self.sessions() as db:
                 row = await db.get(OutboxMessage, item.id)
                 if row and row.lease_owner == self.owner_id and row.published_at is None:
-                    row.published_at = datetime.now(timezone.utc)
+                    row.published_at = datetime.now(UTC)
                     row.lease_owner = None
                     row.lease_until = None
                     row.last_error = None
@@ -146,19 +145,15 @@ class StreamConsumer:
         self, *, count: int = 20, block_ms: int = 1000, crash_after_commit: bool = False
     ) -> int:
         await self.ensure_group()
-        messages: list[tuple[str, dict[Any, Any]]]
-        try:
-            claimed = await self.redis.xautoclaim(
-                STREAM_NAME,
-                CONSUMER_GROUP,
-                self.consumer_name,
-                min_idle_time=self.min_idle_ms,
-                start_id="0-0",
-                count=count,
-            )
-            messages = claimed[1] if claimed else []
-        except Exception:
-            messages = []
+        claimed = await self.redis.xautoclaim(
+            STREAM_NAME,
+            CONSUMER_GROUP,
+            self.consumer_name,
+            min_idle_time=self.min_idle_ms,
+            start_id="0-0",
+            count=count,
+        )
+        messages = _normalize_stream_messages(_nested_item(claimed, 1))
         if not messages:
             response = await self.redis.xreadgroup(
                 CONSUMER_GROUP,
@@ -167,7 +162,7 @@ class StreamConsumer:
                 count=count,
                 block=block_ms,
             )
-            messages = response[0][1] if response else []
+            messages = _normalize_stream_messages(_nested_item(_nested_item(response, 0), 1))
 
         handled = 0
         for message_id, fields in messages:
@@ -204,6 +199,30 @@ class StreamConsumer:
         return handled
 
 
+def _nested_item(value: object, index: int) -> object:
+    if isinstance(value, (list, tuple)) and len(value) > index:
+        return value[index]
+    return None
+
+
+def _normalize_stream_messages(value: object) -> list[tuple[str, dict[Any, Any]]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    messages: list[tuple[str, dict[Any, Any]]] = []
+    for row in value:
+        raw_id = _nested_item(row, 0)
+        fields = _nested_item(row, 1)
+        if isinstance(raw_id, bytes):
+            message_id = raw_id.decode("utf-8", errors="replace")
+        elif isinstance(raw_id, str):
+            message_id = raw_id
+        else:
+            continue
+        if isinstance(fields, dict):
+            messages.append((message_id, fields))
+    return messages
+
+
 async def rebuild_dispatch_stream(
     redis: Redis,
     session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
@@ -221,7 +240,7 @@ async def rebuild_dispatch_stream(
                 .join(Task, Task.id == DomainEvent.task_id)
                 .where(
                     DomainEvent.event_type == "task.ready",
-                    DomainEvent.retention_until > datetime.now(timezone.utc),
+                    DomainEvent.retention_until > datetime.now(UTC),
                     Task.stage == TaskStage.READY.value,
                     Task.run_status == RunStatus.QUEUED.value,
                     Task.cancel_requested_at.is_(None),
@@ -251,7 +270,7 @@ async def rebuild_dispatch_stream(
 async def prune_retained_events(
     session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
 ) -> int:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with session_factory() as db:
         result = await db.execute(
             delete(DomainEvent)

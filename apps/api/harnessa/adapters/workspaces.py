@@ -11,7 +11,7 @@ import re
 import shutil
 import stat
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -123,7 +123,7 @@ class WorkspaceManager:
             shutil.rmtree(workspace, ignore_errors=True)
             raise
 
-        created_at = datetime.now(timezone.utc)
+        created_at = datetime.now(UTC)
         record = ManagedWorkspace(
             task_id=task.id,
             project_id=task.project_id,
@@ -229,7 +229,7 @@ def _write_manifest(workspace: ManagedWorkspace, status: str) -> None:
         "branch": workspace.branch,
         "created_at": workspace.created_at.isoformat(),
         "status": status,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
     }
     temporary = workspace.state_path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")

@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
-from sqlalchemy import or_, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from harnessa.db.orchestration import EffectIntent
 from harnessa.db.session import SessionLocal
-
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 ReconcileOutcome = Literal["applied", "not_applied", "unknown"]
 
@@ -30,7 +28,7 @@ async def reconcile_effect_intents(
     limit: int = 50,
 ) -> int:
     """Mark expired reconciling intents unknown before an adapter checks remote state."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     claimed: list[tuple[UUID, str, str, dict[str, Any]]] = []
     async with session_factory() as db:
         rows = (
@@ -59,7 +57,7 @@ async def reconcile_effect_intents(
         error: str | None = None
         try:
             outcome = await adapter.reconcile(kind=kind, stable_key=stable_key, payload=payload)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - arbitrary adapter failures have unknown effects.
             outcome = "unknown"
             error = str(exc)[:2000]
         async with session_factory() as db:
@@ -70,10 +68,10 @@ async def reconcile_effect_intents(
                 "pending" if outcome == "not_applied" else "unknown"
             )
             intent_row.last_error = error
-            intent_row.reconciled_at = datetime.now(timezone.utc)
+            intent_row.reconciled_at = datetime.now(UTC)
             intent_row.next_attempt_at = (
                 None if outcome == "applied" else
-                datetime.now(timezone.utc)
+                datetime.now(UTC)
                 + timedelta(seconds=min(300, 2 ** min(intent_row.attempts, 8)))
             )
             await db.commit()

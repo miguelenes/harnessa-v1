@@ -1,69 +1,92 @@
-from contextlib import asynccontextmanager
 import secrets
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
 from uuid import uuid4
-from fastapi import FastAPI, Request
-from fastapi import HTTPException
-from fastapi.openapi.utils import get_openapi
-from pydantic.json_schema import models_json_schema
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
+from pydantic.json_schema import models_json_schema
 from redis.asyncio import Redis
-from harnessa.config import settings
-from harnessa.api.routes import router
-from harnessa.api.task_routes import router as task_router
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
+
 from harnessa.api.model_routes import router as model_router
+from harnessa.api.routes import router
+from harnessa.api.specification_routes import router as specification_router
+from harnessa.api.task_routes import router as task_router
+from harnessa.config import settings
 from harnessa.contracts import (
     ArtifactMetadata,
     AuthorizationContext,
+    CoreEvidenceEnvelope,
+    DeadLetterRead,
+    DispatchRebuildResult,
     ErrorResponse,
     EventEnvelope,
-    Identity,
-    TaskCreate,
-    TaskRead,
-    TaskTransitionRequest,
-    TaskCommandRequest,
-    RunRead,
-    EventReplayPage,
     EventReplayItem,
-    DeadLetterRead,
-    RecoveryRequest,
-    TaskTransitionRead,
-    DispatchRebuildResult,
-    SpecificationRevision,
-    TaskState,
-    ModelRouteRequest,
-    ModelProviderAccountRead,
-    ModelDeploymentRead,
+    EventReplayPage,
+    EvidenceIntegerValue,
+    EvidenceTextValue,
+    EvidenceTimestampValue,
+    EvidenceUuidValue,
+    Identity,
     ModelAliasRead,
-    ModelPoolRead,
     ModelBudgetPolicyRead,
-    ModelUsageRead,
+    ModelDeploymentRead,
     ModelDoctorRead,
-    ModelLiveCheckRead,
     ModelGatewayConfiguration,
     ModelInvocationRead,
+    ModelLiveCheckRead,
+    ModelPoolRead,
+    ModelProviderAccountRead,
     ModelRequestLedgerRead,
-    EvidenceTextValue,
-    EvidenceUuidValue,
-    EvidenceIntegerValue,
-    EvidenceTimestampValue,
-    CoreEvidenceEnvelope,
-    RunOrchestrationIdentity,
+    ModelRouteRequest,
+    ModelUsageRead,
+    RecoveryRequest,
+    RepositoryCitation,
+    RepositorySearchRequest,
+    RepositorySearchResponse,
+    RunAnswerRequest,
+    RunCancelRequest,
     RunCheckpointReference,
-    RunStartRequest,
     RunCheckpointWrite,
     RunInterruptRequest,
-    RunAnswerRequest,
-    RunResumeRequest,
-    RunCancelRequest,
-    RunReconcileRequest,
+    RunOrchestrationIdentity,
     RunOrchestrationReceipt,
+    RunRead,
+    RunReconcileRequest,
+    RunResumeRequest,
+    RunStartRequest,
+    SpecificationAnswerCreate,
+    SpecificationAnswerRead,
+    SpecificationAnswerResult,
+    SpecificationArchitectRead,
+    SpecificationArchitectRequest,
+    SpecificationArtifactRead,
+    SpecificationArtifactUpdate,
+    SpecificationExplorerEntry,
+    SpecificationExplorerRead,
+    SpecificationInterviewCreate,
+    SpecificationInterviewRead,
+    SpecificationQuestionRead,
+    SpecificationReadinessRead,
+    SpecificationReadinessSignoff,
+    SpecificationRevision,
+    TaskCommandRequest,
+    TaskCreate,
+    TaskRead,
+    TaskState,
+    TaskTransitionRead,
+    TaskTransitionRequest,
 )
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.app_env == "production" and (
         len(settings.secret_key) < 32 or not settings.bootstrap_token or not settings.cookie_secure
     ):
@@ -125,10 +148,27 @@ CONTRACT_MODELS = (
     RunCancelRequest,
     RunReconcileRequest,
     RunOrchestrationReceipt,
+    RepositoryCitation,
+    RepositorySearchRequest,
+    RepositorySearchResponse,
+    SpecificationInterviewCreate,
+    SpecificationInterviewRead,
+    SpecificationQuestionRead,
+    SpecificationAnswerCreate,
+    SpecificationAnswerRead,
+    SpecificationAnswerResult,
+    SpecificationArtifactUpdate,
+    SpecificationArtifactRead,
+    SpecificationReadinessRead,
+    SpecificationReadinessSignoff,
+    SpecificationArchitectRequest,
+    SpecificationArchitectRead,
+    SpecificationExplorerEntry,
+    SpecificationExplorerRead,
 )
 
 
-def openapi_with_canonical_contracts():
+def openapi_with_canonical_contracts() -> dict[str, Any]:
     if app.openapi_schema:
         return app.openapi_schema
     schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
@@ -143,7 +183,7 @@ def openapi_with_canonical_contracts():
     return schema
 
 
-app.openapi = openapi_with_canonical_contracts
+app.openapi = openapi_with_canonical_contracts  # type: ignore[method-assign]
 origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
@@ -161,7 +201,9 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def security_headers(request: Request, call_next):
+async def security_headers(
+    request: Request, call_next: RequestResponseEndpoint
+) -> Response:
     request_id = str(uuid4())
     request.state.request_id = request_id
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -198,7 +240,7 @@ async def security_headers(request: Request, call_next):
 
 
 @app.exception_handler(HTTPException)
-async def http_error(request: Request, exc: HTTPException):
+async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
     status_codes = {
         401: "unauthorized",
         403: "forbidden",
@@ -231,7 +273,7 @@ async def http_error(request: Request, exc: HTTPException):
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_error(request: Request, exc: RequestValidationError):
+async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     errors = [
         {"location": list(error["loc"]), "message": error["msg"], "type": error["type"]}
         for error in exc.errors()
@@ -252,16 +294,18 @@ async def validation_error(request: Request, exc: RequestValidationError):
 app.include_router(router)
 app.include_router(task_router)
 app.include_router(model_router)
+app.include_router(specification_router)
 
 
 @app.get("/health/live", tags=["health"])
-async def live():
+async def live() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/health/ready", tags=["health"])
-async def ready(request: Request):
+@app.get("/health/ready", response_model=None, tags=["health"])
+async def ready(request: Request) -> JSONResponse | dict[str, str]:
     from sqlalchemy import text
+
     from harnessa.db.session import engine
 
     try:
@@ -276,6 +320,6 @@ async def ready(request: Request):
                     f"{settings.model_gateway_url.rstrip('/')}/health/readiness"
                 )
                 response.raise_for_status()
-    except Exception:
+    except Exception:  # noqa: BLE001 - readiness maps any dependency failure to 503.
         return JSONResponse({"status": "unavailable"}, status_code=503)
     return {"status": "ready"}

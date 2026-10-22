@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from harnessa.adapters.acp_execution import _opencode_model_config
 from harnessa.adapters.acp_model_broker import ACPModelBroker, BrokerScope
 from harnessa.adapters.acp_session import ACPAgentSession
-from harnessa.adapters.acp_execution import _opencode_model_config
 from harnessa.adapters.agent_registry import get_agent
 from harnessa.adapters.execution import RunInput, TaskInput
 from harnessa.adapters.podman_sandbox import PodmanSandboxBackend, SandboxIdentity
@@ -23,8 +23,8 @@ from harnessa.adapters.workspaces import WorkspaceManager
 from harnessa.contracts import ModelRouteRequest
 
 IMAGE = (
-    "ghcr.io/anomalyco/opencode@sha256:"
-    "85986f556e985e377bd24cd68a5ccfbc647bb49e591194edda8a0e4542303319"
+    "ghcr.io/anomalyco/opencode:1.19.4@sha256:"
+    "bf8e2b5f785166a12a26cbb34ef1a2d35403368438efe036fd16c795a975c505"
 )
 TOKEN = "offline-run-scoped-token"
 
@@ -203,11 +203,19 @@ async def main() -> None:
                 engine_socket,
             ]
             for forbidden_path in forbidden_paths:
-                inaccessible = subprocess.run(
-                    ["podman", "exec", identity.container_name, "busybox", "test", "!", "-e", forbidden_path],
-                    check=False,
-                    capture_output=True,
+                inaccessible = await asyncio.create_subprocess_exec(
+                    "podman",
+                    "exec",
+                    identity.container_name,
+                    "busybox",
+                    "test",
+                    "!",
+                    "-e",
+                    forbidden_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
+                await inaccessible.communicate()
                 assert inaccessible.returncode == 0, f"sandbox can access {forbidden_path}"
             assert initialized.protocol_version == 1
             assert initialized.agent_info is not None

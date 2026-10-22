@@ -1,8 +1,22 @@
-from uuid import UUID
 from datetime import datetime
 from typing import Any
-from sqlalchemy import CheckConstraint, ForeignKey, String, Boolean, Integer, UniqueConstraint, JSON, Text, DateTime, BigInteger, Index
+from uuid import UUID
+
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
+
 from harnessa.db.base import Base, Scoped
 
 

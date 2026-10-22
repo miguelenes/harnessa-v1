@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
-from harnessa.main import app
 from harnessa.config import settings
+from harnessa.main import app
 
 
 def test_authenticated_routes_require_a_user():
