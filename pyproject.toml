@@ -54,3 +54,7 @@ markers = ["integration: requires disposable real PostgreSQL and Redis services"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[[tool.mypy.overrides]]
+module = ["llama_index.*", "qdrant_client.*"]
+ignore_missing_imports = true
