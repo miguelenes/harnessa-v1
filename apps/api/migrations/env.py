@@ -2,7 +2,7 @@ import asyncio
 
 from alembic import context
 from harnessa.config import settings
-from harnessa.db import model_gateway, models, orchestration, specification  # noqa: F401
+from harnessa.db import model_gateway, models, orchestration, retrieval, specification  # noqa: F401
 from harnessa.db.base import Base
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config

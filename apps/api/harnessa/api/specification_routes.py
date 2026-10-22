@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
@@ -10,6 +11,7 @@ from harnessa.contracts import (
     RepositoryCitation,
     RepositorySearchRequest,
     RepositorySearchResponse,
+    RetrievalContextManifestRead,
     SpecificationAnswerCreate,
     SpecificationAnswerRead,
     SpecificationAnswerResult,
@@ -371,9 +373,15 @@ async def repository_search(
                 snippet=item.snippet,
                 matched_terms=list(item.matched_terms),
                 untrusted_source_content=True,
+                content_hash=item.content_hash,
             )
             for item in result.citations
         ],
+        context_manifest=(
+            RetrievalContextManifestRead.model_validate(asdict(result.context_manifest))
+            if result.context_manifest is not None
+            else None
+        ),
     )
 
 

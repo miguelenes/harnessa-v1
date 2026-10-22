@@ -73,7 +73,7 @@ jobs:
           echo "OPENSPEC_NODE_PATH=$(node -p 'process.execPath')" >> "$GITHUB_ENV"
       - name: Install locked dependencies
         run: |
-          uv sync --frozen
+          uv sync --frozen --extra retrieval
           pnpm install --frozen-lockfile
       - name: Lint and typecheck
         run: |
