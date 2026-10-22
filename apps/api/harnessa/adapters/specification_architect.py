@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
@@ -109,9 +110,21 @@ _TEMPLATE_HEADINGS = (
     "## MODIFIED Requirements",
     "## 1. Implementation",
 )
+_PROPOSAL_HEADINGS = (
+    "## Why",
+    "## What Changes",
+    "## Capabilities",
+    "## Impact",
+)
+_DESIGN_HEADINGS = (
+    "## Context",
+    "## Goals and Non-Goals",
+    "## Decisions",
+    "## Risks / Trade-offs",
+)
 
 
-def _map_markdown_prose(value: str, transform: Any) -> str:
+def _map_markdown_prose(value: str, transform: Callable[[str], str]) -> str:
     """Apply a transformation outside inline and fenced code spans only."""
     code_pattern = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`+[^`\n]*`+)")
     parts: list[str] = []
@@ -122,6 +135,24 @@ def _map_markdown_prose(value: str, transform: Any) -> str:
         cursor = match.end()
     parts.append(transform(value[cursor:]))
     return "".join(parts)
+
+
+def _transform_markdown_structure(value: str, transform: Callable[[str], str]) -> str:
+    """Transform document structure while temporarily hiding code spans."""
+    code_pattern = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`+[^`\n]*`+)")
+    code_spans = list(code_pattern.finditer(value))
+    parts: list[str] = []
+    cursor = 0
+    for index, match in enumerate(code_spans):
+        parts.append(value[cursor : match.start()])
+        parts.append(f"\x00HARNESSA_CODE_{index}\x00")
+        cursor = match.end()
+    parts.append(value[cursor:])
+    masked = "".join(parts)
+    transformed = transform(masked)
+    for index, match in enumerate(code_spans):
+        transformed = transformed.replace(f"\x00HARNESSA_CODE_{index}\x00", match.group())
+    return transformed
 
 
 def _normalize_architect_markdown(value: str, change_id: str) -> str:
@@ -135,38 +166,66 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
         text.startswith(heading) for heading in _TEMPLATE_HEADINGS
     )
     if flattened:
-        headings = (*_TEMPLATE_HEADINGS, f"### {change_id}")
+        ordered_headings: tuple[str, ...]
+        if text.startswith("## Why"):
+            ordered_headings = _PROPOSAL_HEADINGS[:3] + (f"### {change_id}",) + (
+                _PROPOSAL_HEADINGS[3],
+            )
+        elif text.startswith("## Context"):
+            ordered_headings = _DESIGN_HEADINGS
+        else:
+            ordered_headings = ()
 
         def restore_boundaries(part: str) -> str:
-            for heading in headings:
+            boundaries: list[tuple[int, int, str]] = []
+            cursor = 0
+            for index, heading in enumerate(ordered_headings):
+                match = re.search(
+                    rf"{re.escape(heading)}(?=[A-Z#-])",
+                    part[cursor:],
+                )
+                if match is None:
+                    break
+                start = cursor + match.start()
+                if index and (start == 0 or part[start - 1].isspace()):
+                    break
+                boundaries.append((start, cursor + match.end(), heading))
+                cursor += match.end()
+            for start, end, heading in reversed(boundaries):
+                before = "" if start == 0 else "\n\n"
+                part = part[:start] + before + heading + "\n\n" + part[end:]
+
+            if part.startswith(("## ADDED Requirements", "## MODIFIED Requirements")):
                 part = re.sub(
-                    rf"^{re.escape(heading)}(?=\S)",
-                    f"{heading}\n\n",
+                    r"^(## (?:ADDED|MODIFIED) Requirements)(?=\S)",
+                    r"\1\n\n",
                     part,
                 )
                 part = re.sub(
-                    rf"(?<!^){re.escape(heading)}(?=\S)",
-                    f"\n\n{heading}\n\n",
+                    r"(?<=\S)(### Requirement:|#### Scenario:)(?=\s*[A-Za-z])",
+                    r"\n\n\1",
                     part,
                 )
-            part = re.sub(
-                r"(?<!^)(?<!\n)(#### Scenario:|### Requirement:|### Requirement mapping:)",
-                r"\n\n\1",
-                part,
-            )
-            part = re.sub(
-                r"(?<!\n)(- \*\*(?:WHEN|THEN)\*\*|- \[ \]|- [A-Z])",
-                r"\n\1",
-                part,
-            )
-            part = re.sub(
-                r"(?<!^)(?<!\n)(## \d+\. )",
-                r"\n\n\1",
-                part,
-            )
+            if part.startswith("## 1. Implementation"):
+                part = re.sub(
+                    r"(?<=\S)(## \d+\. )(?=[A-Z])",
+                    r"\n\n\1",
+                    part,
+                )
+                part = re.sub(
+                    r"(?<=\S)(## Verification)(?=-)",
+                    r"\n\n\1\n\n",
+                    part,
+                )
+                part = re.sub(
+                    r"(?<=\S)(### Requirement mapping:)(?=[A-Z])",
+                    r"\n\n\1",
+                    part,
+                )
+            part = re.sub(r"(?<!\n)(- \*\*(?:WHEN|THEN)\*\*|- \[ \])", r"\n\1", part)
             return part
 
-        text = _map_markdown_prose(text, restore_boundaries)
+        text = _transform_markdown_structure(text, restore_boundaries)
 
     def split_inline_normative(part: str) -> str:
         part = re.sub(

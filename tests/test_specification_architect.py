@@ -68,12 +68,28 @@ def test_architect_restores_markdown_structure_from_flattened_tool_arguments() -
     )
     assert "- **THEN** a greeting is returned\n" in spec
 
+    prose_heading = _normalize_architect_markdown(
+        "## WhyThe rationale references ## Impact, which is a literal heading label."
+        "## ImpactActual impact follows.",
+        "greeting",
+    )
+    assert "The rationale references ## Impact, which is a literal heading label." in prose_heading
+    assert "## ImpactActual impact follows." in prose_heading
+
+    prose_hyphen = _normalize_architect_markdown(
+        "## WhyA scope check is required - Harnessa retains authority."
+        "## ImpactRuntime stays bounded.",
+        "greeting",
+    )
+    assert "required - Harnessa retains authority." in prose_hyphen
+    assert "## ImpactRuntime stays bounded." in prose_hyphen
+
     numbered_tasks = _normalize_architect_markdown(
         "## 1. Implementation- [ ] Preserve the complete first task."
         "## 2. Verification- [ ] Preserve the complete second task.",
         "greeting",
     )
-    assert "## 1. Implementation\n\n- [ ] Preserve the complete first task." in numbered_tasks
+    assert "## 1. Implementation\n- [ ] Preserve the complete first task." in numbered_tasks
     assert "## 2. Verification\n- [ ] Preserve the complete second task." in numbered_tasks
 
     html_breaks = _normalize_architect_markdown(
