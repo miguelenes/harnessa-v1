@@ -37,6 +37,8 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26.12.0"
+      - name: Add pre-provisioned user tools to PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Verify pre-provisioned toolchain
         run: |
           python3 --version
@@ -48,7 +50,7 @@ jobs:
       - name: Install locked dependencies from local caches
         run: |
           uv sync --frozen --offline
-          pnpm install --offline --frozen-lockfile --ignore-scripts
+          pnpm install --offline --frozen-lockfile
       - name: Start bounded disposable PostgreSQL and Redis
         run: |
           podman run --pull=never --rm --detach --name harnessa-ci-${GITHUB_RUN_ID}-pg --cpus 2 --memory 1g --pids-limit 256 -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=harnessa_ci_test -p 127.0.0.1:55432:5432 docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
