@@ -35,9 +35,10 @@ if TEST_REDIS_URL:
     os.environ["REDIS_URL"] = TEST_REDIS_URL
 
 
-@pytest.fixture(scope="session", autouse=True)
-def migrate_test_database():
-    if not TEST_DATABASE_URL:
+def pytest_configure(config: pytest.Config) -> None:
+    # With pytest-xdist, session fixtures run once in every worker. Run migrations
+    # in the controller before workers start so a fresh database is migrated once.
+    if not TEST_DATABASE_URL or hasattr(config, "workerinput"):
         return
     root = Path(__file__).resolve().parents[1]
     environment = os.environ.copy()
