@@ -38,7 +38,9 @@ jobs:
         with:
           node-version: "26.12.0"
       - name: Add pre-provisioned user tools to PATH
-        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "${PNPM_HOME:-$HOME/.local/share/pnpm}/bin" >> "$GITHUB_PATH"
       - name: Verify pre-provisioned toolchain
         run: |
           python3 --version
