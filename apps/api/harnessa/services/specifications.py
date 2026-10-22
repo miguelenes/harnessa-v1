@@ -25,7 +25,8 @@ from harnessa.adapters.specification_workspace import (
     SpecificationWorkspaceManager,
 )
 from harnessa.config import settings
-from harnessa.contracts import RunStatus, TaskStage
+from harnessa.contracts import ModelPoolKind, ModelProtocol, RouteRequirements, RunStatus, TaskStage
+from harnessa.db.model_gateway import ModelBudgetPolicy
 from harnessa.db.models import Membership, Project, ProjectMembership, Repository, Task, User
 from harnessa.db.orchestration import Run, TaskLease, TaskTransition
 from harnessa.db.session import SessionLocal
@@ -45,6 +46,7 @@ from harnessa.services.lifecycle import (
     record_system_transition,
     transition_task,
 )
+from harnessa.services.model_gateway import has_compatible_configured_route
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,7 +54,7 @@ _workspace_manager = SpecificationWorkspaceManager()
 _architect = SpecificationArchitect()
 _MAX_DIFF_BYTES = 100_000
 _CHANGE_SLUG_WORDS = 6
-_POLICY_REVISION = "m6-readiness-v1"
+_POLICY_REVISION = "m6-readiness-v3"
 _ARTIFACT_NAMES = {
     "proposal_md": "proposal.md",
     "spec_md": "spec.md",
@@ -1102,6 +1104,45 @@ async def evaluate_readiness(
     snapshot = interview.readiness_snapshot or {}
     signed_off_by = snapshot.get("signed_off_by")
     signoff_received = isinstance(signed_off_by, str)
+    model_route_ready = (
+        settings.acp_execution_enabled
+        and settings.acp_model_broker_enabled
+        and bool(settings.model_gateway_url.strip())
+    )
+    project = await db.get(Project, interview.project_id) if model_route_ready else None
+    if project is not None:
+        budget_policy = (
+            await db.execute(
+                select(ModelBudgetPolicy).where(ModelBudgetPolicy.project_id == project.id)
+            )
+        ).scalars().first()
+        # The broker accepts at most a 1 MiB serialized body and the gateway
+        # reserves output separately. Require a route that can fit that full
+        # bounded request plus ACP's configured output ceiling.
+        minimum_context = min(
+            2_000_000,
+            1_048_576 + settings.acp_model_max_output_tokens,
+        )
+        model_route_ready = (
+            budget_policy is not None
+            and budget_policy.max_output_tokens >= settings.acp_model_max_output_tokens
+            and settings.acp_model_max_output_tokens <= 1_000_000
+            and await has_compatible_configured_route(
+                db,
+                organization_id=project.organization_id,
+                pool_kind=ModelPoolKind.INTERACTIVE.value,
+                alias_name=settings.acp_model_alias,
+                requirements=RouteRequirements(
+                    protocol=ModelProtocol.CHAT_COMPLETIONS,
+                    tools=True,
+                    minimum_context=minimum_context,
+                    usage_reporting=True,
+                    cancellation=True,
+                ),
+            )
+        )
+    else:
+        model_route_ready = False
     score, gates = _readiness_gates(
         {Path(path).name: content for path, content in files.items()},
         validation,
@@ -1109,11 +1150,7 @@ async def evaluate_readiness(
         base_current=current_base == interview.base_sha,
         signoff_required=settings.openspec_require_signoff,
         signoff_received=signoff_received,
-        model_route_ready=(
-            settings.acp_execution_enabled
-            and settings.acp_model_broker_enabled
-            and bool(settings.model_gateway_url.strip())
-        ),
+        model_route_ready=model_route_ready,
     )
     ready = (
         score >= 0.90

@@ -110,7 +110,7 @@ def _supports(capabilities: dict[str, Any], requirements: RouteRequirements) -> 
     )
 
 
-async def route_candidates(
+async def _configured_route_candidates(
     db: AsyncSession,
     *,
     organization_id: UUID,
@@ -165,6 +165,46 @@ async def route_candidates(
         raise ModelGatewayError(
             "no_authorized_compatible_route", 503, "All compatible provider accounts or deployments are disabled"
         )
+    return pool, enabled
+
+
+async def has_compatible_configured_route(
+    db: AsyncSession,
+    *,
+    organization_id: UUID,
+    pool_kind: str,
+    alias_name: str | None,
+    requirements: RouteRequirements,
+) -> bool:
+    """Check configured route metadata without reserving capacity or contacting a provider."""
+    try:
+        await _configured_route_candidates(
+            db,
+            organization_id=organization_id,
+            pool_kind=pool_kind,
+            alias_name=alias_name,
+            requirements=requirements,
+        )
+    except ModelGatewayError:
+        return False
+    return True
+
+
+async def route_candidates(
+    db: AsyncSession,
+    *,
+    organization_id: UUID,
+    pool_kind: str,
+    alias_name: str | None,
+    requirements: RouteRequirements,
+) -> tuple[ModelPool, list[RouteCandidate]]:
+    pool, enabled = await _configured_route_candidates(
+        db,
+        organization_id=organization_id,
+        pool_kind=pool_kind,
+        alias_name=alias_name,
+        requirements=requirements,
+    )
     now = datetime.now(UTC)
     available = [
         item

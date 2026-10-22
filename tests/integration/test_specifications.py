@@ -4,6 +4,7 @@ import asyncio
 import json
 import subprocess
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -14,7 +15,16 @@ from harnessa.adapters.acp_execution import _latest_specification_context, _task
 from harnessa.adapters.specification_architect import ArchitectDraft
 from harnessa.adapters.specification_workspace import SpecificationWorkspaceManager
 from harnessa.config import settings
-from harnessa.contracts import RunStatus, TaskStage
+from harnessa.contracts import ModelProtocol, RunStatus, TaskStage
+from harnessa.db.model_gateway import (
+    AliasDeployment,
+    ModelAlias,
+    ModelBudgetPolicy,
+    ModelDeployment,
+    ModelPool,
+    PoolAlias,
+    ProviderAccount,
+)
 from harnessa.db.models import (
     Membership,
     Organization,
@@ -47,7 +57,7 @@ from harnessa.services.specifications import (
     wait_for_agent_answer,
 )
 from pwdlib import PasswordHash
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 pytestmark = pytest.mark.integration
 
@@ -101,6 +111,7 @@ async def _specification_fixture(
     monkeypatch.setattr(settings, "acp_execution_enabled", True)
     monkeypatch.setattr(settings, "acp_model_broker_enabled", True)
     monkeypatch.setattr(settings, "model_gateway_url", "http://fixture-model-gateway.invalid")
+    monkeypatch.setattr(settings, "acp_model_alias", "fixture-acp")
     async with SessionLocal() as db:
         organization = Organization(name="Specification Integration")
         user = User(
@@ -140,6 +151,7 @@ async def _create_ready_interview(
     actor: User,
     idempotency_key: str = "specification-topic-create",
 ) -> UUID:
+    await _configure_acp_route(project_id)
     async with SessionLocal() as db:
         interview, replayed = await create_interview(
             db,
@@ -156,6 +168,79 @@ async def _create_ready_interview(
         assert evaluation.state == "READY"
         assert evaluation.score == 1
         return interview.id
+
+
+async def _configure_acp_route(
+    project_id: UUID,
+    *,
+    tools: bool = True,
+    cancellation: bool = True,
+    context_window: int = 1_056_768,
+    budget_max_output_tokens: int = 16_384,
+) -> None:
+    async with SessionLocal() as db:
+        project = await db.get(Project, project_id)
+        assert project is not None
+        pool = ModelPool(
+            organization_id=project.organization_id,
+            name="fixture-interactive",
+            kind="interactive",
+        )
+        account = ProviderAccount(
+            organization_id=project.organization_id,
+            name="fixture-provider",
+            provider="fixture",
+            secret_ref="env:FIXTURE_MODEL_KEY",
+            enabled=True,
+        )
+        alias = ModelAlias(
+            organization_id=project.organization_id,
+            name=settings.acp_model_alias or "fixture-acp",
+            description="",
+            enabled=True,
+        )
+        db.add_all([pool, account, alias])
+        await db.flush()
+        deployment = ModelDeployment(
+            organization_id=project.organization_id,
+            provider_account_id=account.id,
+            name="fixture-acp-deployment",
+            actual_model="fixture/model",
+            proxy_model="fixture-acp-proxy",
+            capabilities={
+                "protocols": [ModelProtocol.CHAT_COMPLETIONS.value],
+                "streaming": False,
+                "tools": tools,
+                "usage_reporting": True,
+                "cancellation": cancellation,
+            },
+            context_window=context_window,
+            input_cost_per_million=Decimal(1),
+            output_cost_per_million=Decimal(1),
+            price_revision="fixture-1",
+            enabled=True,
+        )
+        db.add(deployment)
+        await db.flush()
+        db.add_all([
+            AliasDeployment(alias_id=alias.id, deployment_id=deployment.id, priority=0),
+            PoolAlias(pool_id=pool.id, alias_id=alias.id, priority=0),
+            ModelBudgetPolicy(
+                organization_id=project.organization_id,
+                project_id=project.id,
+                project_limit_usd=Decimal(10),
+                task_limit_usd=Decimal(5),
+                run_limit_usd=Decimal(2),
+                project_token_limit=2_000_000,
+                task_token_limit=1_000_000,
+                run_token_limit=500_000,
+                max_steps=100,
+                max_wall_seconds=3600,
+                max_output_tokens=budget_max_output_tokens,
+                max_attempts=3,
+            ),
+        ])
+        await db.commit()
 
 
 @pytest.mark.anyio
@@ -183,6 +268,138 @@ async def test_readiness_stays_in_specifying_when_required_model_route_is_unavai
         assert evaluation.state == "NOT_READY"
         assert evaluation.gates["execution_capabilities"]["model_route_ready"] is False
         assert interview.readiness_state == "NOT_READY"
+        assert task is not None and task.stage == TaskStage.SPECIFYING.value
+
+
+@pytest.mark.anyio
+async def test_readiness_stays_in_specifying_without_an_interactive_model_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, _, _ = await _specification_fixture(tmp_path, monkeypatch)
+    async with SessionLocal() as db:
+        interview, replayed = await create_interview(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            topic="Create a task that requires an interactive model pool",
+            idempotency_key="missing-interactive-pool",
+        )
+        assert replayed is False
+        interview, evaluation = await evaluate_readiness(
+            db, interview_id=interview.id, actor=actor
+        )
+        task = await db.get(Task, interview.task_id, populate_existing=True)
+
+        assert evaluation.state == "NOT_READY"
+        assert evaluation.gates["execution_capabilities"]["model_route_ready"] is False
+        assert interview.readiness_state == "NOT_READY"
+        assert task is not None and task.stage == TaskStage.SPECIFYING.value
+
+
+@pytest.mark.anyio
+async def test_readiness_stays_in_specifying_without_a_compatible_enabled_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, _, _ = await _specification_fixture(tmp_path, monkeypatch)
+    await _configure_acp_route(project_id, tools=False)
+    async with SessionLocal() as db:
+        interview, replayed = await create_interview(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            topic="Create a task that requires model tools",
+            idempotency_key="incompatible-interactive-route",
+        )
+        assert replayed is False
+        interview, evaluation = await evaluate_readiness(
+            db, interview_id=interview.id, actor=actor
+        )
+        task = await db.get(Task, interview.task_id, populate_existing=True)
+
+        assert evaluation.state == "NOT_READY"
+        assert evaluation.gates["execution_capabilities"]["model_route_ready"] is False
+        assert interview.readiness_state == "NOT_READY"
+        assert task is not None and task.stage == TaskStage.SPECIFYING.value
+
+
+@pytest.mark.anyio
+async def test_readiness_stays_in_specifying_when_route_cannot_fit_broker_request_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, _, _ = await _specification_fixture(tmp_path, monkeypatch)
+    await _configure_acp_route(project_id, context_window=1_056_767)
+    async with SessionLocal() as db:
+        interview, replayed = await create_interview(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            topic="Create a task with a bounded model context",
+            idempotency_key="undersized-context-route",
+        )
+        assert replayed is False
+        _, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
+        task = await db.get(Task, interview.task_id, populate_existing=True)
+
+        assert evaluation.state == "NOT_READY"
+        assert evaluation.gates["execution_capabilities"]["model_route_ready"] is False
+        assert task is not None and task.stage == TaskStage.SPECIFYING.value
+
+
+@pytest.mark.anyio
+async def test_readiness_stays_in_specifying_without_project_model_budget_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, _, _ = await _specification_fixture(tmp_path, monkeypatch)
+    await _configure_acp_route(project_id)
+    async with SessionLocal() as db:
+        await db.execute(
+            delete(ModelBudgetPolicy).where(ModelBudgetPolicy.project_id == project_id)
+        )
+        await db.commit()
+        interview, replayed = await create_interview(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            topic="Create a task requiring configured model budgets",
+            idempotency_key="missing-model-budget-policy",
+        )
+        assert replayed is False
+        _, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
+        task = await db.get(Task, interview.task_id, populate_existing=True)
+
+        assert evaluation.state == "NOT_READY"
+        assert evaluation.gates["execution_capabilities"]["model_route_ready"] is False
+        assert task is not None and task.stage == TaskStage.SPECIFYING.value
+
+
+@pytest.mark.anyio
+async def test_readiness_stays_in_specifying_when_budget_cannot_cover_output_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, _, _ = await _specification_fixture(tmp_path, monkeypatch)
+    await _configure_acp_route(
+        project_id,
+        budget_max_output_tokens=settings.acp_model_max_output_tokens - 1,
+    )
+    async with SessionLocal() as db:
+        interview, replayed = await create_interview(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            topic="Create a task requiring a sufficient model output budget",
+            idempotency_key="insufficient-model-output-budget",
+        )
+        assert replayed is False
+        _, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
+        task = await db.get(Task, interview.task_id, populate_existing=True)
+
+        assert evaluation.state == "NOT_READY"
+        assert evaluation.gates["execution_capabilities"]["model_route_ready"] is False
         assert task is not None and task.stage == TaskStage.SPECIFYING.value
 
 
