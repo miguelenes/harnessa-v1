@@ -12,6 +12,7 @@ permissions:
 
 concurrency:
   group: harnessa-local-ci
+  queue: max
   cancel-in-progress: false
 
 jobs:
