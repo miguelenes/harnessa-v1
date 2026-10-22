@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 
 import httpx
 import pytest
 from fastapi import HTTPException
+from harnessa.adapters.acp_execution import _latest_specification_context, _task_prompt
 from harnessa.adapters.specification_architect import ArchitectDraft
 from harnessa.adapters.specification_workspace import SpecificationWorkspaceManager
 from harnessa.config import settings
@@ -22,7 +24,7 @@ from harnessa.db.models import (
     Task,
     User,
 )
-from harnessa.db.orchestration import DomainEvent, Run
+from harnessa.db.orchestration import DomainEvent, Run, TaskLease
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import (
     SpecificationAnswer,
@@ -404,6 +406,129 @@ async def test_agent_clarification_is_durable_fenced_idempotent_and_scope_pausin
                 DomainEvent.event_type == "task.clarification_resumed",
             )
         ) == 1
+
+
+@pytest.mark.anyio
+async def test_answer_after_clarification_lease_loss_rechecks_and_seeds_recovery_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, repository, manager = await _specification_fixture(
+        tmp_path, monkeypatch
+    )
+    interview_id = await _create_ready_interview(project_id, repository_id, actor)
+    scheduler = Scheduler(global_limit=1, lease_seconds=30)
+    job = await scheduler.claim("specification-recovery-fixture", "fixture")
+    assert job is not None
+    checkpoint = {
+        "kind": "acp_execution",
+        "resumable": True,
+        "task_id": str(job.task_id),
+        "run_id": str(job.run_id),
+        "attempt": job.attempt,
+        "fencing_token": job.fencing_token,
+        "base_commit": "",
+        "phase": "prompt_running",
+    }
+    async with SessionLocal() as db:
+        interview = await db.get(SpecificationInterview, interview_id)
+        assert interview is not None
+        checkpoint["base_commit"] = interview.base_sha
+    await scheduler.save_checkpoint(job, checkpoint)
+
+    async with SessionLocal() as db:
+        question = await create_agent_question(
+            db,
+            interview_id=interview_id,
+            task_id=job.task_id,
+            run_id=job.run_id,
+            attempt=job.attempt,
+            fencing_token=job.fencing_token,
+            question_text="Which role may approve this repository workflow?",
+        )
+        lease = await db.scalar(select(TaskLease).where(TaskLease.task_id == job.task_id))
+        assert lease is not None
+        lease.expires_at = func.now() - timedelta(seconds=1)
+        await db.commit()
+
+    assert await scheduler.recover_expired_leases() == 1
+    async with SessionLocal() as db:
+        expired_run = await db.get(Run, job.run_id)
+        task = await db.get(Task, job.task_id, populate_existing=True)
+        assert expired_run is not None and expired_run.status == RunStatus.FAILED.value
+        assert task is not None and task.stage == TaskStage.CLARIFYING.value
+        interview = await db.get(SpecificationInterview, interview_id)
+        assert interview is not None
+        answer_text = "Only a project administrator may approve this workflow."
+        answer, updated = await answer_question(
+            db,
+            interview_id=interview_id,
+            question_id=question.id,
+            actor=actor,
+            expected_revision=interview.revision,
+            answer=answer_text,
+            idempotency_key="clarification-after-expiry",
+            changes_scope=False,
+        )
+        assert answer.answer == answer_text
+        assert updated.readiness_state == "READY"
+        evaluation = await db.scalar(
+            select(SpecificationReadinessEvaluation)
+            .where(SpecificationReadinessEvaluation.interview_id == interview_id)
+            .order_by(SpecificationReadinessEvaluation.created_at.desc())
+            .limit(1)
+        )
+        assert evaluation is not None and evaluation.state == "READY"
+        assert evaluation.interview_revision == updated.revision
+        assert evaluation.artifact_revision == updated.artifact_revision
+        assert evaluation.content_hash == updated.artifact_hash
+        assert evaluation.base_sha == updated.base_sha
+        task = await db.get(Task, job.task_id, populate_existing=True)
+        assert task is not None and task.stage == TaskStage.READY.value
+        assert task.blocked_reason == "worker_lost_checkpoint"
+        recovery_event = await db.scalar(
+            select(DomainEvent).where(
+                DomainEvent.run_id == job.run_id,
+                DomainEvent.event_type == "task.clarification_recovery_queued",
+            )
+        )
+        assert recovery_event is not None
+        assert recovery_event.payload["artifact_revision"] == updated.artifact_revision
+        assert recovery_event.payload["readiness_evaluation_id"] == str(evaluation.id)
+
+    recovered = await scheduler.claim("specification-recovery-fixture", "fixture")
+    assert recovered is not None
+    assert recovered.attempt == 2
+    assert recovered.checkpoint is not None
+    assert recovered.checkpoint["run_id"] == str(job.run_id)
+
+    async with SessionLocal() as db:
+        interview = await db.get(SpecificationInterview, interview_id)
+        assert interview is not None
+        context = await _latest_specification_context(
+            manager,
+            interview,
+            repository,
+            expected_base_commit=recovered.checkpoint["base_commit"],
+        )
+    prompt = _task_prompt(
+        recovered.task,
+        context["base_sha"],
+        {
+            "run_id": recovered.checkpoint["run_id"],
+            "base_commit": recovered.checkpoint["base_commit"],
+            "phase": recovered.checkpoint["phase"],
+            "attempt": recovered.checkpoint["attempt"],
+        },
+        specification_context=context,
+    )
+    task_path = f"openspec/changes/{interview.change_id}/tasks.md"
+    assert context["artifact_revision"] == updated.artifact_revision
+    assert context["head_sha"] == updated.head_sha
+    assert answer_text in context["files"][task_path]
+    assert "## Verification" in context["files"][task_path]
+    assert answer_text in prompt
+    assert "Use them as the current task specification" in prompt
+    assert "lease/fencing" in prompt
 
 
 @pytest.mark.anyio

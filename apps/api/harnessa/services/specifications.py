@@ -973,17 +973,23 @@ async def answer_question(
                 run_id=question.run_id,
             )
         else:
-            task.blocked_reason = "worker_lost_checkpoint"
             await _set_task_state(
                 db,
                 task=task,
                 actor_id=actor.id,
-                target=TaskStage.READY,
+                target=TaskStage.SPECIFYING,
                 run_status="QUEUED",
-                reason="Authorized answer queued recovery from the latest durable checkpoint",
-                command="clarification_recovered",
-                event_type="task.clarification_recovery_queued",
-                recovery=True,
+                reason="Authorized answer changed the specification; readiness must be reassessed",
+                command="clarification_recovery_reassess",
+                event_type="task.clarification_recovery_reassessing",
+            )
+            # The answer adds a durable artifact revision. Re-evaluate that exact revision
+            # against the frozen repository base before allowing checkpoint recovery.
+            interview, _evaluation = await evaluate_readiness(
+                db,
+                interview_id=interview.id,
+                actor=actor,
+                recovery_question=question,
             )
     elif task.stage == TaskStage.READY.value:
         await transition_task(
@@ -1062,7 +1068,11 @@ def _readiness_gates(
 
 
 async def evaluate_readiness(
-    db: AsyncSession, *, interview_id: UUID, actor: User
+    db: AsyncSession,
+    *,
+    interview_id: UUID,
+    actor: User,
+    recovery_question: SpecificationQuestion | None = None,
 ) -> tuple[SpecificationInterview, SpecificationReadinessEvaluation]:
     interview, repository, task, _membership = await _interview_for_update(db, interview_id, actor)
     try:
@@ -1155,6 +1165,26 @@ async def evaluate_readiness(
             "state": state,
         },
     )
+    if ready and recovery_question is not None:
+        task.blocked_reason = "worker_lost_checkpoint"
+        await _emit(
+            db,
+            task,
+            actor.id,
+            "task.clarification_recovery_queued",
+            {
+                "interview_id": str(interview.id),
+                "question_id": str(recovery_question.id),
+                "artifact_revision": interview.artifact_revision,
+                "readiness_evaluation_id": str(evaluation.id),
+                "previous_run_id": (
+                    str(recovery_question.run_id) if recovery_question.run_id else None
+                ),
+                "attempt": recovery_question.attempt,
+                "fencing_token": recovery_question.fencing_token,
+            },
+            run_id=recovery_question.run_id,
+        )
     await db.flush()
     target = TaskStage.READY if ready else TaskStage.SPECIFYING
     if task.stage != target.value and task.stage in {
