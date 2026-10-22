@@ -245,6 +245,8 @@ class ModelPoolRouteCreate(BaseModel):
 
 
 class ModelPoolRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     name: str
     kind: ModelPoolKind

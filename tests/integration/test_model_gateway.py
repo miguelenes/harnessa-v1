@@ -173,6 +173,7 @@ async def gateway_fixture(
         await db.commit()
         return {
             "organization_id": org.id,
+            "user_id": user.id,
             "project_id": project.id,
             "task_id": task.id,
             "run_id": run.id,
