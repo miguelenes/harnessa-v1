@@ -25,7 +25,10 @@ describe("Svelte application surfaces", () => {
     expect(
       screen
         .getAllByRole("link", { name: /github/i })
-        .some((link) => link.getAttribute("href")?.includes("github.com")),
+        .some((link) => {
+          const href = link.getAttribute("href");
+          return href !== null && new URL(href).hostname === "github.com";
+        }),
     ).toBe(true);
   });
 });
