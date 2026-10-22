@@ -106,9 +106,11 @@ _TEMPLATE_HEADINGS = (
     "## Decisions",
     "## Risks / Trade-offs",
     "## Verification",
+    "## Implementation",
     "## ADDED Requirements",
     "## MODIFIED Requirements",
     "## 1. Implementation",
+    "### Implementation:",
 )
 _PROPOSAL_HEADINGS = (
     "## Why",
@@ -157,13 +159,17 @@ def _transform_markdown_structure(value: str, transform: Callable[[str], str]) -
 
 def _normalize_architect_markdown(value: str, change_id: str) -> str:
     """Repair known flattened Markdown separators without rewriting examples."""
-    text = value.replace("\r\n", "\n").replace("\r", "\n")
+    text = value.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
     text = _map_markdown_prose(
         text,
         lambda part: re.sub(r"(?i)<br\s*/?>|&#(?:10|x0*a);|&NewLine;", "\n", part),
     )
     flattened = "\n" not in text and any(
         text.startswith(heading) for heading in _TEMPLATE_HEADINGS
+    ) or (
+        "\n" not in text
+        and re.match(r"^\d+\.\s+\*\*", text) is not None
+        and "## Verification" in text
     )
     if flattened:
         ordered_headings: tuple[str, ...]
@@ -181,14 +187,17 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
             cursor = 0
             for index, heading in enumerate(ordered_headings):
                 match = re.search(
-                    rf"{re.escape(heading)}(?=[A-Za-z#-])",
+                    rf"{re.escape(heading)}(?=\s*[A-Za-z#-])",
                     part[cursor:],
                 )
                 if match is None:
                     break
                 start = cursor + match.start()
-                boundaries.append((start, cursor + match.end(), heading))
-                cursor += match.end()
+                end = cursor + match.end()
+                while end < len(part) and part[end] == " ":
+                    end += 1
+                boundaries.append((start, end, heading))
+                cursor = end
             for start, end, heading in reversed(boundaries):
                 before = "" if start == 0 else "\n\n"
                 part = part[:start] + before + heading + "\n\n" + part[end:]
@@ -204,14 +213,19 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
                     r"\n\n\1",
                     part,
                 )
-            if part.startswith("## 1. Implementation"):
+            if part.startswith("## Implementation"):
                 part = re.sub(
-                    r"(?<!^)(## \d+\. )(?=[A-Za-z])",
+                    r"^(## Implementation)(?=\s+###\s+\d+\.)",
+                    r"\1\n\n",
+                    part,
+                )
+                part = re.sub(
+                    r"(?<!^)(###\s+\d+\.\s+)(?=[A-Za-z])",
                     r"\n\n\1",
                     part,
                 )
                 part = re.sub(
-                    r"(?<!^)(## Verification)(?=-)",
+                    r"(?<!^)(## Verification)(?=\s+-)",
                     r"\n\n\1\n\n",
                     part,
                 )
@@ -220,12 +234,94 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
                     r"\n\n\1",
                     part,
                 )
+            if part.startswith("## 1. Implementation"):
+                part = re.sub(
+                    r"(?<!^)(## \d+\. )(?=[A-Za-z])",
+                    r"\n\n\1",
+                    part,
+                )
+                part = re.sub(
+                    r"(?<!^)(## Verification)(?=\s*-)",
+                    r"\n\n\1\n\n",
+                    part,
+                )
+                part = re.sub(
+                    r"(?<!^)(### Requirement mapping:)(?=\s*[A-Za-z])",
+                    r"\n\n\1",
+                    part,
+                )
+            if part.startswith("### Implementation:"):
+                task_number = 0
+
+                def restore_implementation_heading(match: re.Match[str]) -> str:
+                    nonlocal task_number
+                    task_number += 1
+                    title = match.group(1).strip()
+                    suffix = f": {title}" if title else ""
+                    return f"\n\n## {task_number}. Implementation{suffix}\n\n- [ ] "
+
+                part = re.sub(
+                    r"### Implementation:\s*(.*?)\s+-\s+\[ \]\s*",
+                    restore_implementation_heading,
+                    part,
+                )
+                part = re.sub(
+                    r"\s+## Verification\s*",
+                    "\n\n## Verification\n\n",
+                    part,
+                )
+                part = re.sub(
+                    r"\s+### Requirement mapping:\s*(.+?)\s+-\s+",
+                    r"\n\n### Requirement mapping: \1\n\n- ",
+                    part,
+                )
+            if re.match(r"^\d+\.\s+\*\*", part):
+                def restore_bold_task_heading(match: re.Match[str]) -> str:
+                    return f"\n\n## {match.group(1)}. {match.group(2).strip()}\n\n"
+
+                part = re.sub(
+                    r"(?<!^)(\d+)\.\s+\*\*(.*?)\*\*\s*",
+                    restore_bold_task_heading,
+                    part,
+                )
+                part = re.sub(
+                    r"^(\d+)\.\s+\*\*(.*?)\*\*\s*",
+                    restore_bold_task_heading,
+                    part,
+                )
+                part = re.sub(
+                    r"(?<!^)(## Verification)(?=\s*-)",
+                    r"\n\n\1\n\n",
+                    part,
+                )
+                part = re.sub(
+                    r"(?<!^)(### Requirement mapping:)(?=\s*[A-Za-z])",
+                    r"\n\n\1",
+                    part,
+                )
+                part = re.sub(
+                    r"(### Requirement mapping:[^\n]*?)(?=- \*\*Requirement:)",
+                    r"\1\n\n",
+                    part,
+                )
+                part = re.sub(
+                    r"(?<=\.)(?=- )",
+                    "\n",
+                    part,
+                )
+                part = re.sub(r"(?m)^[ \t]+(?=- \[[ xX]\])", "", part)
             part = re.sub(r"(?<!\n)(- \*\*(?:WHEN|THEN)\*\*|- \[ \])", r"\n\1", part)
             return part
 
         text = _transform_markdown_structure(text, restore_boundaries)
 
     def split_inline_normative(part: str) -> str:
+        part = re.sub(
+            r"(?m)^(### Requirement:[^\n]*?[A-Za-z0-9_])(?=(?:SHALL|MUST|SHOULD|MAY)\b)",
+            r"\1 ",
+            part,
+            flags=re.IGNORECASE,
+        )
         part = re.sub(
             r"(?m)^(### Requirement:[^\n]*?)\s+\*\*(SHALL|MUST|SHOULD|MAY)\*\*\s*(.+)$",
             r"\1\n\nThe system \2 \3",
@@ -240,6 +336,20 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
             part,
             flags=re.IGNORECASE,
         )
+        part = re.sub(
+            r"(?m)^(### Requirement:[^\n]*?)(The\s+"
+            r"(?:system|utility|function|service|application|helper)\s+"
+            r"(?:SHALL|MUST|SHOULD|MAY)\b[^\n]*)$",
+            r"\1\n\n\2",
+            part,
+            flags=re.IGNORECASE,
+        )
+        part = re.sub(
+            r"(?m)^(### Requirement:[^\n]*?)\s+(SHALL|MUST|SHOULD|MAY)\b\s*(.+)$",
+            r"\1\n\nThe system \2 \3",
+            part,
+            flags=re.IGNORECASE,
+        )
         return re.sub(
             r"(?m)^(### Requirement:[^\n]+)\n((?:The\s+)?"
             r"(?:SHALL|MUST|SHOULD|MAY)\b)",
@@ -249,6 +359,9 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
         )
 
     text = _map_markdown_prose(text, split_inline_normative)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n[ \t]+\n", "\n\n", text)
+    text = re.sub(r"(\n{2})[ \t]+(?=- \[[ xX]\])", r"\1", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip() + "\n"
 

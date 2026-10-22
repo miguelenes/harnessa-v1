@@ -124,6 +124,107 @@ def test_architect_restores_markdown_structure_from_flattened_tool_arguments() -
     assert "### Requirement: Accept typed name\n\nThe system SHALL accept a string name input." in inline_normative
     assert "#### Scenario: valid name\n- **WHEN**" in inline_normative
 
+    flattened_normative = _normalize_architect_markdown(
+        "## ADDED Requirements### Requirement: GreetingPersonalizedThe helper SHALL "
+        "return a friendly personalized greeting.#### Scenario: named greeting"
+        "- **WHEN** a name is supplied- **THEN** a greeting is returned",
+        "greeting",
+    )
+    assert (
+        "### Requirement: GreetingPersonalized\n\nThe helper SHALL return a friendly "
+        "personalized greeting."
+    ) in flattened_normative
+    assert "#### Scenario: named greeting\n- **WHEN**" in flattened_normative
+
+    proposal = _normalize_architect_markdown(
+        "## Why A reusable greeting helper is needed. ## What Changes Add a typed helper. "
+        "## Capabilities ### greeting Provide a friendly greeting. ## Impact Low risk.\n",
+        "greeting",
+    )
+    assert "## Why\n\nA reusable greeting helper is needed." in proposal
+    assert "## What Changes\n\nAdd a typed helper." in proposal
+    assert "## Capabilities\n\n### greeting" in proposal
+    assert "## Impact\n\nLow risk." in proposal
+
+    design = _normalize_architect_markdown(
+        "## Context A small utility is needed. ## Goals and Non-Goals Provide a typed API. "
+        "## Decisions Return a deterministic greeting. ## Risks / Trade-offs Low risk.\n",
+        "greeting",
+    )
+    assert all(
+        heading in design
+        for heading in (
+            "## Context\n\n",
+            "## Goals and Non-Goals\n\n",
+            "## Decisions\n\n",
+            "## Risks / Trade-offs\n\n",
+        )
+    )
+
+    separate_normative = _normalize_architect_markdown(
+        "## ADDED Requirements \n\n### Requirement: Greeting Accepts Typed Name SHALL return "
+        "a friendly personalized greeting.\n\n#### Scenario: named greeting\n"
+        "- **WHEN** a name is supplied\n- **THEN** a greeting is returned\n",
+        "greeting",
+    )
+    assert (
+        "### Requirement: Greeting Accepts Typed Name\n\nThe system SHALL return "
+        "a friendly personalized greeting."
+    ) in separate_normative
+
+    provider_tasks = _normalize_architect_markdown(
+        "### Implementation: greeting helper - [ ] Implement the typed helper. "
+        "### Implementation: unit tests - [ ] Test the personalized greeting. "
+        "## Verification - Run the focused unit test. "
+        "### Requirement mapping: Greeting Accepts Typed Name - Unit test verifies the scenario.\n",
+        "greeting",
+    )
+    assert "## 1. Implementation: greeting helper\n\n- [ ] Implement" in provider_tasks
+    assert "## 2. Implementation: unit tests\n\n- [ ] Test" in provider_tasks
+    assert "## Verification\n\n- Run the focused unit test." in provider_tasks
+    assert "### Requirement mapping: Greeting Accepts Typed Name\n\n- Unit test" in provider_tasks
+
+    flattened_provider_tasks = _normalize_architect_markdown(
+        "## Implementation ### 1. Implement GreetingHelper - [ ] Define function "
+        "`greet(name: string): string` returning `Hello, <name>!`. "
+        "### 2. Write unit tests - [ ] Add test case `greet(`Alice`)` expects "
+        "`Hello, Alice!`. - [ ] Add test case `greet(`)` expects `Hello, !`. "
+        "## Verification - [x] Run the unit tests and confirm all pass. "
+        "### Requirement mapping: GreetingHelper shall produce a friendly "
+        "personalized greeting\n",
+        "greeting",
+    )
+    assert "## Implementation\n\n### 1. Implement GreetingHelper" in flattened_provider_tasks
+    assert flattened_provider_tasks.count("- [ ]") == 3
+    assert "## Verification\n\n- [x] Run the unit tests" in flattened_provider_tasks
+    assert (
+        "### Requirement mapping: GreetingHelper shall produce a friendly"
+        in flattened_provider_tasks
+    )
+
+    numbered_provider_tasks = _normalize_architect_markdown(
+        "1. **Implement `greet(name: string): string`**   - [ ] Write the function "
+        "body returning `Hello, ${name}!`.2. **Add unit tests for `greet`**   - [ ] "
+        "Test greeting with typical name.   - [ ] Test greeting with empty name."
+        "## Verification- Complete all checkbox tasks.- Run tests; all must pass."
+        "### Requirement mapping: greet_user- **Requirement: greet_user SHALL return "
+        "a friendly personalized greeting**  - [ ] Verified by task 2 checkboxes.",
+        "greeting",
+    )
+    assert "## 1. Implement `greet(name: string): string`" in numbered_provider_tasks
+    assert "## 2. Add unit tests for `greet`" in numbered_provider_tasks
+    assert numbered_provider_tasks.count("- [ ]") == 4
+    assert "## Verification\n\n- Complete all checkbox tasks." in numbered_provider_tasks
+    assert "### Requirement mapping: greet_user" in numbered_provider_tasks
+
+    no_space_requirement = _normalize_architect_markdown(
+        "## ADDED Requirements### Requirement: greet_userSHALL return a friendly "
+        "personalized greeting.#### Scenario: Standard greeting- **WHEN** the function "
+        "is called with a valid name- **THEN** it returns `Hello, {name}!`",
+        "greeting",
+    )
+    assert "### Requirement: greet_user\n\nThe system SHALL return a friendly" in no_space_requirement
+
     content_integrity = (
         "## ADDED Requirements\n\n### Requirement: preserve examples\n\n"
         "The system SHALL preserve literal examples.\n\n"
