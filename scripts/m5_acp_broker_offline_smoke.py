@@ -41,12 +41,14 @@ class _MockModelRouter:
     def __init__(self) -> None:
         self.requests: list[ModelRouteRequest] = []
         self.scope: tuple[UUID, UUID] | None = None
+        self.scopes: list[tuple[UUID, UUID]] = []
 
     async def complete(
         self, db: Any, *, organization_id, project_id, request, idempotency_key
     ) -> dict[str, Any]:
         del db, idempotency_key
         self.scope = organization_id, project_id
+        self.scopes.append(self.scope)
         self.requests.append(request)
         return {
             "response": {
@@ -74,6 +76,7 @@ class _MockModelRouter:
     ) -> tuple[UUID, AsyncIterator[bytes]]:
         del db, idempotency_key
         self.scope = organization_id, project_id
+        self.scopes.append(self.scope)
         self.requests.append(request)
 
         async def chunks() -> AsyncIterator[bytes]:
@@ -219,15 +222,19 @@ async def main() -> None:
                 assert inaccessible.returncode == 0, f"sandbox can access {forbidden_path}"
             assert initialized.protocol_version == 1
             assert initialized.agent_info is not None
-            assert initialized.agent_info.version == agent.package_version
+            assert initialized.agent_info.version in agent.supported_versions
             assert router.scope == (organization_id, task.project_id)
-            assert len(router.requests) == 1
-            routed = router.requests[0]
-            assert routed.task_id == task.id and routed.run_id == run.id
-            assert routed.model_alias == "offline-fixture"
-            assert 1 <= routed.max_output_tokens <= 128
-            assert routed.stream
-            assert routed.messages and routed.messages[-1].content == prompt
+            # This ACP release may make a setup stream before its prompt stream.
+            # Bound both and verify every request remains scoped and token-capped.
+            assert 1 <= len(router.requests) <= 2
+            assert router.scopes == [(organization_id, task.project_id)] * len(router.requests)
+            for routed in router.requests:
+                assert routed.task_id == task.id and routed.run_id == run.id
+                assert routed.model_alias == "offline-fixture"
+                assert 1 <= routed.max_output_tokens <= 128
+                assert routed.stream
+                assert routed.messages and routed.messages[-1].content == prompt
+            routed = router.requests[-1]
             assert workspace.base_commit == source_commit
             assert destinations == {
                 "/workspace",
@@ -254,6 +261,7 @@ async def main() -> None:
                         "forbidden_host_paths_checked": len(forbidden_paths),
                         "model_response": "offline-ok",
                         "max_output_tokens": routed.max_output_tokens,
+                        "fake_router_request_count": len(router.requests),
                         "prompt_sent_to_agent": True,
                         "prompt_stop_reason": stop_reason,
                         "provider_prompt_sent": False,

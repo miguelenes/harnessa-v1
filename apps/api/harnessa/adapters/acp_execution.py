@@ -73,7 +73,6 @@ class ACPExecutionAdapter:
         image: str,
         owner_id: str | None = None,
         limits: SandboxLimits | None = None,
-        expected_agent_version: str | None = "2.0.32",
         model_route_ready: bool = False,
         model_router: ModelRouter | None = None,
         sessions_factory: async_sessionmaker[AsyncSession] = SessionLocal,
@@ -97,7 +96,8 @@ class ACPExecutionAdapter:
         self.state_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.artifact_store = artifact_store
         self.agent = get_agent("opencode")
-        self.expected_agent_version = expected_agent_version
+        self.supported_agent_versions = self.agent.supported_versions
+        self.default_agent_version = self.agent.package_version
         self.owner_id = owner_id or _load_owner_id(self.state_root)
         self.backend: SandboxBackend = PodmanSandboxBackend(
             image=image,
@@ -377,9 +377,9 @@ class ACPExecutionAdapter:
             )
             observed_version = str(agent_info.get("version", ""))
             if (
-                self.expected_agent_version
+                self.supported_agent_versions
                 and observed_version
-                and observed_version != self.expected_agent_version
+                and observed_version not in self.supported_agent_versions
             ):
                 raise ACPProtocolError(
                     "ACP agent version differs from the pinned compatibility record"
@@ -459,7 +459,7 @@ class ACPExecutionAdapter:
             result = {
                 "status": "completed",
                 "agent_id": self.agent.agent_id,
-                "agent_version": observed_version or self.expected_agent_version,
+                "agent_version": observed_version or self.default_agent_version,
                 "protocol_version": initialized.protocol_version,
                 "resume_supported": bool(
                     initialized.agent_capabilities

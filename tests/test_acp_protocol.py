@@ -122,6 +122,8 @@ async def test_fixture_agent_permission_resume_and_redacted_update_contract() ->
     assert isinstance(safe.outcome, AllowedOutcome)
     assert isinstance(denied.outcome, DeniedOutcome)
     assert get_agent("opencode").resume is True
+    assert get_agent("opencode").package_version == "2.0.32"
+    assert get_agent("opencode").supported_versions == ("2.0.32", "1.19.4")
 
 
 @pytest.mark.anyio

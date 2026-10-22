@@ -129,7 +129,7 @@ async def main() -> None:
             assert initialized.protocol_version == 1
             assert initialized.agent_info is not None
             assert initialized.agent_info.name == "OpenCode"
-            assert initialized.agent_info.version == agent.package_version
+            assert initialized.agent_info.version in agent.supported_versions
             resume_supported = bool(
                 capabilities.get("session_capabilities", {}).get("resume")
             )
