@@ -25,7 +25,7 @@ from harnessa.contracts import (
     RetrievalStatusRead,
 )
 from harnessa.db.models import Project, Repository, User
-from harnessa.db.retrieval import MCPProjectGrant, MCPToolAudit, RetrievalSource, RetrievalSync
+from harnessa.db.retrieval import MCPProjectGrant, MCPToolAudit, RetrievalSync
 from harnessa.db.session import get_db
 from harnessa.services.authorization import require_membership
 from harnessa.services.retrieval_governance import (
@@ -126,11 +126,26 @@ async def retrieval_status(
             .order_by(RetrievalSync.finished_at.desc())
             .limit(1)
         )
-        indexed_sources = await db.scalar(
-            select(func.count(RetrievalSource.id)).where(
-                RetrievalSource.repository_id == repository.id,
-                RetrievalSource.state == "current",
+        latest_successful_sync = await db.scalar(
+            select(RetrievalSync)
+            .where(
+                RetrievalSync.repository_id == repository.id,
+                RetrievalSync.state == "succeeded",
             )
+            .order_by(RetrievalSync.finished_at.desc())
+            .limit(1)
+        )
+        coverage_sync = await db.scalar(
+            select(RetrievalSync)
+            .where(
+                RetrievalSync.repository_id == repository.id,
+                RetrievalSync.state == "succeeded",
+                RetrievalSync.incremental.is_(False),
+                RetrievalSync.snapshot_complete.is_(True),
+                RetrievalSync.considered_count > 0,
+            )
+            .order_by(RetrievalSync.finished_at.desc())
+            .limit(1)
         )
         failed_syncs = await db.scalar(
             select(func.count(RetrievalSync.id)).where(
@@ -139,14 +154,25 @@ async def retrieval_status(
             )
         )
         coverage = 0.0
-        if sync and sync.considered_count:
-            coverage = min(1.0, float(indexed_sources or 0) / sync.considered_count)
+        if coverage_sync is not None:
+            coverage = min(1.0, float(coverage_sync.indexed_count) / coverage_sync.considered_count)
+        if sync is None:
+            freshness = "not_indexed"
+        elif sync.state == "failed":
+            freshness = "stale_after_failed_sync"
+        elif coverage_sync is None:
+            freshness = "full_snapshot_required"
+        elif latest_successful_sync and latest_successful_sync.revision != coverage_sync.revision:
+            freshness = "incremental_since_coverage_snapshot"
+        else:
+            freshness = "last_sync_only"
         source_reads.append(
             RetrievalSourceStatusRead(
                 repository_id=repository.id,
                 source_uri=f"repo://{repository.id}",
                 indexed_revision=(latest_successful_sync.revision if latest_successful_sync else None),
-                freshness="last_sync_only" if sync else "not_indexed",
+                coverage_revision=(coverage_sync.revision if coverage_sync else None),
+                freshness=freshness,
                 coverage=coverage,
                 last_sync_at=sync.finished_at if sync else None,
                 failed_syncs=int(failed_syncs or 0),

@@ -1949,6 +1949,11 @@ export interface components {
              * @default null
              */
             indexed_revision: string | null;
+            /**
+             * Coverage Revision
+             * @default null
+             */
+            coverage_revision: string | null;
             /** Freshness */
             freshness: string;
             /** Coverage */

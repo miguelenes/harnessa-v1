@@ -103,9 +103,21 @@ async def sync_repository_index(
         .order_by(RetrievalSync.finished_at.desc())
         .limit(1)
     )
+    complete_snapshot = await db.scalar(
+        select(RetrievalSync)
+        .where(
+            RetrievalSync.repository_id == repository_id,
+            RetrievalSync.state == "succeeded",
+            RetrievalSync.incremental.is_(False),
+            RetrievalSync.snapshot_complete.is_(True),
+        )
+        .order_by(RetrievalSync.finished_at.desc())
+        .limit(1)
+    )
     delta_snapshot = getattr(manager, "snapshot_changes", None)
     use_delta = (
         not dry_run
+        and complete_snapshot is not None
         and previous_sync is not None
         and previous_sync.connector_version == connector_version
         and callable(delta_snapshot)
@@ -203,6 +215,8 @@ async def sync_repository_index(
         started_at=now,
         considered_count=considered_count,
         indexed_count=len(candidates),
+        incremental=incremental,
+        snapshot_complete=snapshot_complete,
         omitted_counts=omitted,
     )
     db.add(sync)

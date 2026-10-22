@@ -100,6 +100,8 @@ class RetrievalSync(Scoped, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     considered_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     indexed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    incremental: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    snapshot_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     omitted_counts: Mapped[dict[str, int]] = mapped_column(JSON_DOCUMENT, nullable=False, default=dict)
 
 

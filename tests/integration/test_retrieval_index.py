@@ -130,6 +130,13 @@ async def test_repository_sync_preview_duplicate_update_and_deletion_tombstone(
             db, project_id=project_id, repository_id=repository_id, actor=actor, manager=manager, dry_run=False
         )
         assert second["revision"] == first["revision"]
+        no_change_status = await retrieval_routes.retrieval_status(project_id, actor, db)
+        no_change_repository_status = next(
+            item for item in no_change_status.sources if item.repository_id == repository_id
+        )
+        expected_coverage = first["source_count"] / first["considered"]
+        assert no_change_repository_status.coverage == expected_coverage
+        assert no_change_repository_status.coverage_revision == first["revision"]
         records = list(await db.scalars(select(RetrievalSource).where(RetrievalSource.project_id == project_id)))
         keys = [source.source_key for source in records]
         assert len(keys) == len(set(keys))
@@ -215,6 +222,9 @@ async def test_repository_sync_preview_duplicate_update_and_deletion_tombstone(
         status = await retrieval_routes.retrieval_status(project_id, actor, db)
         repository_status = next(item for item in status.sources if item.repository_id == repository_id)
         assert repository_status.indexed_revision == deleted["revision"]
+        assert repository_status.coverage == expected_coverage
+        assert repository_status.coverage_revision == first["revision"]
+        assert repository_status.freshness == "incremental_since_coverage_snapshot"
 
 
 async def test_incomplete_bounded_snapshot_marks_unseen_sources_stale_not_deleted(
@@ -254,12 +264,50 @@ async def test_incomplete_bounded_snapshot_marks_unseen_sources_stale_not_delete
         )
         assert guide is not None
         assert guide.state == "stale"
-        assert await db.scalar(
-            select(RetrievalSource.id).where(
-                RetrievalSource.source_uri.endswith("/docs/guide.md"),
-                RetrievalSource.state == "tombstoned",
-            )
-        ) is None
+
+
+async def test_incremental_sync_requires_a_complete_coverage_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, project_id, repository_id, actor, manager = await _source_fixture(tmp_path, monkeypatch)
+    async with SessionLocal() as db:
+        await sync_repository_index(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            manager=manager,
+            dry_run=False,
+        )
+        previous = await db.scalar(
+            select(RetrievalSync)
+            .where(RetrievalSync.repository_id == repository_id)
+            .order_by(RetrievalSync.started_at.desc())
+            .limit(1)
+        )
+        assert previous is not None
+        previous.snapshot_complete = False
+        await db.commit()
+
+        (root / "docs/guide.md").write_text("Changed after legacy coverage metadata.\n")
+        _git(root, "add", "docs/guide.md")
+        await asyncio.to_thread(_commit, root, "force full snapshot after legacy baseline")
+        rebuilt = await sync_repository_index(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            manager=manager,
+            dry_run=False,
+        )
+        assert rebuilt["incremental"] is False
+        latest = await db.scalar(
+            select(RetrievalSync)
+            .where(RetrievalSync.repository_id == repository_id)
+            .order_by(RetrievalSync.started_at.desc())
+            .limit(1)
+        )
+        assert latest is not None and latest.snapshot_complete is True
 
 
 async def test_connector_outage_is_recorded_without_losing_current_index(

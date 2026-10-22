@@ -897,6 +897,7 @@ class RetrievalSourceStatusRead(BaseModel):
     repository_id: UUID
     source_uri: str
     indexed_revision: str | None = None
+    coverage_revision: str | None = None
     freshness: str
     coverage: float = Field(ge=0, le=1)
     last_sync_at: datetime | None = None
