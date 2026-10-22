@@ -167,10 +167,15 @@ class SpecificationWorkspaceManager:
         return await asyncio.to_thread(self._read_bundle, workspace, head_sha)
 
     async def search(
-        self, repository_target_id: str, default_branch: str, query: str, limit: int
+        self,
+        repository_target_id: str,
+        default_branch: str,
+        query: str,
+        limit: int,
+        approved_skill_paths: tuple[str, ...] = (),
     ) -> RepositorySearchResult:
         return await asyncio.to_thread(
-            self._search, repository_target_id, default_branch, query, limit
+            self._search, repository_target_id, default_branch, query, limit, approved_skill_paths
         )
 
     async def snapshot(
@@ -481,7 +486,12 @@ class SpecificationWorkspaceManager:
         return result
 
     def _search(
-        self, target_id: str, default_branch: str, query: str, limit: int
+        self,
+        target_id: str,
+        default_branch: str,
+        query: str,
+        limit: int,
+        approved_skill_paths: tuple[str, ...] = (),
     ) -> RepositorySearchResult:
         source = self._source_path(target_id)
         revision = self._current_base(source, default_branch)
@@ -498,7 +508,10 @@ class SpecificationWorkspaceManager:
             fields = metadata.split()
             if len(fields) != 3 or fields[1] != "blob" or fields[0] not in {"100644", "100755"}:
                 continue
-            if self._searchable_path(relative) and eligible_path(relative):
+            approved_skill = relative in approved_skill_paths
+            if self._searchable_path(relative, approved_skill_paths) and eligible_path(
+                relative, approved_external=approved_skill
+            ):
                 blobs.append((fields[2], relative))
             if len(blobs) >= _SEARCH_FILE_LIMIT:
                 break
@@ -650,8 +663,8 @@ class SpecificationWorkspaceManager:
         if path.suffix.casefold() not in _SEARCH_EXTENSIONS:
             return False
         return relative.startswith(
-            ("openspec/specs/", "apps/", "packages/", "planning/adr", "docs/")
-        ) or relative in {"planning/architecture-decisions.md", "docs/architecture.md"}
+            ("openspec/specs/", "openspec/changes/", "apps/", "packages/", "planning/adr", "docs/")
+        ) or relative in {"planning/architecture-decisions.md", "docs/architecture.md"} or approved_skill
 
     @classmethod
     def _git_batch(

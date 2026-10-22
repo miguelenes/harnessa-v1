@@ -35,6 +35,24 @@ CONNECTOR_VERSIONS = {
 }
 
 
+def approved_skill_paths_for_project(project_id: UUID) -> tuple[str, ...]:
+    try:
+        approved_by_project = json.loads(settings.retrieval_approved_skill_paths_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(503, "Approved skill path configuration is invalid") from exc
+    if not isinstance(approved_by_project, dict):
+        raise HTTPException(503, "Approved skill paths must map project IDs to path lists")
+    approved_paths = approved_by_project.get(str(project_id), [])
+    if not isinstance(approved_paths, list) or any(not isinstance(path, str) for path in approved_paths):
+        raise HTTPException(503, "Approved skill path configuration is invalid")
+    if any(
+        not path.startswith(".agents/skills/") or not path.endswith("/SKILL.md")
+        for path in approved_paths
+    ):
+        raise HTTPException(503, "Only explicitly named SKILL.md paths under .agents/skills may be indexed")
+    return tuple(approved_paths)
+
+
 def source_type_for(path: str) -> str:
     if path.startswith("openspec/"):
         return "openspec"
@@ -68,20 +86,7 @@ async def sync_repository_index(
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(404, "Project not found")
-    try:
-        approved_by_project = json.loads(settings.retrieval_approved_skill_paths_json)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(503, "Approved skill path configuration is invalid") from exc
-    if not isinstance(approved_by_project, dict):
-        raise HTTPException(503, "Approved skill paths must map project IDs to path lists")
-    approved_paths = approved_by_project.get(str(project_id), [])
-    if not isinstance(approved_paths, list) or any(not isinstance(path, str) for path in approved_paths):
-        raise HTTPException(503, "Approved skill path configuration is invalid")
-    if any(
-        not path.startswith(".agents/skills/") or not path.endswith("/SKILL.md")
-        for path in approved_paths
-    ):
-        raise HTTPException(503, "Only explicitly named SKILL.md paths under .agents/skills may be indexed")
+    approved_paths = approved_skill_paths_for_project(project_id)
     try:
         await require_membership(db, actor, project_id)
         current_revision, files, snapshot_omitted = await manager.snapshot(

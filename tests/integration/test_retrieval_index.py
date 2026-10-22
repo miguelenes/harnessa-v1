@@ -69,10 +69,18 @@ async def _source_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     root.mkdir()
     _git(root.parent, "init", "--quiet", "--initial-branch=main", str(root))
     (root / "openspec/specs/example").mkdir(parents=True)
+    (root / "openspec/changes/example-change").mkdir(parents=True)
     (root / "docs").mkdir()
+    (root / ".agents/skills/approved").mkdir(parents=True)
     (root / ".evals").mkdir()
     (root / "openspec/specs/example/spec.md").write_text("# Example\n\nBounded retrieval policy.\n")
+    (root / "openspec/changes/example-change/proposal.md").write_text(
+        "# Change history\n\nUnique changelog artifact for retrieval citations.\n"
+    )
     (root / "docs/guide.md").write_text("Approved project operations.\n")
+    (root / ".agents/skills/approved/SKILL.md").write_text(
+        "# Approved skill\n\nUnique skill instruction for retrieval citations.\n"
+    )
     (root / "docs/private.md").write_text("OPENAI_API_KEY=sk-123456789012345678901234567890\n")
     (root / ".evals/answer.md").write_text("hidden grader answer\n")
     _git(root, "add", "--all")
@@ -112,7 +120,7 @@ async def test_repository_sync_preview_duplicate_update_and_deletion_tombstone(
         )
         assert preview["dry_run"] is True
         assert preview["snapshot_complete"] is True
-        assert preview["considered"] == 3
+        assert preview["considered"] == 4
         first = await sync_repository_index(
             db, project_id=project_id, repository_id=repository_id, actor=actor, manager=manager, dry_run=False
         )
@@ -276,6 +284,46 @@ async def test_repository_search_rechecks_membership_after_revocation(
                 limit=5,
             )
         assert error.value.status_code == 403
+
+
+async def test_search_cites_synced_openspec_history_and_project_approved_skill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, project_id, repository_id, actor, manager = await _source_fixture(tmp_path, monkeypatch)
+    skill_path = ".agents/skills/approved/SKILL.md"
+    monkeypatch.setattr(
+        settings,
+        "retrieval_approved_skill_paths_json",
+        json.dumps({str(project_id): [skill_path]}),
+    )
+    async with SessionLocal() as db:
+        indexed = await sync_repository_index(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            manager=manager,
+            dry_run=False,
+        )
+        assert indexed["source_count"] >= 4
+        history = await search_repository(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            query="unique changelog artifact",
+            limit=5,
+        )
+        approved_skill = await search_repository(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            query="unique skill instruction",
+            limit=5,
+        )
+        assert any(item.path == "openspec/changes/example-change/proposal.md" for item in history.citations)
+        assert any(item.path == skill_path for item in approved_skill.citations)
 
 
 async def test_mcp_result_is_suppressed_when_project_grant_is_revoked_during_call(

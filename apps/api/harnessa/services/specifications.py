@@ -52,6 +52,7 @@ from harnessa.services.lifecycle import (
     transition_task,
 )
 from harnessa.services.model_gateway import has_compatible_configured_route
+from harnessa.services.retrieval_index import approved_skill_paths_for_project
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -728,6 +729,7 @@ async def search_repository(
             authorized_repository.default_branch,
             query,
             limit,
+            approved_skill_paths_for_project(project_id),
         )
     except (OSError, SpecificationWorkspaceError) as exc:
         raise HTTPException(503, str(exc)) from exc
