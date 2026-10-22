@@ -37,7 +37,9 @@ class StaleLease(Exception):
 
 class ExecutionAdapter(Protocol):
     name: str
-    available: bool
+
+    @property
+    def available(self) -> bool: ...
 
     async def execute(
         self,
@@ -47,6 +49,8 @@ class ExecutionAdapter(Protocol):
         checkpoint: Mapping[str, Any] | None,
         save_checkpoint: Callable[[Mapping[str, Any]], Awaitable[None]],
         is_cancelled: Callable[[], Awaitable[bool]],
+        is_current_fence: Callable[[UUID, int], Awaitable[bool]],
+        publish_artifact: Callable[[bytes, str], Awaitable[Mapping[str, Any]]],
     ) -> Mapping[str, Any]: ...
 
     async def cancel(self, run_id: UUID) -> None: ...

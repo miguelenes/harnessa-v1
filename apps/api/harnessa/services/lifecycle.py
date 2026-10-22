@@ -65,6 +65,7 @@ async def _record_event(
     if project is None:
         raise HTTPException(404, "Project not found")
     project.event_sequence += 1
+    task.event_sequence += 1
     event = DomainEvent(
         id=uuid4(),
         event_type=event_type,
@@ -74,7 +75,7 @@ async def _record_event(
         project_id=task.project_id,
         task_id=task.id,
         run_id=run_id,
-        aggregate_sequence=task.version,
+        aggregate_sequence=task.event_sequence,
         project_sequence=project.event_sequence,
         actor_id=actor_id,
         payload=payload,

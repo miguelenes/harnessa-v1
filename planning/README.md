@@ -1,6 +1,6 @@
 # Harnessa: specification and implementation prompts
 
-This index tracks the Harnessa implementation prompts and completed milestone evidence. Milestones 1–4 have completion reports and archived prompts; later work may be in progress but is not complete until its evidence is recorded.
+This index tracks the Harnessa implementation prompts and completed milestone evidence. Milestones 1–5 have completion reports and archived prompts; later work may be in progress but is not complete until its evidence is recorded.
 
 Start with [the revised specification](revised-specification.md), then execute the prompts below in order in the same repository. Each prompt names its prerequisites and includes implementation scope and acceptance criteria. They are separate implementation requests, not concurrent agent assignments.
 
@@ -14,7 +14,7 @@ Read [shared planning decisions](architecture-decisions.md) for runtime ownershi
 | 2 | [Durable orchestration and task lifecycle](archive/completed/02-orchestration.md) — **archived complete** | Crash-safe tasks, events, leases, bounded retries, cancellation |
 | 3 | [LiteLLM routing and spend controls](archive/completed/03-model-gateway.md) — **archived complete** | Interactive/primary and probe/batch pools, explicit fallbacks, budget reservations, request ledger |
 | 4 | [Run orchestration decision](archive/completed/04-runtime-decision.md) — **archived complete (NO-GO)** | LangGraph parity spike; retain the current Harnessa scheduler |
-| 5 | [Isolated workspaces and ACP execution](prompts/05-acp-execution.md) | ACP SDK, trusted runner and safe execution |
+| 5 | [Isolated workspaces and ACP execution](archive/completed/05-acp-execution.md) — **archived complete** | ACP SDK, trusted runner and safe execution |
 | 6 | [OpenSpec discovery and clarification](prompts/06-openspec.md) | Open PR audit/repair/merge/branch cleanup, merged design baseline, dependency/Python audit, 85% tests, AGENTS.md, local CI/review/merge, OpenSpec READY APIs |
 | 7 | [Governed retrieval and MCP](prompts/07-retrieval-mcp.md) | LlamaIndex/Qdrant pilot, lexical fallback and scoped tools |
 | 8 | [Web control plane and AG-UI](prompts/08-web-ag-ui.md) | Real API-backed UI, typed events and replay |
@@ -48,7 +48,7 @@ Previous prompt → current prompt: 4→5, 5→8, 6→6, 7→9, 8→10, 9→12, 
 
 A planning prompt is archived only after its implementation milestone meets its acceptance criteria and its `docs/milestones/NN.md` report records actual evidence, limitations, and follow-up prerequisites. At that point, move the prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents, update the matching index row here to link to the archived prompt and mark it **archived complete**, and leave later prompts active. Do not archive a milestone that is blocked, partially complete, or merely started; record that state in its milestone report and keep the prompt active. Keep `planning/revised-specification.md` and this index as the active planning references.
 
-Milestones 1–3 retain their currently recorded archive status and report paths. Milestones 5–17 remain active until their own acceptance evidence is recorded. Recheck current reports rather than inferring completion from file presence or from this index.
+Milestones 1–3 retain their currently recorded archive status and report paths. Milestones 6–17 remain active until their own acceptance evidence is recorded. Recheck current reports rather than inferring completion from file presence or from this index.
 
 
 The revised specification supersedes conflicting technical details in the source attachment. It preserves the product's seven pillars, ten board columns, six main views, and autonomous execution intent. The original attachment remains unchanged at `/home/menes/Downloads/acp_orchestrator_harness2_self_learning_platform_specification.md`.

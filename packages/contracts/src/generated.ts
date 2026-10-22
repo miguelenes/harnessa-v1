@@ -1125,6 +1125,13 @@ export interface components {
              * @default null
              */
             tool_call_id: string | null;
+            /**
+             * Tool Calls
+             * @default null
+             */
+            tool_calls: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /**
          * ModelPoolKind
