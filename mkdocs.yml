@@ -49,6 +49,7 @@ nav:
   - Architecture: architecture.md
   - Compatibility: compatibility.md
   - Development MCPs: development/mcp-servers.md
+  - Retrieval and MCP integration: integrations/retrieval-mcp.md
   - Design system: design-system.md
   - Architecture decision:
       - Orchestration: adr/0004-run-orchestration.md
@@ -59,6 +60,7 @@ nav:
       - Milestone 4: milestones/04.md
       - Milestone 5: milestones/05.md
       - Milestone 6: milestones/06.md
+      - Milestone 7: milestones/07.md
       - Web foundation: milestones/parallel-web-foundation.md
   - Contributing: contributing.md
   - Security: security.md
