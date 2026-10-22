@@ -689,6 +689,18 @@ class SpecificationWorkspaceManager:
                 ) from exc
             raise
         if process.returncode:
+            if arguments[:1] == ["validate"] and "--json" in arguments:
+                try:
+                    validation_payload = json.loads(stdout.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    validation_payload = None
+                if (
+                    isinstance(validation_payload, dict)
+                    and isinstance(validation_payload.get("items"), list)
+                ):
+                    # OpenSpec 1.14.3 exits nonzero for invalid changes while
+                    # still returning the machine-readable validation result.
+                    return stdout.decode("utf-8", errors="replace")
             detail = stderr.decode("utf-8", errors="replace")[-1000:]
             raise SpecificationWorkspaceError(
                 f"OpenSpec CLI exited with status {process.returncode}: {detail}"

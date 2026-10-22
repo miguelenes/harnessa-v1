@@ -175,7 +175,7 @@ async def _configure_acp_route(
     *,
     tools: bool = True,
     cancellation: bool = True,
-    context_window: int = 1_056_768,
+    context_window: int | None = None,
     budget_max_output_tokens: int = 16_384,
 ) -> None:
     async with SessionLocal() as db:
@@ -214,7 +214,12 @@ async def _configure_acp_route(
                 "usage_reporting": True,
                 "cancellation": cancellation,
             },
-            context_window=context_window,
+            context_window=(
+                context_window
+                if context_window is not None
+                else settings.acp_model_max_request_bytes
+                + settings.acp_model_max_output_tokens
+            ),
             input_cost_per_million=Decimal(1),
             output_cost_per_million=Decimal(1),
             price_revision="fixture-1",
@@ -329,7 +334,14 @@ async def test_readiness_stays_in_specifying_when_route_cannot_fit_broker_reques
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project_id, repository_id, actor, _, _ = await _specification_fixture(tmp_path, monkeypatch)
-    await _configure_acp_route(project_id, context_window=1_056_767)
+    await _configure_acp_route(
+        project_id,
+        context_window=(
+            settings.acp_model_max_request_bytes
+            + settings.acp_model_max_output_tokens
+            - 1
+        ),
+    )
     async with SessionLocal() as db:
         interview, replayed = await create_interview(
             db,
@@ -969,3 +981,88 @@ async def test_authenticated_specification_api_and_fake_architect_are_revision_b
                 },
             )
             assert signoff.status_code == 200, signoff.text
+
+
+@pytest.mark.anyio
+async def test_invalid_architect_openspec_bundle_is_persisted_but_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, _, _ = await _specification_fixture(
+        tmp_path, monkeypatch
+    )
+
+    class InvalidFixtureArchitect:
+        async def generate(self, _db, **context):
+            change_id = context["change_id"]
+            files = _initial_bundle(context["topic"], change_id)
+            spec_path = f"openspec/changes/{change_id}/specs/{change_id}/spec.md"
+            files[spec_path] = "# Incomplete specification\n"
+            return ArchitectDraft.model_validate(
+                {
+                    "proposal_md": files[
+                        f"openspec/changes/{change_id}/proposal.md"
+                    ],
+                    "spec_md": files[spec_path],
+                    "design_md": files[f"openspec/changes/{change_id}/design.md"],
+                    "tasks_md": files[f"openspec/changes/{change_id}/tasks.md"],
+                    "questions": [
+                        {
+                            "question": "Which verification should be required?",
+                            "classification": "nonblocking",
+                            "proposed_assumption": "Use a focused unit test.",
+                            "recommended_options": [],
+                            "affected_artifacts": [spec_path],
+                        }
+                    ],
+                }
+            )
+
+    monkeypatch.setattr(specification_service, "_architect", InvalidFixtureArchitect())
+    origin = settings.allowed_origins.split(",")[0].strip()
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            csrf = (await client.get("/auth/csrf")).json()["csrf_token"]
+            login = await client.post(
+                "/auth/cookie/login",
+                headers={"Origin": origin, "X-CSRF-Token": csrf},
+                data={"username": actor.email, "password": "fixture-password-long-enough"},
+            )
+            assert login.status_code == 204
+            path = f"/projects/{project_id}/specification-interviews"
+            started = await client.post(
+                path,
+                headers={
+                    "Origin": origin,
+                    "X-CSRF-Token": csrf,
+                    "Idempotency-Key": "api-invalid-architect-topic",
+                },
+                json={
+                    "repository_id": str(repository_id),
+                    "topic": "Add an Architect validation recovery scenario",
+                },
+            )
+            assert started.status_code == 201, started.text
+            interview = started.json()
+            architect = await client.post(
+                f"{path}/{interview['id']}/architect",
+                headers={
+                    "Origin": origin,
+                    "X-CSRF-Token": csrf,
+                    "Idempotency-Key": "api-invalid-architect-result",
+                },
+                json={
+                    "expected_revision": interview["revision"],
+                    "authorize_model_generation": True,
+                },
+            )
+            assert architect.status_code == 200, architect.text
+            assert architect.json()["artifact_revision"] == 2
+            assert len(architect.json()["questions"]) == 1
+
+            persisted = await client.get(f"{path}/{interview['id']}")
+            assert persisted.status_code == 200
+            assert persisted.json()["readiness_state"] == "NOT_READY"
+            assert persisted.json()["artifact_revision"] == 2

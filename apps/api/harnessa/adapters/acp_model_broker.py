@@ -29,6 +29,7 @@ from harnessa.services.model_gateway import ModelGatewayError
 logger = logging.getLogger("harnessa.acp_model_broker")
 _MAX_HEADERS = 16 * 1024
 _MAX_BODY = 1024 * 1024
+_DEFAULT_MAX_BODY = 512 * 1024
 _MAX_OUTPUT_TOKENS = 65_536
 _MAX_MESSAGES = 2_000
 _MAX_TOOLS = 256
@@ -58,6 +59,7 @@ class ACPModelBroker:
         is_current_fence: Callable[[UUID, int], Awaitable[bool]],
         is_cancelled: Callable[[], Awaitable[bool]],
         max_output_tokens: int = 8192,
+        max_request_bytes: int = _DEFAULT_MAX_BODY,
     ) -> None:
         self.socket_path = socket_path
         self.scope = scope
@@ -66,6 +68,7 @@ class ACPModelBroker:
         self.is_current_fence = is_current_fence
         self.is_cancelled = is_cancelled
         self.max_output_tokens = min(max_output_tokens, _MAX_OUTPUT_TOKENS)
+        self.max_request_bytes = min(max_request_bytes, _MAX_BODY)
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
@@ -89,7 +92,9 @@ class ACPModelBroker:
         response_task: asyncio.Task[None] | None = None
         monitor_task: asyncio.Task[None] | None = None
         try:
-            method, path, headers, body = await _read_request(reader)
+            method, path, headers, body = await _read_request(
+                reader, max_body_bytes=self.max_request_bytes
+            )
             if method != "POST" or path != "/v1/chat/completions":
                 await _send_json(writer, 404, {"error": {"message": "Route not found"}})
                 return
@@ -201,7 +206,7 @@ class ACPModelBroker:
 
 
 async def _read_request(
-    reader: asyncio.StreamReader,
+    reader: asyncio.StreamReader, *, max_body_bytes: int = _MAX_BODY
 ) -> tuple[str, str, dict[str, str], dict[str, Any]]:
     try:
         header_bytes = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=10)
@@ -228,7 +233,7 @@ async def _read_request(
         content_length = int(headers.get("content-length", "-1"))
     except ValueError as exc:
         raise ValueError("Invalid Content-Length") from exc
-    if not 0 <= content_length <= _MAX_BODY:
+    if not 0 <= content_length <= max_body_bytes:
         raise ValueError("Request body exceeds the size limit")
     raw = await asyncio.wait_for(reader.readexactly(content_length), timeout=10)
     value = json.loads(raw)

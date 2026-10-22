@@ -47,6 +47,7 @@ from harnessa.adapters.specification_workspace import (
     SpecificationWorkspaceManager,
 )
 from harnessa.adapters.workspaces import ManagedWorkspace, WorkspaceError, WorkspaceManager
+from harnessa.config import settings
 from harnessa.db.models import Project, Repository
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
@@ -288,6 +289,7 @@ class ACPExecutionAdapter:
                 is_current_fence=is_current_fence,
                 is_cancelled=is_cancelled,
                 max_output_tokens=self.model_max_output_tokens,
+                max_request_bytes=settings.acp_model_max_request_bytes,
             )
             await broker.start()
             if interview is not None:

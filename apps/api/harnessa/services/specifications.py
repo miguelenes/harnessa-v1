@@ -1116,12 +1116,12 @@ async def evaluate_readiness(
                 select(ModelBudgetPolicy).where(ModelBudgetPolicy.project_id == project.id)
             )
         ).scalars().first()
-        # The broker accepts at most a 1 MiB serialized body and the gateway
-        # reserves output separately. Require a route that can fit that full
-        # bounded request plus ACP's configured output ceiling.
+        # The broker estimates one input token per serialized request byte and
+        # the gateway reserves output separately. Require a route that can fit
+        # the configured request-byte bound plus ACP's output ceiling.
         minimum_context = min(
             2_000_000,
-            1_048_576 + settings.acp_model_max_output_tokens,
+            settings.acp_model_max_request_bytes + settings.acp_model_max_output_tokens,
         )
         model_route_ready = (
             budget_policy is not None

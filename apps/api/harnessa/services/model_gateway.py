@@ -918,6 +918,7 @@ class LiteLLMModelRouter:
         project_id: UUID,
         request: ModelRouteRequest,
         idempotency_key: str,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if self.client is None and self.client_factory is None and not settings.model_gateway_url:
             raise ModelGatewayError("model_gateway_unavailable", 503, "LiteLLM gateway URL is not configured")
@@ -925,6 +926,8 @@ class LiteLLMModelRouter:
             raise ModelGatewayError("stream_endpoint_required", 400, "Use the streaming route for stream requests")
         if request.tools and not request.requirements.tools:
             raise ModelGatewayError("route_requirements_mismatch", 422, "Tool requests must require tool support")
+        if tool_choice is not None and not request.tools:
+            raise ModelGatewayError("route_requirements_mismatch", 422, "Tool choice requires configured tools")
         if request.stream and not request.requirements.streaming:
             raise ModelGatewayError("route_requirements_mismatch", 422, "Streaming requires streaming capability")
         pool, candidates = await route_candidates(
@@ -994,7 +997,10 @@ class LiteLLMModelRouter:
                         route_decision=decisions[-1],
                         request_identifier=call_id,
                     )
-                    payload = request.to_provider_payload(candidate.deployment.proxy_model)
+                    payload = request.to_provider_payload(
+                        candidate.deployment.proxy_model,
+                        tool_choice=tool_choice,
+                    )
                     headers = {"X-Request-ID": call_id}
                     if request.requirements.protocol == ModelProtocol.ANTHROPIC_MESSAGES:
                         headers["anthropic-version"] = "2023-06-01"
