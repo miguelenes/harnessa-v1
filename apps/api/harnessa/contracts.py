@@ -35,6 +35,47 @@ class RunStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
 
 
+class OrchestrationOperation(StrEnum):
+    START = "start"
+    CHECKPOINT = "checkpoint"
+    INTERRUPT = "interrupt"
+    ANSWER = "answer"
+    RESUME = "resume"
+    CANCEL = "cancel"
+    RECONCILE = "reconcile"
+
+
+class OrchestrationOutcome(StrEnum):
+    ACCEPTED = "accepted"
+    DUPLICATE = "duplicate"
+    REJECTED = "rejected"
+    STALE = "stale"
+    UNAVAILABLE = "unavailable"
+    INTERRUPTED = "interrupted"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    RECONCILED = "reconciled"
+
+
+class EvidenceValueStatus(StrEnum):
+    KNOWN = "known"
+    UNKNOWN = "unknown"
+    REDACTED = "redacted"
+
+
+class EvidenceSensitivity(StrEnum):
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    CONFIDENTIAL = "confidential"
+    RESTRICTED = "restricted"
+
+
+class EvidenceRedactionStatus(StrEnum):
+    NOT_REQUIRED = "not_required"
+    APPLIED = "applied"
+    PENDING = "pending"
+
+
 class RetryClass(StrEnum):
     TRANSIENT = "transient"
     RATE_LIMITED = "rate_limited"
@@ -448,6 +489,157 @@ class RunRead(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     checkpoint_id: UUID | None = None
+
+
+class RunOrchestrationIdentity(BaseModel):
+    """Harnessa-owned identity and fence carried through every runtime operation."""
+
+    task_id: UUID
+    run_id: UUID
+    attempt: int = Field(ge=1)
+    fencing_token: int = Field(ge=1)
+
+
+class RunCheckpointReference(BaseModel):
+    """Runtime-neutral reference to a durable Harnessa checkpoint."""
+
+    checkpoint_id: UUID
+    sequence: int = Field(ge=1)
+    state_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class RunStartRequest(BaseModel):
+    identity: RunOrchestrationIdentity
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    input: dict[str, Any]
+    resume_from: RunCheckpointReference | None = None
+
+
+class RunCheckpointWrite(BaseModel):
+    identity: RunOrchestrationIdentity
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    state: dict[str, Any]
+
+
+class RunInterruptRequest(BaseModel):
+    identity: RunOrchestrationIdentity
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    question_id: UUID
+    question_revision: int = Field(ge=1)
+    prompt: dict[str, Any]
+    answer_schema: dict[str, Any]
+
+
+class RunAnswerRequest(BaseModel):
+    identity: RunOrchestrationIdentity
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    question_id: UUID
+    question_revision: int = Field(ge=1)
+    answer: dict[str, Any]
+
+
+class RunResumeRequest(BaseModel):
+    identity: RunOrchestrationIdentity
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    checkpoint: RunCheckpointReference | None = None
+    answer_idempotency_key: str | None = Field(default=None, max_length=200)
+
+
+class RunCancelRequest(BaseModel):
+    identity: RunOrchestrationIdentity
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class RunReconcileRequest(BaseModel):
+    identity: RunOrchestrationIdentity
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    stable_effect_keys: list[str] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_unique_effect_keys(self) -> RunReconcileRequest:
+        if len(set(self.stable_effect_keys)) != len(self.stable_effect_keys):
+            raise ValueError("stable effect keys must be unique")
+        return self
+
+
+class RunOrchestrationReceipt(BaseModel):
+    """Idempotent result of an orchestration port operation."""
+
+    identity: RunOrchestrationIdentity
+    operation: OrchestrationOperation
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    outcome: OrchestrationOutcome
+    checkpoint: RunCheckpointReference | None = None
+    question_id: UUID | None = None
+    question_revision: int | None = Field(default=None, ge=1)
+    event_id: UUID | None = None
+    recorded_at: datetime
+    detail: str | None = Field(default=None, max_length=1000)
+
+
+class EvidenceTextValue(BaseModel):
+    status: EvidenceValueStatus
+    value: str | None = None
+
+    @model_validator(mode="after")
+    def validate_status_value(self) -> EvidenceTextValue:
+        if (self.status == EvidenceValueStatus.KNOWN) != (self.value is not None):
+            raise ValueError("known evidence text requires a value; unknown or redacted text omits it")
+        return self
+
+
+class EvidenceUuidValue(BaseModel):
+    status: EvidenceValueStatus
+    value: UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_status_value(self) -> EvidenceUuidValue:
+        if (self.status == EvidenceValueStatus.KNOWN) != (self.value is not None):
+            raise ValueError("known evidence UUID requires a value; unknown or redacted UUID omits it")
+        return self
+
+
+class EvidenceIntegerValue(BaseModel):
+    status: EvidenceValueStatus
+    value: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_status_value(self) -> EvidenceIntegerValue:
+        if (self.status == EvidenceValueStatus.KNOWN) != (self.value is not None):
+            raise ValueError("known evidence integer requires a value; unknown or redacted integer omits it")
+        return self
+
+
+class EvidenceTimestampValue(BaseModel):
+    status: EvidenceValueStatus
+    value: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_status_value(self) -> EvidenceTimestampValue:
+        if (self.status == EvidenceValueStatus.KNOWN) != (self.value is not None):
+            raise ValueError("known evidence time requires a value; unknown or redacted time omits it")
+        return self
+
+
+class CoreEvidenceEnvelope(BaseModel):
+    """Source-linked evidence metadata; unknown and redacted values are distinguishable."""
+
+    schema_version: int = Field(ge=1)
+    source_system: str = Field(min_length=1, max_length=120)
+    source_record_id: EvidenceTextValue
+    task_id: EvidenceUuidValue
+    run_id: EvidenceUuidValue
+    attempt: EvidenceIntegerValue
+    revision: EvidenceTextValue
+    content_sha256: EvidenceTextValue
+    occurred_at: EvidenceTimestampValue
+    recorded_at: datetime
+    correlation_id: EvidenceUuidValue
+    causation_id: EvidenceUuidValue
+    scope: list[str] = Field(min_length=1, max_length=32)
+    sensitivity: EvidenceSensitivity
+    redaction_status: EvidenceRedactionStatus
 
 
 class EventReplayItem(BaseModel):

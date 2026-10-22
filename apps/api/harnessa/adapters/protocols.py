@@ -6,7 +6,37 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from harnessa.contracts import EventEnvelope, ModelRouteRequest, SpecificationRevision
+from harnessa.contracts import (
+    EventEnvelope,
+    ModelRouteRequest,
+    RunAnswerRequest,
+    RunCancelRequest,
+    RunCheckpointWrite,
+    RunInterruptRequest,
+    RunOrchestrationReceipt,
+    RunReconcileRequest,
+    RunResumeRequest,
+    RunStartRequest,
+    SpecificationRevision,
+)
+
+
+class RunOrchestrator(Protocol):
+    """Framework-neutral run port; Harnessa remains authoritative for every request."""
+
+    async def start(self, request: RunStartRequest) -> RunOrchestrationReceipt: ...
+
+    async def checkpoint(self, request: RunCheckpointWrite) -> RunOrchestrationReceipt: ...
+
+    async def interrupt(self, request: RunInterruptRequest) -> RunOrchestrationReceipt: ...
+
+    async def answer(self, request: RunAnswerRequest) -> RunOrchestrationReceipt: ...
+
+    async def resume(self, request: RunResumeRequest) -> RunOrchestrationReceipt: ...
+
+    async def cancel(self, request: RunCancelRequest) -> RunOrchestrationReceipt: ...
+
+    async def reconcile(self, request: RunReconcileRequest) -> RunOrchestrationReceipt: ...
 
 
 class ModelRouter(Protocol):

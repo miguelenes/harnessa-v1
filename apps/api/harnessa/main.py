@@ -44,6 +44,21 @@ from harnessa.contracts import (
     ModelGatewayConfiguration,
     ModelInvocationRead,
     ModelRequestLedgerRead,
+    EvidenceTextValue,
+    EvidenceUuidValue,
+    EvidenceIntegerValue,
+    EvidenceTimestampValue,
+    CoreEvidenceEnvelope,
+    RunOrchestrationIdentity,
+    RunCheckpointReference,
+    RunStartRequest,
+    RunCheckpointWrite,
+    RunInterruptRequest,
+    RunAnswerRequest,
+    RunResumeRequest,
+    RunCancelRequest,
+    RunReconcileRequest,
+    RunOrchestrationReceipt,
 )
 
 
@@ -95,6 +110,21 @@ CONTRACT_MODELS = (
     ModelGatewayConfiguration,
     ModelInvocationRead,
     ModelRequestLedgerRead,
+    EvidenceTextValue,
+    EvidenceUuidValue,
+    EvidenceIntegerValue,
+    EvidenceTimestampValue,
+    CoreEvidenceEnvelope,
+    RunOrchestrationIdentity,
+    RunCheckpointReference,
+    RunStartRequest,
+    RunCheckpointWrite,
+    RunInterruptRequest,
+    RunAnswerRequest,
+    RunResumeRequest,
+    RunCancelRequest,
+    RunReconcileRequest,
+    RunOrchestrationReceipt,
 )
 
 

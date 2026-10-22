@@ -1698,6 +1698,257 @@ export interface components {
             /** Scopes */
             scopes?: string[];
         };
+        /**
+         * CoreEvidenceEnvelope
+         * @description Source-linked evidence metadata; unknown and redacted values are distinguishable.
+         */
+        CoreEvidenceEnvelope: {
+            /** Schema Version */
+            schema_version: number;
+            /** Source System */
+            source_system: string;
+            source_record_id: components["schemas"]["EvidenceTextValue"];
+            task_id: components["schemas"]["EvidenceUuidValue"];
+            run_id: components["schemas"]["EvidenceUuidValue"];
+            attempt: components["schemas"]["EvidenceIntegerValue"];
+            revision: components["schemas"]["EvidenceTextValue"];
+            content_sha256: components["schemas"]["EvidenceTextValue"];
+            occurred_at: components["schemas"]["EvidenceTimestampValue"];
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            correlation_id: components["schemas"]["EvidenceUuidValue"];
+            causation_id: components["schemas"]["EvidenceUuidValue"];
+            /** Scope */
+            scope: string[];
+            sensitivity: components["schemas"]["EvidenceSensitivity"];
+            redaction_status: components["schemas"]["EvidenceRedactionStatus"];
+        };
+        /** EvidenceIntegerValue */
+        EvidenceIntegerValue: {
+            status: components["schemas"]["EvidenceValueStatus"];
+            /**
+             * Value
+             * @default null
+             */
+            value: number | null;
+        };
+        /**
+         * EvidenceRedactionStatus
+         * @enum {string}
+         */
+        EvidenceRedactionStatus: "not_required" | "applied" | "pending";
+        /**
+         * EvidenceSensitivity
+         * @enum {string}
+         */
+        EvidenceSensitivity: "public" | "internal" | "confidential" | "restricted";
+        /** EvidenceTextValue */
+        EvidenceTextValue: {
+            status: components["schemas"]["EvidenceValueStatus"];
+            /**
+             * Value
+             * @default null
+             */
+            value: string | null;
+        };
+        /** EvidenceTimestampValue */
+        EvidenceTimestampValue: {
+            status: components["schemas"]["EvidenceValueStatus"];
+            /**
+             * Value
+             * @default null
+             */
+            value: string | null;
+        };
+        /** EvidenceUuidValue */
+        EvidenceUuidValue: {
+            status: components["schemas"]["EvidenceValueStatus"];
+            /**
+             * Value
+             * @default null
+             */
+            value: string | null;
+        };
+        /**
+         * EvidenceValueStatus
+         * @enum {string}
+         */
+        EvidenceValueStatus: "known" | "unknown" | "redacted";
+        /**
+         * OrchestrationOperation
+         * @enum {string}
+         */
+        OrchestrationOperation: "start" | "checkpoint" | "interrupt" | "answer" | "resume" | "cancel" | "reconcile";
+        /**
+         * OrchestrationOutcome
+         * @enum {string}
+         */
+        OrchestrationOutcome: "accepted" | "duplicate" | "rejected" | "stale" | "unavailable" | "interrupted" | "completed" | "cancelled" | "reconciled";
+        /** RunAnswerRequest */
+        RunAnswerRequest: {
+            identity: components["schemas"]["RunOrchestrationIdentity"];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Question Id
+             * Format: uuid
+             */
+            question_id: string;
+            /** Question Revision */
+            question_revision: number;
+            /** Answer */
+            answer: {
+                [key: string]: unknown;
+            };
+        };
+        /** RunCancelRequest */
+        RunCancelRequest: {
+            identity: components["schemas"]["RunOrchestrationIdentity"];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * RunCheckpointReference
+         * @description Runtime-neutral reference to a durable Harnessa checkpoint.
+         */
+        RunCheckpointReference: {
+            /**
+             * Checkpoint Id
+             * Format: uuid
+             */
+            checkpoint_id: string;
+            /** Sequence */
+            sequence: number;
+            /** State Hash */
+            state_hash: string;
+        };
+        /** RunCheckpointWrite */
+        RunCheckpointWrite: {
+            identity: components["schemas"]["RunOrchestrationIdentity"];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** State */
+            state: {
+                [key: string]: unknown;
+            };
+        };
+        /** RunInterruptRequest */
+        RunInterruptRequest: {
+            identity: components["schemas"]["RunOrchestrationIdentity"];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Question Id
+             * Format: uuid
+             */
+            question_id: string;
+            /** Question Revision */
+            question_revision: number;
+            /** Prompt */
+            prompt: {
+                [key: string]: unknown;
+            };
+            /** Answer Schema */
+            answer_schema: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * RunOrchestrationIdentity
+         * @description Harnessa-owned identity and fence carried through every runtime operation.
+         */
+        RunOrchestrationIdentity: {
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Attempt */
+            attempt: number;
+            /** Fencing Token */
+            fencing_token: number;
+        };
+        /**
+         * RunOrchestrationReceipt
+         * @description Idempotent result of an orchestration port operation.
+         */
+        RunOrchestrationReceipt: {
+            identity: components["schemas"]["RunOrchestrationIdentity"];
+            operation: components["schemas"]["OrchestrationOperation"];
+            /** Idempotency Key */
+            idempotency_key: string;
+            outcome: components["schemas"]["OrchestrationOutcome"];
+            /** @default null */
+            checkpoint: components["schemas"]["RunCheckpointReference"] | null;
+            /**
+             * Question Id
+             * @default null
+             */
+            question_id: string | null;
+            /**
+             * Question Revision
+             * @default null
+             */
+            question_revision: number | null;
+            /**
+             * Event Id
+             * @default null
+             */
+            event_id: string | null;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /**
+             * Detail
+             * @default null
+             */
+            detail: string | null;
+        };
+        /** RunReconcileRequest */
+        RunReconcileRequest: {
+            identity: components["schemas"]["RunOrchestrationIdentity"];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Stable Effect Keys */
+            stable_effect_keys: string[];
+        };
+        /** RunResumeRequest */
+        RunResumeRequest: {
+            identity: components["schemas"]["RunOrchestrationIdentity"];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** @default null */
+            checkpoint: components["schemas"]["RunCheckpointReference"] | null;
+            /**
+             * Answer Idempotency Key
+             * @default null
+             */
+            answer_idempotency_key: string | null;
+        };
+        /** RunStartRequest */
+        RunStartRequest: {
+            identity: components["schemas"]["RunOrchestrationIdentity"];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Input */
+            input: {
+                [key: string]: unknown;
+            };
+            /** @default null */
+            resume_from: components["schemas"]["RunCheckpointReference"] | null;
+        };
         /** SpecificationRevision */
         SpecificationRevision: {
             /**

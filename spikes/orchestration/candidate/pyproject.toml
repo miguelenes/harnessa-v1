@@ -1,0 +1,27 @@
+[project]
+name = "harnessa-orchestration-langgraph-spike"
+version = "0.0.0"
+description = "Isolated Harnessa milestone 4 LangGraph compatibility spike"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi==0.121.0",
+  "uvicorn[standard]==0.38.0",
+  "pydantic-settings==2.11.0",
+  "sqlalchemy[asyncio]==2.0.44",
+  "asyncpg==0.30.0",
+  "alembic==1.17.0",
+  "redis==6.4.0",
+  "httpx==0.28.1",
+  "fastapi-users[sqlalchemy]==14.0.1",
+  "pwdlib[argon2]==0.2.1",
+  "python-multipart==0.0.20",
+  "langgraph==1.2.16",
+  "langgraph-checkpoint-postgres==3.2.0",
+  "psycopg[binary]==3.3.6",
+  "pytest==8.4.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+addopts = "-ra"
