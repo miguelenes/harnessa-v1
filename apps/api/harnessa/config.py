@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     event_replay_limit: int = 500
     redis_stream_maxlen: int = 10000
     model_gateway_url: str = ""
+    mcp_servers_json: str = "{}"
+    mcp_read_only_tools_json: str = "{}"
+    retrieval_approved_skill_paths_json: str = "{}"
     model_max_attempts: int = 3
     model_http_timeout_seconds: float = 60.0
     model_cooldown_seconds: int = 30

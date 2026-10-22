@@ -18,6 +18,13 @@ dependencies = [
   "agent-client-protocol==0.12.1",
 ]
 
+[project.optional-dependencies]
+retrieval = [
+    "llama-index-core==0.14.25",
+    "llama-index-vector-stores-qdrant==0.10.4",
+    "qdrant-client==1.19.1",
+]
+
 [dependency-groups]
 dev = [
     "pytest==9.1.1",

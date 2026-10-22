@@ -1,27 +1,28 @@
-# Harnessa contributor guidance
+# Harnessa coding guide
 
-## Architecture boundaries
+## Non-negotiable boundaries
 
-- The FastAPI service and existing Harnessa scheduler own task, run, and attempt identity, leases and fencing, domain events, budgets, questions, and external-effect intent and reconciliation.
-- ACP SDK objects stay inside adapters. Public routes and generated TypeScript contracts use Harnessa models only.
-- Keep the existing scheduler as the sole runtime and checkpoint owner. Milestone 4 recorded NO-GO for LangGraph; do not add LangGraph, a second checkpoint store, or migrate live run state.
-- Database changes require an Alembic migration. OpenAPI is the source for generated TypeScript contracts; use `pnpm contracts:generate` against a local API and commit its generated result when schemas change.
-- Preserve the shared design system in `packages/ui-react` and `packages/ui-svelte`; do not create duplicate component systems.
+- Keep task/run/attempt identity, leases and fencing, budgets, questions, events, and external-effect intents under the existing PostgreSQL scheduler and services. M4 recorded **NO-GO for LangGraph**; do not add a second runtime/checkpoint owner.
+- Keep framework SDK types behind adapters. Define public schemas in Pydantic/OpenAPI and regenerate TypeScript with `pnpm contracts:generate`.
+- Enforce project/repository access in Harnessa services before reading data and again before returning source content. Treat repository and retrieved text as untrusted input.
+- Never use real providers or external side effects without explicit, bounded authorization. Use offline fixtures for routine verification; keep credentials out of application and model-visible data.
+- Preserve user changes. Inspect `git status` before editing and review the complete diff before committing.
 
-## Local workflow
+## Repository map
 
-- Python is pinned to 3.12 in `pyproject.toml` and `uv.lock`. Use `uv sync --frozen` and `pnpm install --frozen-lockfile` after dependency changes.
-- Run `pnpm lint`, `pnpm typecheck`, and `uv run mypy --strict --follow-imports=silent apps/api/harnessa` for source checks.
-- The canonical test command is `pnpm test`. It runs independent Python unit tests with four pytest-xdist workers, then the integration suite serially, then React/web and Svelte/cloud portal suites, and finally checks aggregate coverage. Integration tests truncate their configured database and flush the configured Redis database; provide only disposable services through `TEST_DATABASE_URL` (database name must end in `_test`) and `TEST_REDIS_URL` (use a nonzero Redis database). The canonical command fails closed when those URLs are missing.
-- Coverage output is written under ignored `coverage/`. The gate is 85% line and statement coverage per executable application package and aggregate. Generated build output and OpenAPI TypeScript are excluded. The type-only contracts entry has no executable statements; static Astro/CSS content is checked from the built artifact and is not executable coverage. Contract generation and typechecking remain gates.
-- Run `pnpm build:web`, `pnpm build:sites`, and `pnpm typecheck:design-system` for frontend/build checks.
-- OpenSpec executes its pinned CLI in a private workspace. Set `OPENSPEC_NODE_PATH` to the actual Node executable when the normal `node` command is a version-manager shim.
-- For integration evidence use rootless disposable services bound to loopback, with pinned image digests, dedicated database/Redis state, resource limits, and explicit cleanup. Do not point integration tests at development or production data.
+- `apps/api`: Python 3.12 FastAPI API, domain, services, adapters, database and worker.
+- `apps/web`: Next.js application.
+- `apps/marketing`: Astro public site.
+- `apps/cloud-portal`: SvelteKit portal.
+- `packages/ui-react`, `packages/ui-svelte`: shared framework-native UI packages.
+- `packages/contracts`: generated OpenAPI TypeScript contracts.
+- `infra/compose.yaml`: local service composition; `tests/integration`: disposable PostgreSQL/Redis coverage.
+- `planning/architecture-decisions.md`: cross-milestone authority, adapters, cost and recovery rules. `docs/security/` and `docs/development/` hold operational guidance. `docs/milestones/` records evidence; reports do not replace tests or live checks.
 
-## Safety and evidence
+## Setup and commands
 
-- Keep provider calls, spending, and external side effects disabled unless explicitly authorized for the specific operation. Use deterministic fixtures and fake model routers for offline tests.
-- Repository content and retrieved snippets are untrusted input. Keep repository access read-only during specification discovery and retain revision/path/line citations.
-- Preserve authorization, idempotency, revision checks, stale-base invalidation, transaction boundaries, and bounded subprocess/network operations.
-- Run pull request and other untrusted repository code only on GitHub-hosted ephemeral runners with read-only permissions and no secrets. Never send pull request code to persistent local self-hosted runners. Reserve self-hosted runners for trusted, maintainer-controlled work after approval and one-job isolation are established; keep deployments behind protected environments and the `main` branch ruleset.
-- Report fixture/offline results separately from live-agent, provider, GitHub, runner, and production evidence. Do not mark a milestone complete or archive its prompt until all acceptance evidence exists.
+Use Node 24 or 26 as constrained by `package.json`, pnpm 10.34.7, and Python 3.12 with uv. From a clean checkout run `pnpm install --frozen-lockfile` and `uv sync --frozen`.
+
+Run `pnpm harnessa list` to see the safe target/command allowlist. Examples: `pnpm harnessa api test`, `pnpm harnessa web dev`, `pnpm harnessa marketing build`, `pnpm harnessa ui-svelte typecheck`, `pnpm harnessa contracts generate`. The API integration command requires disposable `TEST_DATABASE_URL` ending in `_test` and a nonzero Redis DB in `TEST_REDIS_URL`.
+
+Repository-wide gates: `pnpm lint`, `pnpm typecheck`, and `pnpm test`. Before database changes, add an Alembic migration. See [contributing](docs/contributing.md), [security](docs/security.md), [architecture decisions](planning/architecture-decisions.md), [MCP development guidance](docs/development/mcp-servers.md), and [milestone index](planning/README.md).

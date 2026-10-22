@@ -15,6 +15,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
 from harnessa.api.model_routes import router as model_router
+from harnessa.api.retrieval_routes import router as retrieval_router
 from harnessa.api.routes import router
 from harnessa.api.specification_routes import router as specification_router
 from harnessa.api.task_routes import router as task_router
@@ -34,6 +35,11 @@ from harnessa.contracts import (
     EvidenceTimestampValue,
     EvidenceUuidValue,
     Identity,
+    MCPGrantCreate,
+    MCPGrantRead,
+    MCPServerStatusRead,
+    MCPToolInvokeRequest,
+    MCPToolInvokeResponse,
     ModelAliasRead,
     ModelBudgetPolicyRead,
     ModelDeploymentRead,
@@ -48,8 +54,14 @@ from harnessa.contracts import (
     ModelUsageRead,
     RecoveryRequest,
     RepositoryCitation,
+    RepositoryIndexSyncRequest,
+    RepositoryIndexSyncResponse,
     RepositorySearchRequest,
     RepositorySearchResponse,
+    RetrievalContextManifestRead,
+    RetrievalManifestItemRead,
+    RetrievalSourceStatusRead,
+    RetrievalStatusRead,
     RunAnswerRequest,
     RunCancelRequest,
     RunCheckpointReference,
@@ -151,6 +163,17 @@ CONTRACT_MODELS = (
     RepositoryCitation,
     RepositorySearchRequest,
     RepositorySearchResponse,
+    RetrievalContextManifestRead,
+    RetrievalManifestItemRead,
+    RetrievalSourceStatusRead,
+    RetrievalStatusRead,
+    MCPServerStatusRead,
+    MCPGrantCreate,
+    MCPGrantRead,
+    MCPToolInvokeRequest,
+    MCPToolInvokeResponse,
+    RepositoryIndexSyncRequest,
+    RepositoryIndexSyncResponse,
     SpecificationInterviewCreate,
     SpecificationInterviewRead,
     SpecificationQuestionRead,
@@ -295,6 +318,7 @@ app.include_router(router)
 app.include_router(task_router)
 app.include_router(model_router)
 app.include_router(specification_router)
+app.include_router(retrieval_router)
 
 
 @app.get("/health/live", tags=["health"])

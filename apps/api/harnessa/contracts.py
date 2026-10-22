@@ -863,8 +863,116 @@ class RepositoryCitation(BaseModel):
     snippet: str = Field(max_length=800)
     matched_terms: list[str]
     untrusted_source_content: bool = True
+    content_hash: str = Field(default="", min_length=0, max_length=64)
+
+
+class RetrievalManifestItemRead(BaseModel):
+    source_id: str
+    source_uri: str
+    revision: str
+    path: str
+    line: int = Field(ge=1)
+    content_hash: str = Field(min_length=64, max_length=64)
+    rank: int = Field(ge=1)
+    score: int = Field(ge=0)
+    stale: bool
+    untrusted_source_content: bool = True
+
+
+class RetrievalContextManifestRead(BaseModel):
+    schema_version: int = Field(ge=1)
+    query_hash: str = Field(min_length=64, max_length=64)
+    policy_revision: str
+    organization_id: UUID
+    project_id: UUID
+    repository_id: UUID
+    sources_considered: list[str]
+    selected: list[RetrievalManifestItemRead]
+    omitted: list[str]
+    max_context_bytes: int = Field(ge=1)
+    context_bytes: int = Field(ge=0)
+
+
+class RetrievalSourceStatusRead(BaseModel):
+    repository_id: UUID
+    source_uri: str
+    indexed_revision: str | None = None
+    freshness: str
+    coverage: float = Field(ge=0, le=1)
+    last_sync_at: datetime | None = None
+    failed_syncs: int = Field(ge=0)
+    permission_scope: str
+    omitted_reasons: list[str]
+
+
+class MCPServerStatusRead(BaseModel):
+    server_id: str
+    configured: bool
+    granted: bool
+    protocol_version: str | None = None
+    available_tools: list[str]
+    omitted_reason: str | None = None
+
+
+class MCPGrantCreate(BaseModel):
+    server_id: str = Field(min_length=1, max_length=120, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+    allowed_tools: list[str] = Field(min_length=1, max_length=64)
+    read_only_tools: list[str] = Field(min_length=1, max_length=64)
+    protocol_version: str = Field(min_length=1, max_length=40)
+    secret_reference: str | None = Field(default=None, max_length=240)
+
+
+class MCPGrantRead(BaseModel):
+    id: UUID
+    server_id: str
+    allowed_tools: list[str]
+    read_only_tools: list[str]
+    protocol_version: str
+    has_secret_reference: bool
+    enabled: bool
+    revoked_at: datetime | None
+
+
+class MCPToolInvokeRequest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class MCPToolInvokeResponse(BaseModel):
+    server_id: str
+    tool_name: str
+    protocol_version: str
+    result: str = Field(max_length=64_000)
+    result_hash: str = Field(min_length=64, max_length=64)
+    untrusted_source_content: bool = True
+
+
+class RetrievalStatusRead(BaseModel):
+    project_id: UUID
+    lexical_available: bool
+    vector_available: bool
+    vector_namespace: str
+    vector_omitted_reason: str | None = None
+    sources: list[RetrievalSourceStatusRead]
+    mcp_servers: list[MCPServerStatusRead]
+    max_context_bytes: int
+    max_tool_output_bytes: int
+
+
+class RepositoryIndexSyncRequest(BaseModel):
+    dry_run: bool = True
+
+
+class RepositoryIndexSyncResponse(BaseModel):
+    dry_run: bool
+    revision: str
+    considered: int = Field(ge=0)
+    source_count: int = Field(ge=0)
+    chunk_count: int = Field(ge=0)
+    omitted: dict[str, int]
+    limits: dict[str, int] | None = None
 
 
 class RepositorySearchResponse(BaseModel):
     revision: str
     results: list[RepositoryCitation]
+    context_manifest: RetrievalContextManifestRead | None = None

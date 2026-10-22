@@ -6,6 +6,7 @@
     "node": ">=24.0.0 <25 || >=26.0.0 <27"
   },
   "scripts": {
+    "harnessa": "node scripts/harnessa.mjs",
     "build:design-system": "pnpm --filter @harnessa/ui-react build && pnpm --filter @harnessa/ui-svelte build",
     "typecheck:design-system": "pnpm --filter @harnessa/ui-react typecheck && pnpm --filter @harnessa/ui-svelte typecheck",
     "build:marketing": "pnpm --filter @harnessa/ui-svelte build && pnpm --filter @harnessa/marketing build",

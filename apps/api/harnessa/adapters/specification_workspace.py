@@ -56,6 +56,13 @@ class OpenSpecValidation:
     result: dict[str, object]
 
 
+@dataclass(frozen=True)
+class RepositorySourceFile:
+    path: str
+    content: str
+    content_hash: str
+
+
 class SpecificationWorkspaceManager:
     """Create task-scoped local branches with no remote and an exact base SHA."""
 
@@ -163,6 +170,17 @@ class SpecificationWorkspaceManager:
     ) -> RepositorySearchResult:
         return await asyncio.to_thread(
             self._search, repository_target_id, default_branch, query, limit
+        )
+
+    async def snapshot(
+        self, repository: Repository, approved_skill_paths: tuple[str, ...] = ()
+    ) -> tuple[str, tuple[RepositorySourceFile, ...], dict[str, int]]:
+        """Read the bounded current default-branch tree for metadata-only indexing."""
+        return await asyncio.to_thread(
+            self._snapshot,
+            repository.target_id,
+            repository.default_branch,
+            approved_skill_paths,
         )
 
     async def remove(self, workspace: SpecificationWorkspace) -> None:
@@ -545,11 +563,87 @@ class SpecificationWorkspaceManager:
             revision, tuple(citation for _, citation in ranked[:limit])
         )
 
+    def _snapshot(
+        self, target_id: str, default_branch: str, approved_skill_paths: tuple[str, ...]
+    ) -> tuple[str, tuple[RepositorySourceFile, ...], dict[str, int]]:
+        source = self._source_path(target_id)
+        revision = self._current_base(source, default_branch)
+        tree = self._git(source, "ls-tree", "-r", "-z", revision)
+        blobs: list[tuple[str, str]] = []
+        eligible_count = 0
+        for entry in tree.split("\0"):
+            if not entry or "\t" not in entry:
+                continue
+            metadata, relative = entry.split("\t", 1)
+            fields = metadata.split()
+            if (
+                len(fields) == 3
+                and fields[1] == "blob"
+                and fields[0] in {"100644", "100755"}
+                and self._searchable_path(relative, approved_skill_paths)
+            ):
+                eligible_count += 1
+                if len(blobs) < _SEARCH_FILE_LIMIT:
+                    blobs.append((fields[2], relative))
+        omitted: dict[str, int] = {}
+        if eligible_count > _SEARCH_FILE_LIMIT:
+            omitted["file_limit"] = eligible_count - _SEARCH_FILE_LIMIT
+        checked = cast(
+            list[str],
+            self._git_batch(source, "cat-file", "--batch-check", objects=[oid for oid, _ in blobs]),
+        )
+        bounded: list[tuple[str, str]] = []
+        total_bytes = 0
+        for index, ((oid, relative), metadata) in enumerate(zip(blobs, checked, strict=True)):
+            fields = metadata.split()
+            if len(fields) < 3 or fields[1] != "blob":
+                continue
+            try:
+                size = int(fields[2])
+            except ValueError:
+                omitted["invalid_file_size"] = omitted.get("invalid_file_size", 0) + 1
+                continue
+            if size < 0:
+                omitted["invalid_file_size"] = omitted.get("invalid_file_size", 0) + 1
+                continue
+            if size > _SEARCH_FILE_BYTES_LIMIT:
+                omitted["file_bytes"] = omitted.get("file_bytes", 0) + 1
+                continue
+            if total_bytes + size > _SEARCH_TOTAL_BYTES_LIMIT:
+                omitted["total_bytes"] = omitted.get("total_bytes", 0) + len(blobs) - index
+                break
+            total_bytes += size
+            bounded.append((oid, relative))
+        contents = cast(
+            list[bytes],
+            self._git_batch(
+                source, "cat-file", "--batch", objects=[oid for oid, _ in bounded], binary=True
+            ),
+        )
+        files = tuple(
+            RepositorySourceFile(
+                path=relative,
+                content=raw.decode("utf-8", errors="replace"),
+                content_hash=hashlib.sha256(raw).hexdigest(),
+            )
+            for (_, relative), raw in zip(bounded, contents, strict=True)
+        )
+        return revision, files, omitted
+
     @staticmethod
-    def _searchable_path(relative: str) -> bool:
+    def _searchable_path(relative: str, approved_skill_paths: tuple[str, ...] = ()) -> bool:
         path = Path(relative)
-        if set(path.parts) & _SEARCH_EXCLUDED_PARTS or path.name.startswith("."):
+        approved_skill = relative in approved_skill_paths
+        if set(path.parts) & _SEARCH_EXCLUDED_PARTS:
             return False
+        if path.name.startswith(".") and not approved_skill:
+            return False
+        if approved_skill and not (
+            relative.startswith(".agents/skills/") and path.name == "SKILL.md"
+        ):
+            return False
+        if relative == "skills-lock.json":
+            return True
         if path.suffix.casefold() not in _SEARCH_EXTENSIONS:
             return False
         return relative.startswith(

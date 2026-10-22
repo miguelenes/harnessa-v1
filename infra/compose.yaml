@@ -56,6 +56,9 @@ services:
       MODEL_INTERACTIVE_CONCURRENCY: ${MODEL_INTERACTIVE_CONCURRENCY:-4}
       MODEL_INTERACTIVE_RESERVE: ${MODEL_INTERACTIVE_RESERVE:-2}
       MODEL_PROBE_OVERFLOW_LIMIT: ${MODEL_PROBE_OVERFLOW_LIMIT:-0}
+      MCP_SERVERS_JSON: "${MCP_SERVERS_JSON:-{}}"
+      MCP_READ_ONLY_TOOLS_JSON: "${MCP_READ_ONLY_TOOLS_JSON:-{}}"
+      RETRIEVAL_APPROVED_SKILL_PATHS_JSON: "${RETRIEVAL_APPROVED_SKILL_PATHS_JSON:-{}}"
     networks: [app_internal]
     command: ["sh", "-c", "cd apps/api && uv run --no-sync alembic upgrade head && uv run --no-sync uvicorn harnessa.main:app --host 0.0.0.0 --port 8000"]
     ports:
@@ -140,8 +143,30 @@ services:
       timeout: 3s
       retries: 30
     networks: [app_internal, provider_egress]
+  qdrant:
+    profiles: [retrieval]
+    image: docker.io/qdrant/qdrant:v1.19.2@sha256:390ca16351185f9913c23d0c95ded0cdf2ce17e525dd7fbe58d3339c9c80e633
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    volumes:
+      - qdrantdata:/qdrant/storage
+    networks: [app_internal]
+    ports:
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/6333; printf "GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; IFS= read -r response <&3; [[ "$$response" == *"200 OK"* ]]'
+      interval: 5s
+      timeout: 3s
+      retries: 20
 volumes:
   pgdata: {}
+  qdrantdata: {}
 networks:
   app_internal:
     internal: true

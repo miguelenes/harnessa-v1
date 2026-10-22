@@ -707,6 +707,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/retrieval/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Retrieval Status */
+        get: operations["retrieval_status_projects__project_id__retrieval_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/repositories/{repository_id}/retrieval/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sync Repository */
+        post: operations["sync_repository_projects__project_id__repositories__repository_id__retrieval_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/mcp/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Mcp Grant */
+        post: operations["create_mcp_grant_projects__project_id__mcp_grants_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/mcp/grants/{grant_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Mcp Grant */
+        delete: operations["revoke_mcp_grant_projects__project_id__mcp_grants__grant_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/mcp/servers/{server_id}/tools/{tool_name}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Invoke Mcp */
+        post: operations["invoke_mcp_projects__project_id__mcp_servers__server_id__tools__tool_name__invoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -966,6 +1051,90 @@ export interface components {
              */
             organization_id: string;
             role: components["schemas"]["Role"];
+        };
+        /** MCPGrantCreate */
+        MCPGrantCreate: {
+            /** Server Id */
+            server_id: string;
+            /** Allowed Tools */
+            allowed_tools: string[];
+            /** Read Only Tools */
+            read_only_tools: string[];
+            /** Protocol Version */
+            protocol_version: string;
+            /**
+             * Secret Reference
+             * @default null
+             */
+            secret_reference: string | null;
+        };
+        /** MCPGrantRead */
+        MCPGrantRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Server Id */
+            server_id: string;
+            /** Allowed Tools */
+            allowed_tools: string[];
+            /** Read Only Tools */
+            read_only_tools: string[];
+            /** Protocol Version */
+            protocol_version: string;
+            /** Has Secret Reference */
+            has_secret_reference: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Revoked At */
+            revoked_at: string | null;
+        };
+        /** MCPServerStatusRead */
+        MCPServerStatusRead: {
+            /** Server Id */
+            server_id: string;
+            /** Configured */
+            configured: boolean;
+            /** Granted */
+            granted: boolean;
+            /**
+             * Protocol Version
+             * @default null
+             */
+            protocol_version: string | null;
+            /** Available Tools */
+            available_tools: string[];
+            /**
+             * Omitted Reason
+             * @default null
+             */
+            omitted_reason: string | null;
+        };
+        /** MCPToolInvokeRequest */
+        MCPToolInvokeRequest: {
+            /** Arguments */
+            arguments?: {
+                [key: string]: unknown;
+            };
+        };
+        /** MCPToolInvokeResponse */
+        MCPToolInvokeResponse: {
+            /** Server Id */
+            server_id: string;
+            /** Tool Name */
+            tool_name: string;
+            /** Protocol Version */
+            protocol_version: string;
+            /** Result */
+            result: string;
+            /** Result Hash */
+            result_hash: string;
+            /**
+             * Untrusted Source Content
+             * @default true
+             */
+            untrusted_source_content: boolean;
         };
         /** ModelAliasCreate */
         ModelAliasCreate: {
@@ -1611,6 +1780,11 @@ export interface components {
              * @default true
              */
             untrusted_source_content: boolean;
+            /**
+             * Content Hash
+             * @default
+             */
+            content_hash: string;
         };
         /** RepositoryCreate */
         RepositoryCreate: {
@@ -1623,6 +1797,38 @@ export interface components {
              * @default main
              */
             default_branch: string;
+        };
+        /** RepositoryIndexSyncRequest */
+        RepositoryIndexSyncRequest: {
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
+        };
+        /** RepositoryIndexSyncResponse */
+        RepositoryIndexSyncResponse: {
+            /** Dry Run */
+            dry_run: boolean;
+            /** Revision */
+            revision: string;
+            /** Considered */
+            considered: number;
+            /** Source Count */
+            source_count: number;
+            /** Chunk Count */
+            chunk_count: number;
+            /** Omitted */
+            omitted: {
+                [key: string]: number;
+            };
+            /**
+             * Limits
+             * @default null
+             */
+            limits: {
+                [key: string]: number;
+            } | null;
         };
         /** RepositoryRead */
         RepositoryRead: {
@@ -1662,6 +1868,125 @@ export interface components {
             revision: string;
             /** Results */
             results: components["schemas"]["RepositoryCitation"][];
+            /** @default null */
+            context_manifest: components["schemas"]["RetrievalContextManifestRead"] | null;
+        };
+        /** RetrievalContextManifestRead */
+        RetrievalContextManifestRead: {
+            /** Schema Version */
+            schema_version: number;
+            /** Query Hash */
+            query_hash: string;
+            /** Policy Revision */
+            policy_revision: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Repository Id
+             * Format: uuid
+             */
+            repository_id: string;
+            /** Sources Considered */
+            sources_considered: string[];
+            /** Selected */
+            selected: components["schemas"]["RetrievalManifestItemRead"][];
+            /** Omitted */
+            omitted: string[];
+            /** Max Context Bytes */
+            max_context_bytes: number;
+            /** Context Bytes */
+            context_bytes: number;
+        };
+        /** RetrievalManifestItemRead */
+        RetrievalManifestItemRead: {
+            /** Source Id */
+            source_id: string;
+            /** Source Uri */
+            source_uri: string;
+            /** Revision */
+            revision: string;
+            /** Path */
+            path: string;
+            /** Line */
+            line: number;
+            /** Content Hash */
+            content_hash: string;
+            /** Rank */
+            rank: number;
+            /** Score */
+            score: number;
+            /** Stale */
+            stale: boolean;
+            /**
+             * Untrusted Source Content
+             * @default true
+             */
+            untrusted_source_content: boolean;
+        };
+        /** RetrievalSourceStatusRead */
+        RetrievalSourceStatusRead: {
+            /**
+             * Repository Id
+             * Format: uuid
+             */
+            repository_id: string;
+            /** Source Uri */
+            source_uri: string;
+            /**
+             * Indexed Revision
+             * @default null
+             */
+            indexed_revision: string | null;
+            /** Freshness */
+            freshness: string;
+            /** Coverage */
+            coverage: number;
+            /**
+             * Last Sync At
+             * @default null
+             */
+            last_sync_at: string | null;
+            /** Failed Syncs */
+            failed_syncs: number;
+            /** Permission Scope */
+            permission_scope: string;
+            /** Omitted Reasons */
+            omitted_reasons: string[];
+        };
+        /** RetrievalStatusRead */
+        RetrievalStatusRead: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Lexical Available */
+            lexical_available: boolean;
+            /** Vector Available */
+            vector_available: boolean;
+            /** Vector Namespace */
+            vector_namespace: string;
+            /**
+             * Vector Omitted Reason
+             * @default null
+             */
+            vector_omitted_reason: string | null;
+            /** Sources */
+            sources: components["schemas"]["RetrievalSourceStatusRead"][];
+            /** Mcp Servers */
+            mcp_servers: components["schemas"]["MCPServerStatusRead"][];
+            /** Max Context Bytes */
+            max_context_bytes: number;
+            /** Max Tool Output Bytes */
+            max_tool_output_bytes: number;
         };
         /**
          * RetryClass
@@ -4071,6 +4396,175 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpecificationExplorerRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retrieval_status_projects__project_id__retrieval_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetrievalStatusRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_repository_projects__project_id__repositories__repository_id__retrieval_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                repository_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositoryIndexSyncRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryIndexSyncResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_mcp_grant_projects__project_id__mcp_grants_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPGrantCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPGrantRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_mcp_grant_projects__project_id__mcp_grants__grant_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                grant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    invoke_mcp_projects__project_id__mcp_servers__server_id__tools__tool_name__invoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                server_id: string;
+                tool_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPToolInvokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPToolInvokeResponse"];
                 };
             };
             /** @description Validation Error */

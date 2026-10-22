@@ -38,7 +38,12 @@ from harnessa.db.specification import (
     SpecificationReadinessEvaluation,
 )
 from harnessa.domain.lifecycle import assert_transition
-from harnessa.domain.retrieval import RepositorySearchResult
+from harnessa.domain.retrieval import (
+    RepositoryCitation,
+    RepositorySearchResult,
+    RetrievalContextManifest,
+    RetrievalManifestItem,
+)
 from harnessa.services.authorization import require_membership
 from harnessa.services.lifecycle import (
     create_task,
@@ -703,12 +708,80 @@ async def search_repository(
     )
     if repository is None:
         raise HTTPException(404, "Repository is not connected to this project")
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
     try:
-        return await _workspace_manager.search(
-            repository.target_id, repository.default_branch, query, limit
+        # Membership and repository ownership are re-read immediately before the
+        # adapter opens source content. Neither an index nor a result cache grants access.
+        await require_membership(db, actor, project_id)
+        authorized_repository = await db.scalar(
+            select(Repository).where(
+                Repository.id == repository_id,
+                Repository.project_id == project_id,
+            )
+        )
+        if authorized_repository is None:
+            raise HTTPException(404, "Repository is not connected to this project")
+        result = await _workspace_manager.search(
+            authorized_repository.target_id,
+            authorized_repository.default_branch,
+            query,
+            limit,
         )
     except (OSError, SpecificationWorkspaceError) as exc:
         raise HTTPException(503, str(exc)) from exc
+    max_context_bytes = 24_000
+    context_bytes = 0
+    selected: list[RepositoryCitation] = []
+    manifest_items: list[RetrievalManifestItem] = []
+    omitted: list[str] = []
+    for rank, citation in enumerate(result.citations, start=1):
+        snippet_hash = hashlib.sha256(citation.snippet.encode("utf-8")).hexdigest()
+        snippet_bytes = len(citation.snippet.encode("utf-8"))
+        if context_bytes + snippet_bytes > max_context_bytes:
+            omitted.append(f"{citation.path}:{citation.line}:context_budget")
+            continue
+        context_bytes += snippet_bytes
+        source_id = hashlib.sha256(
+            f"{project.organization_id}:{project_id}:{repository_id}:{citation.path}".encode()
+        ).hexdigest()
+        selected_citation = RepositoryCitation(
+            revision=citation.revision,
+            path=citation.path,
+            line=citation.line,
+            snippet=citation.snippet,
+            matched_terms=citation.matched_terms,
+            content_hash=snippet_hash,
+        )
+        selected.append(selected_citation)
+        manifest_items.append(
+            RetrievalManifestItem(
+                source_id=source_id,
+                source_uri=f"repo://{repository_id}/{citation.path}",
+                revision=citation.revision,
+                path=citation.path,
+                line=citation.line,
+                content_hash=snippet_hash,
+                rank=rank,
+                score=len(citation.matched_terms),
+                stale=False,
+            )
+        )
+    manifest = RetrievalContextManifest(
+        schema_version=1,
+        query_hash=hashlib.sha256(query.encode("utf-8")).hexdigest(),
+        policy_revision="repository-lexical-v1",
+        organization_id=str(project.organization_id),
+        project_id=str(project_id),
+        repository_id=str(repository_id),
+        sources_considered=(f"repo://{repository_id}@{result.revision}",),
+        selected=tuple(manifest_items),
+        omitted=tuple(omitted),
+        max_context_bytes=max_context_bytes,
+        context_bytes=context_bytes,
+    )
+    return RepositorySearchResult(result.revision, tuple(selected), manifest)
 
 
 async def list_explorer_entries(
