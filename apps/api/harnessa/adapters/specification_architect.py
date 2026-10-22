@@ -124,10 +124,18 @@ class SpecificationArchitect:
         if not isinstance(response, dict):
             raise SpecificationArchitectError("The primary model route returned no response object")
         choices = response.get("choices")
-        message = choices[0].get("message") if isinstance(choices, list) and choices else None
-        content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, str) or len(content.encode("utf-8")) > 512_000:
-            raise SpecificationArchitectError("The Architect response was missing or exceeded its output bound")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise SpecificationArchitectError("The Architect response contained no usable choice")
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise SpecificationArchitectError("The Architect response contained no assistant message")
+        content = message.get("content")
+        if content is None:
+            raise SpecificationArchitectError("The Architect response contained no text content")
+        if not isinstance(content, str):
+            raise SpecificationArchitectError("The Architect response content was not text")
+        if len(content.encode("utf-8")) > 512_000:
+            raise SpecificationArchitectError("The Architect response exceeded its 512000-byte output bound")
         try:
             payload = json.loads(content)
             draft = ArchitectDraft.model_validate(payload)

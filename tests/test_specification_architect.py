@@ -127,7 +127,7 @@ async def test_architect_rejects_response_over_output_limit(
         async def complete(self, *_: object, **__: object) -> dict[str, Any]:
             return {"response": {"choices": [{"message": {"content": "x" * 512_001}}]}}
 
-    with pytest.raises(SpecificationArchitectError, match="exceeded its output bound"):
+    with pytest.raises(SpecificationArchitectError, match="exceeded its 512000-byte output bound"):
         await SpecificationArchitect(Router()).generate(
             object(),  # type: ignore[arg-type]
             organization_id=uuid4(),
@@ -139,3 +139,37 @@ async def test_architect_rejects_response_over_output_limit(
             change_id="bounded-task",
             citations=[],
         )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("message", "expected_error"),
+    [
+        ({}, "no text content"),
+        ({"content": [{"type": "text", "text": "not accepted as a string"}]}, "was not text"),
+    ],
+)
+async def test_architect_reports_bounded_content_shape_without_echoing_provider_data(
+    monkeypatch: pytest.MonkeyPatch,
+    message: dict[str, Any],
+    expected_error: str,
+) -> None:
+    monkeypatch.setattr(settings, "openspec_model_alias", "fixture-budgeted")
+
+    class Router:
+        async def complete(self, *_: object, **__: object) -> dict[str, Any]:
+            return {"response": {"choices": [{"message": message}]}}
+
+    with pytest.raises(SpecificationArchitectError, match=expected_error) as error:
+        await SpecificationArchitect(Router()).generate(
+            object(),  # type: ignore[arg-type]
+            organization_id=uuid4(),
+            project_id=uuid4(),
+            task_id=uuid4(),
+            interview_id=uuid4(),
+            revision=1,
+            topic="Bounded task",
+            change_id="bounded-task",
+            citations=[],
+        )
+    assert "not accepted as a string" not in str(error.value)
