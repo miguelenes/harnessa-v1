@@ -13,7 +13,6 @@ from acp.schema import (
     ToolCallLocation,
     ToolCallUpdate,
 )
-
 from harnessa.adapters.acp_session import (
     ACPAgentSession,
     ACPProtocolError,
@@ -187,7 +186,7 @@ async def test_crashed_process_and_protocol_path_traversal_are_rejected(tmp_path
     session = ACPAgentSession(
         process, max_frame_bytes=4096, max_updates=10, idle_timeout_seconds=0.2
     )
-    with pytest.raises(Exception):
+    with pytest.raises(ACPProtocolError):
         await session.initialize()
     await session.close()
     assert process.returncode == 23

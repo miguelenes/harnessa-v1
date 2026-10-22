@@ -11,18 +11,17 @@ from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
-from redis.asyncio import Redis
-
 from harnessa.adapters.acp_execution import ACPExecutionAdapter
 from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.execution import ExecutionAdapter, UnconfiguredExecutionAdapter
 from harnessa.adapters.sandbox_policy import SandboxLimits
 from harnessa.config import settings
+from harnessa.db.session import SessionLocal
 from harnessa.services.effects import ReconcileOutcome, reconcile_effect_intents
+from harnessa.services.model_gateway import reconcile_stale_model_reservations
 from harnessa.services.scheduler import Scheduler
 from harnessa.services.streams import OutboxPublisher, StreamConsumer, prune_retained_events
-from harnessa.db.session import SessionLocal
-from harnessa.services.model_gateway import reconcile_stale_model_reservations
+from redis.asyncio import Redis
 
 logger = logging.getLogger("harnessa.worker")
 

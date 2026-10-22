@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
 
-
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 TEST_REDIS_URL = os.getenv("TEST_REDIS_URL")
+if not os.getenv("OPENSPEC_NODE_PATH"):
+    node_launcher = shutil.which("node")
+    if node_launcher:
+        node_path = subprocess.run(
+            [node_launcher, "-p", "process.execPath"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        os.environ["OPENSPEC_NODE_PATH"] = node_path
 if TEST_DATABASE_URL:
     database_name = TEST_DATABASE_URL.rsplit("/", 1)[-1].split("?", 1)[0]
     if not database_name.endswith("_test"):

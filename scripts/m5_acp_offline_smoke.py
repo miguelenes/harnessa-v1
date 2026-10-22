@@ -17,8 +17,8 @@ from harnessa.adapters.sandbox_policy import SandboxLimits
 from harnessa.adapters.workspaces import WorkspaceManager
 
 IMAGE = (
-    "ghcr.io/anomalyco/opencode@sha256:"
-    "85986f556e985e377bd24cd68a5ccfbc647bb49e591194edda8a0e4542303319"
+    "ghcr.io/anomalyco/opencode:1.19.4@sha256:"
+    "bf8e2b5f785166a12a26cbb34ef1a2d35403368438efe036fd16c795a975c505"
 )
 
 

@@ -1,7 +1,7 @@
 from uuid import uuid4
 
-from pydantic import ValidationError
-
+import pytest
+from harnessa.adapters.protocols import RunOrchestrator
 from harnessa.contracts import (
     CoreEvidenceEnvelope,
     ErrorResponse,
@@ -20,8 +20,7 @@ from harnessa.domain.lifecycle import (
     TaskVersionConflict,
     assert_transition,
 )
-from harnessa.adapters.protocols import RunOrchestrator
-import pytest
+from pydantic import ValidationError
 
 
 def test_canonical_lifecycle_and_run_status_are_independent():

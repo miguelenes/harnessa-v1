@@ -26,7 +26,7 @@ _TRANSITIONS: dict[TaskStage, frozenset[TaskStage]] = {
         {TaskStage.READY, TaskStage.CLARIFYING, TaskStage.REJECTED, TaskStage.CANCELLED}
     ),
     TaskStage.READY: frozenset(
-        {TaskStage.IN_PROGRESS, TaskStage.CLARIFYING, TaskStage.RETRY_EXHAUSTED,
+        {TaskStage.SPECIFYING, TaskStage.IN_PROGRESS, TaskStage.CLARIFYING, TaskStage.RETRY_EXHAUSTED,
          TaskStage.REJECTED, TaskStage.CANCELLED}
     ),
     TaskStage.IN_PROGRESS: frozenset(
@@ -91,6 +91,11 @@ def assert_transition(
         raise TransitionGuardFailed("Branch transitions must preserve a return stage")
     if target in {TaskStage.CLARIFYING, TaskStage.HARNESS_PROBE} and return_stage != current:
         raise TransitionGuardFailed("A branch must return to the stage it interrupted")
-    if current in {TaskStage.CLARIFYING, TaskStage.HARNESS_PROBE}:
-        if target not in {TaskStage.CANCELLED, TaskStage.REJECTED} and target != return_stage:
-            raise TransitionGuardFailed("A branch must resume at its recorded return stage")
+    if (
+        current in {TaskStage.CLARIFYING, TaskStage.HARNESS_PROBE}
+        and target not in {TaskStage.CANCELLED, TaskStage.REJECTED}
+        and target != return_stage
+        and not (recovery and target == TaskStage.READY)
+        and not (current == TaskStage.CLARIFYING and target == TaskStage.SPECIFYING)
+    ):
+        raise TransitionGuardFailed("A branch must resume at its recorded return stage")

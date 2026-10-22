@@ -6,8 +6,8 @@ import asyncio
 import hmac
 import json
 import logging
-from contextlib import AbstractAsyncContextManager
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,7 +17,13 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from harnessa.adapters.protocols import ModelRouter
-from harnessa.contracts import ModelMessage, ModelPoolKind, ModelProtocol, ModelRouteRequest, RouteRequirements
+from harnessa.contracts import (
+    ModelMessage,
+    ModelPoolKind,
+    ModelProtocol,
+    ModelRouteRequest,
+    RouteRequirements,
+)
 from harnessa.services.model_gateway import ModelGatewayError
 
 logger = logging.getLogger("harnessa.acp_model_broker")
@@ -227,7 +233,7 @@ async def _read_request(
     raw = await asyncio.wait_for(reader.readexactly(content_length), timeout=10)
     value = json.loads(raw)
     if not isinstance(value, dict):
-        raise ValueError("Request body must be an object")
+        raise TypeError("Request body must be an object")
     return request_line[0].upper(), request_line[1], headers, value
 
 
@@ -242,7 +248,7 @@ def _route_request(
         raise ValueError("Request tools exceed the supported limit")
     requested_output = body.get("max_tokens", body.get("max_completion_tokens"))
     if isinstance(requested_output, bool) or not isinstance(requested_output, int):
-        raise ValueError("A bounded max_tokens value is required")
+        raise TypeError("A bounded max_tokens value is required")
     if not 1 <= requested_output <= max_output_tokens:
         raise ValueError("Requested output exceeds the run-scoped limit")
     serialized = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
@@ -254,7 +260,7 @@ def _route_request(
     parsed_messages: list[ModelMessage] = []
     for message in messages_raw:
         if not isinstance(message, dict):
-            raise ValueError("Each message must be an object")
+            raise TypeError("Each message must be an object")
         parsed_messages.append(ModelMessage.model_validate(message))
     return ModelRouteRequest(
         task_id=scope.task_id,

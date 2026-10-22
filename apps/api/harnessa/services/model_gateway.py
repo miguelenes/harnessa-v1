@@ -6,18 +6,15 @@ import asyncio
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
-from email.utils import parsedate_to_datetime
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from harnessa.config import settings
 from harnessa.contracts import ModelProtocol, ModelRouteRequest, RouteRequirements
 from harnessa.db.model_gateway import (
@@ -27,18 +24,20 @@ from harnessa.db.model_gateway import (
     ModelBudgetPolicy,
     ModelDeployment,
     ModelPool,
-    PoolAlias,
     ModelRequestLedger,
     ModelReservation,
+    PoolAlias,
     ProviderAccount,
 )
 from harnessa.db.models import Project, Task
 from harnessa.db.orchestration import Run
 from harnessa.db.session import SessionLocal
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger("harnessa.model_gateway")
-_ZERO = Decimal("0")
-_MILLION = Decimal("1000000")
+_ZERO = Decimal(0)
+_MILLION = Decimal(1000000)
 _MIN_RESERVATION = Decimal("0.00000001")
 
 
@@ -166,7 +165,7 @@ async def route_candidates(
         raise ModelGatewayError(
             "no_authorized_compatible_route", 503, "All compatible provider accounts or deployments are disabled"
         )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     available = [
         item
         for item in enabled
@@ -208,7 +207,7 @@ def _scope_values(
 
 async def _extend_reservation_lease(db: AsyncSession, reservation_id: UUID) -> None:
     """Renew a pending reservation immediately before a bounded provider attempt."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = await db.execute(
         update(ModelReservation)
         .where(
@@ -236,7 +235,7 @@ async def _reservation_heartbeat(request_id: UUID, max_wall_seconds: int) -> Non
     deadline = asyncio.get_running_loop().time() + max_wall_seconds
     while asyncio.get_running_loop().time() < deadline:
         await asyncio.sleep(interval)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with SessionLocal() as db:
             result = await db.execute(
                 update(ModelReservation)
@@ -321,7 +320,7 @@ async def _reserve(
         task = await db.get(Task, task_id)
         if task is None or task.project_id != project_id:
             raise ModelGatewayError("task_not_found", 404, "Task is not in this project")
-        if (datetime.now(timezone.utc) - task.created_at).total_seconds() > policy.max_wall_seconds:
+        if (datetime.now(UTC) - task.created_at).total_seconds() > policy.max_wall_seconds:
             raise ModelGatewayError("task_time_limit_exceeded", 409, "Task has reached its wall-time limit")
     if run_id is not None:
         run = await db.get(Run, run_id)
@@ -330,7 +329,7 @@ async def _reserve(
         if run.status != "RUNNING":
             raise ModelGatewayError("run_not_active", 409, "Model calls require an active run")
         run_started = run.started_at or run.created_at
-        if (datetime.now(timezone.utc) - run_started).total_seconds() > policy.max_wall_seconds:
+        if (datetime.now(UTC) - run_started).total_seconds() > policy.max_wall_seconds:
             raise ModelGatewayError("run_time_limit_exceeded", 409, "Run has reached its wall-time limit")
 
     idempotency_hash = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
@@ -468,7 +467,7 @@ async def _reserve(
         per_attempt_tokens=per_attempt_tokens,
         max_attempts=max_attempts,
         workload=workload,
-        lease_expires_at=datetime.now(timezone.utc)
+        lease_expires_at=datetime.now(UTC)
         + timedelta(seconds=_reservation_lease_seconds()),
     )
     db.add(reservation)
@@ -571,7 +570,7 @@ async def _record_failure(
     ).scalars().one()
     deployment.failure_count += 1
     deployment.last_failure_code = error_code
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cooldown = retry_after or (
         settings.model_cooldown_seconds
         if deployment.failure_count >= settings.model_circuit_breaker_failures or status_code == 429
@@ -638,7 +637,7 @@ async def _switch_deployment(
         if target.active_interactive + target.active_probe >= target.max_concurrency:
             await db.rollback()
             return False
-        if target.cooldown_until is not None and target.cooldown_until > datetime.now(timezone.utc):
+        if target.cooldown_until is not None and target.cooldown_until > datetime.now(UTC):
             await db.rollback()
             return False
         if reservation.workload == "interactive":
@@ -663,8 +662,8 @@ def _retry_after(value: str | None) -> float | None:
         except (TypeError, ValueError, OverflowError):
             return None
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
+            parsed = parsed.replace(tzinfo=UTC)
+        return max(0.0, (parsed - datetime.now(UTC)).total_seconds())
 
 
 def _error_code(status: int | None, exc: BaseException | None = None) -> str:
@@ -1062,7 +1061,7 @@ class LiteLLMModelRouter:
                     try:
                         billed_header = response.headers.get("x-litellm-response-cost")
                         billed = Decimal(billed_header) if billed_header is not None else None
-                    except Exception:
+                    except (InvalidOperation, TypeError):
                         billed = None
                     estimated = _cost_from_usage(candidate, input_tokens, output_tokens)
                     if billed is None and estimated is None:
@@ -1215,15 +1214,14 @@ class LiteLLMModelRouter:
         for candidate_index, candidate in enumerate(context.candidates):
             if attempts >= context.max_attempts:
                 break
-            if candidate_index > 0:
-                if not await _switch_deployment(db, context, candidate):
-                    decisions.append(f"fallback route skipped for {candidate.deployment.name}: cooldown or capacity")
-                    await _append_ledger(
-                        db, context, candidate, event_type="fallback_selected", attempt=attempts,
-                        route_decision=decisions[-1], error_code="fallback_route_unavailable",
-                        details={"route_skipped": True},
-                    )
-                    continue
+            if candidate_index > 0 and not await _switch_deployment(db, context, candidate):
+                decisions.append(f"fallback route skipped for {candidate.deployment.name}: cooldown or capacity")
+                await _append_ledger(
+                    db, context, candidate, event_type="fallback_selected", attempt=attempts,
+                    route_decision=decisions[-1], error_code="fallback_route_unavailable",
+                    details={"route_skipped": True},
+                )
+                continue
             route_local_attempts = 0
             while attempts < context.max_attempts and route_local_attempts < 2:
                 route_local_attempts += 1
@@ -1374,7 +1372,7 @@ class LiteLLMModelRouter:
                 billed_header = response.headers.get("x-litellm-response-cost")
                 try:
                     billed = Decimal(billed_header) if billed_header is not None else _ZERO
-                except Exception:
+                except (InvalidOperation, TypeError):
                     billed = _ZERO
                 estimated = _cost_from_usage(winner, input_tokens, output_tokens) if usage_seen else None
                 unknown = not usage_seen
@@ -1422,7 +1420,7 @@ class LiteLLMModelRouter:
                     )
                 )
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - an HTTP stream may fail after partial output.
                 stream_error = exc
                 error_code = "partial_stream_failure" if emitted else "provider_stream_failure"
                 await _append_ledger(
@@ -1478,7 +1476,7 @@ async def reconcile_stale_model_reservations(
                 select(ModelReservation)
                 .where(
                     ModelReservation.status == "pending",
-                    ModelReservation.lease_expires_at <= datetime.now(timezone.utc),
+                    ModelReservation.lease_expires_at <= datetime.now(UTC),
                 )
                 .order_by(ModelReservation.lease_expires_at)
                 .limit(limit)

@@ -6,10 +6,9 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
 from harnessa.adapters.execution import RunInput, TaskInput
 from harnessa.adapters.podman_sandbox import PodmanSandboxBackend, SandboxIdentity
-from harnessa.adapters.sandbox_policy import SandboxPolicyError, SandboxLimits
+from harnessa.adapters.sandbox_policy import SandboxLimits, SandboxPolicyError
 from harnessa.adapters.workspaces import WorkspaceError, WorkspaceManager
 
 
@@ -118,7 +117,7 @@ def test_podman_command_exposes_only_workspace_with_no_engine_or_network_access(
     assert command.count("--volume") == 1
     assert not any("podman.sock" in item or "docker.sock" in item for item in command)
     assert not any(
-        item.startswith("OPENAI_API_KEY=") or item.startswith("ANTHROPIC_API_KEY=")
+        item.startswith(("OPENAI_API_KEY=", "ANTHROPIC_API_KEY="))
         for item in command
     )
     with pytest.raises(SandboxPolicyError, match="digest"):

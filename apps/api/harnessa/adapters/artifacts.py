@@ -8,7 +8,7 @@ import re
 import stat
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -54,7 +54,7 @@ class LocalArtifactStore:
         root = self.root / "sha256"
         if not root.exists():
             return 0
-        cutoff = datetime.now(timezone.utc).timestamp() - minimum_age_seconds
+        cutoff = datetime.now(UTC).timestamp() - minimum_age_seconds
         removed = 0
         for prefix in root.iterdir():
             if not prefix.is_dir() or prefix.is_symlink():

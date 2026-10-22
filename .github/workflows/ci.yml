@@ -1,0 +1,81 @@
+name: Local CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harnessa-local-ci
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Local CI
+    runs-on: [self-hosted, linux, x64, harnessa-local]
+    environment: harnessa-local-ci
+    timeout-minutes: 60
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:55432/harnessa_ci_test
+      TEST_REDIS_URL: redis://127.0.0.1:56379/1
+    steps:
+      - name: Reject untrusted fork code on the local runner
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "Fork pull requests require maintainer-controlled local acceptance before execution."
+          exit 1
+      - name: Check out the event revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.12.0"
+      - name: Verify pre-provisioned toolchain
+        run: |
+          python3 --version
+          uv --version
+          node --version
+          pnpm --version
+          podman --version
+          echo "OPENSPEC_NODE_PATH=$(node -p 'process.execPath')" >> "$GITHUB_ENV"
+      - name: Install locked dependencies from local caches
+        run: |
+          uv sync --frozen --offline
+          pnpm install --offline --frozen-lockfile --ignore-scripts
+      - name: Start bounded disposable PostgreSQL and Redis
+        run: |
+          podman run --pull=never --rm --detach --name harnessa-ci-${GITHUB_RUN_ID}-pg --cpus 2 --memory 1g --pids-limit 256 -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=harnessa_ci_test -p 127.0.0.1:55432:5432 docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+          podman run --pull=never --rm --detach --name harnessa-ci-${GITHUB_RUN_ID}-redis --cpus 1 --memory 256m --pids-limit 128 -p 127.0.0.1:56379:6379 docker.io/library/redis@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952 redis-server --save '' --appendonly no
+      - name: Wait for disposable services
+        run: |
+          for attempt in $(seq 1 30); do
+            if podman exec harnessa-ci-${GITHUB_RUN_ID}-pg pg_isready -U postgres -d harnessa_ci_test && podman exec harnessa-ci-${GITHUB_RUN_ID}-redis redis-cli -n 1 ping | grep -q PONG; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Lint and typecheck
+        run: |
+          pnpm lint
+          pnpm typecheck
+          uv run mypy --strict --follow-imports=silent apps/api/harnessa
+          pnpm typecheck:design-system
+      - name: Build active applications
+        run: |
+          pnpm build:web
+          pnpm build:sites
+      - name: Run unit, integration, and application tests with coverage
+        run: pnpm test
+      - name: Stop disposable services
+        if: always()
+        run: |
+          podman stop --time 5 harnessa-ci-${GITHUB_RUN_ID}-pg || true
+          podman stop --time 5 harnessa-ci-${GITHUB_RUN_ID}-redis || true

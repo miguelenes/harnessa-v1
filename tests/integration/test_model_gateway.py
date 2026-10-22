@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from decimal import Decimal
 import json
+from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import uuid4
 
 import httpx
 import pytest
-from pwdlib import PasswordHash
-from sqlalchemy import select, text
-
-from harnessa.contracts import ModelMessage, ModelPoolKind, ModelProtocol, ModelRouteRequest, RouteRequirements
+from harnessa.contracts import (
+    ModelMessage,
+    ModelPoolKind,
+    ModelProtocol,
+    ModelRouteRequest,
+    RouteRequirements,
+)
 from harnessa.db.model_gateway import (
     AliasDeployment,
     ModelAlias,
@@ -27,20 +30,26 @@ from harnessa.db.model_gateway import (
 from harnessa.db.models import Membership, Organization, Project, ProjectMembership, Task, User
 from harnessa.db.orchestration import Run
 from harnessa.db.session import SessionLocal
-from harnessa.services.model_gateway import LiteLLMModelRouter, ModelGatewayError, reconcile_stale_model_reservations
+from harnessa.services.model_gateway import (
+    LiteLLMModelRouter,
+    ModelGatewayError,
+    reconcile_stale_model_reservations,
+)
+from pwdlib import PasswordHash
+from sqlalchemy import select, text
 
 pytestmark = pytest.mark.integration
 
 
 async def gateway_fixture(
     *,
-    project_limit: Decimal = Decimal("10"),
-    task_limit: Decimal = Decimal("10"),
-    run_limit: Decimal = Decimal("10"),
+    project_limit: Decimal = Decimal(10),
+    task_limit: Decimal = Decimal(10),
+    run_limit: Decimal = Decimal(10),
     overflow: int = 0,
 ):
     suffix = uuid4().hex[:10]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with SessionLocal() as db:
         org = Organization(name=f"Model Org {suffix}")
         user = User(
@@ -119,8 +128,8 @@ async def gateway_fixture(
             proxy_model="gateway-primary",
             capabilities=capabilities,
             context_window=128_000,
-            input_cost_per_million=Decimal("1"),
-            output_cost_per_million=Decimal("2"),
+            input_cost_per_million=Decimal(1),
+            output_cost_per_million=Decimal(2),
             price_revision="fixture-1",
             max_concurrency=4,
             enabled=True,
@@ -133,8 +142,8 @@ async def gateway_fixture(
             proxy_model="gateway-fallback",
             capabilities=capabilities,
             context_window=128_000,
-            input_cost_per_million=Decimal("1"),
-            output_cost_per_million=Decimal("2"),
+            input_cost_per_million=Decimal(1),
+            output_cost_per_million=Decimal(2),
             price_revision="fixture-2",
             max_concurrency=4,
             enabled=True,
@@ -303,9 +312,9 @@ async def test_provider_timeouts_are_bounded_and_fall_back_explicitly():
 async def test_concurrent_reservations_cannot_exceed_project_task_or_run_limits(limited_scope: str):
     reserve_amount = Decimal("0.00009")  # 20 estimated tokens * $3 / million * 3 attempts
     data = await gateway_fixture(
-        project_limit=reserve_amount if limited_scope == "project" else Decimal("10"),
-        task_limit=reserve_amount if limited_scope == "task" else Decimal("10"),
-        run_limit=reserve_amount if limited_scope == "run" else Decimal("10"),
+        project_limit=reserve_amount if limited_scope == "project" else Decimal(10),
+        task_limit=reserve_amount if limited_scope == "task" else Decimal(10),
+        run_limit=reserve_amount if limited_scope == "run" else Decimal(10),
     )
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -466,7 +475,7 @@ async def test_stale_reservation_reconciliation_releases_capacity_and_charges_es
     client = httpx.AsyncClient(transport=httpx.MockTransport(provider), base_url="http://litellm")
     # Simulate a process crash after the reservation commit, before result settlement.
     async with SessionLocal() as db:
-        from harnessa.services.model_gateway import route_candidates, _reserve
+        from harnessa.services.model_gateway import _reserve, route_candidates
 
         request = model_request(data)
         pool, candidates = await route_candidates(
@@ -490,7 +499,7 @@ async def test_stale_reservation_reconciliation_releases_capacity_and_charges_es
     async with SessionLocal() as db:
         await db.execute(
             text("UPDATE model_reservations SET lease_expires_at = :expired WHERE id = :id"),
-            {"expired": datetime.now(timezone.utc).replace(year=2020), "id": context.reservation.id},
+            {"expired": datetime.now(UTC).replace(year=2020), "id": context.reservation.id},
         )
         await db.commit()
     reconciled = await reconcile_stale_model_reservations(SessionLocal)

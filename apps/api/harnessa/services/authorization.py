@@ -3,10 +3,9 @@
 from uuid import UUID
 
 from fastapi import HTTPException
+from harnessa.db.models import Membership, Project, ProjectMembership, User
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from harnessa.db.models import Membership, Project, ProjectMembership, User
 
 
 async def require_membership(

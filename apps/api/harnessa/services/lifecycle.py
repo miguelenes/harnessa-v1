@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from harnessa.config import settings
 from harnessa.contracts import RunStatus, TaskCommand, TaskStage
 from harnessa.db.models import Project, Task, User
@@ -23,6 +20,8 @@ from harnessa.domain.lifecycle import (
     assert_transition,
 )
 from harnessa.services.authorization import require_membership
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _digest(value: dict[str, Any]) -> str:
@@ -79,12 +78,32 @@ async def _record_event(
         project_sequence=project.event_sequence,
         actor_id=actor_id,
         payload=payload,
-        retention_until=datetime.now(timezone.utc)
+        retention_until=datetime.now(UTC)
         + timedelta(days=settings.event_retention_days),
     )
     db.add(event)
     db.add(OutboxMessage(event_id=event.id, attempts=0))
     return event
+
+
+async def record_domain_event(
+    db: AsyncSession,
+    *,
+    task: Task,
+    event_type: str,
+    actor_id: UUID | None,
+    payload: dict[str, Any],
+    run_id: UUID | None = None,
+) -> DomainEvent:
+    """Append a product-domain event and outbox row in the caller's transaction."""
+    return await _record_event(
+        db,
+        task=task,
+        event_type=event_type,
+        actor_id=actor_id,
+        payload=payload,
+        run_id=run_id,
+    )
 
 
 async def record_system_transition(
@@ -252,12 +271,14 @@ async def transition_task(
     return_stage: TaskStage | None,
     command_key: str,
     recovery: bool = False,
+    run_status: RunStatus | None = None,
 ) -> tuple[Task, bool]:
     if not command_key or len(command_key) > 200:
         raise HTTPException(400, "A valid Idempotency-Key is required")
     request = {"command": "transition", "task_id": str(task_id), "target": target.value,
                "expected_version": expected_version, "reason": reason,
-               "return_stage": return_stage.value if return_stage else None}
+               "return_stage": return_stage.value if return_stage else None,
+               "run_status": run_status.value if run_status else None}
     digest = _digest(request)
     try:
         await _lock_command_key(db, actor.id, command_key)
@@ -297,14 +318,20 @@ async def transition_task(
             raise TransitionGuardFailed("Verification requires a successful execution run")
         if target == TaskStage.DONE and current != TaskStage.LEARNING:
             raise TransitionGuardFailed("DONE can only follow the learning stage")
-        if current in {TaskStage.CLARIFYING, TaskStage.HARNESS_PROBE}:
-            if target not in {TaskStage.CANCELLED, TaskStage.REJECTED} and target != task.return_stage:
-                raise TransitionGuardFailed("Requested stage differs from the stored return stage")
+        if (
+            current in {TaskStage.CLARIFYING, TaskStage.HARNESS_PROBE}
+            and target not in {TaskStage.CANCELLED, TaskStage.REJECTED}
+            and target != task.return_stage
+        ):
+            raise TransitionGuardFailed("Requested stage differs from the stored return stage")
         if target in {TaskStage.CLARIFYING, TaskStage.HARNESS_PROBE}:
             task.return_stage = (effective_return_stage or current).value
         elif current in {TaskStage.CLARIFYING, TaskStage.HARNESS_PROBE}:
             task.return_stage = None
+        from_run_status = task.run_status
         task.stage = target.value
+        if run_status is not None:
+            task.run_status = run_status.value
         version_before = task.version
         task.version += 1
         db.add(
@@ -314,7 +341,7 @@ async def transition_task(
                 actor_id=actor.id,
                 from_stage=current.value,
                 to_stage=target.value,
-                from_run_status=task.run_status,
+                from_run_status=from_run_status,
                 to_run_status=task.run_status,
                 reason=reason,
                 command="transition",
@@ -330,7 +357,9 @@ async def transition_task(
             actor_id=actor.id,
             payload={"from_stage": current.value, "to_stage": target.value,
                      "reason": reason, "version": task.version,
-                     "return_stage": task.return_stage}
+                     "return_stage": task.return_stage,
+                     "from_run_status": from_run_status,
+                     "run_status": task.run_status}
         )
         await db.commit()
         return task, False
@@ -379,7 +408,7 @@ async def command_task(
             raise TaskVersionConflict(expected_version, task.version)
         before_status = task.run_status
         before_stage = task.stage
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         active_run = await db.scalar(
             select(Run).where(Run.task_id == task.id, Run.status == RunStatus.RUNNING.value)
             .order_by(Run.attempt.desc()).with_for_update()
