@@ -31,6 +31,20 @@ class RunStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
 
 
+class RetryClass(StrEnum):
+    TRANSIENT = "transient"
+    RATE_LIMITED = "rate_limited"
+    PERMANENT = "permanent"
+    OPERATOR = "operator"
+
+
+class TaskCommand(StrEnum):
+    PAUSE = "pause"
+    RESUME = "resume"
+    CANCEL = "cancel"
+    RETRY = "retry"
+
+
 class Role(StrEnum):
     ADMINISTRATOR = "administrator"
     OPERATOR = "operator"
@@ -87,6 +101,99 @@ class TaskState(BaseModel):
     blocked_reason: str | None = None
     return_stage: TaskStage | None = None
     version: int = Field(ge=1)
+
+
+class TaskCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=20000)
+    priority: int = Field(default=0, ge=-100, le=100)
+
+
+class TaskRead(TaskCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    project_id: UUID
+    stage: TaskStage
+    run_status: RunStatus
+    blocked_reason: str | None = None
+    return_stage: TaskStage | None = None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskTransitionRequest(BaseModel):
+    target_stage: TaskStage
+    reason: str = Field(min_length=1, max_length=1000)
+    return_stage: TaskStage | None = None
+
+
+class TaskCommandRequest(BaseModel):
+    command: TaskCommand
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class RecoveryRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class TaskTransitionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    task_id: UUID
+    actor_id: UUID | None
+    from_stage: TaskStage | None
+    to_stage: TaskStage
+    from_run_status: RunStatus | None
+    to_run_status: RunStatus | None
+    reason: str
+    command: str
+    version_before: int
+    version_after: int
+    created_at: datetime
+
+
+class DispatchRebuildResult(BaseModel):
+    rebuilt: int
+
+
+class RunRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    task_id: UUID
+    attempt: int
+    status: RunStatus
+    retry_class: RetryClass | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    fencing_token: int
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    checkpoint_id: UUID | None = None
+
+
+class EventReplayItem(BaseModel):
+    cursor: int
+    event: EventEnvelope
+
+
+class EventReplayPage(BaseModel):
+    items: list[EventReplayItem]
+    next_cursor: int | None
+    replay_limit: int
+
+
+class DeadLetterRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    task_id: UUID
+    run_id: UUID | None = None
+    event_id: UUID | None = None
+    kind: str
+    reason: str
+    payload: dict[str, Any]
+    status: str
+    created_at: datetime
 
 
 class SpecificationRevision(BaseModel):

@@ -2,6 +2,8 @@
 
 Dependency versions are exact in `uv.lock` and `pnpm-lock.yaml`. Container references are pinned by manifest-list digest in `infra/`.
 
+Milestone 2 adds no runtime dependency or image changes. Orchestration uses the already pinned async SQLAlchemy/Alembic, PostgreSQL 16, Redis Streams, and FastAPI contracts. The API and worker share one Python package; Redis is transport and PostgreSQL remains the state authority.
+
 | Component | Selected version | Basis |
 |---|---:|---|
 | Python | 3.12.12 | Supported runtime pinned in API image |

@@ -1,5 +1,7 @@
 from uuid import UUID
-from sqlalchemy import CheckConstraint, ForeignKey, String, Boolean, Integer, UniqueConstraint, JSON
+from datetime import datetime
+from typing import Any
+from sqlalchemy import CheckConstraint, ForeignKey, String, Boolean, Integer, UniqueConstraint, JSON, Text, DateTime, BigInteger, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from harnessa.db.base import Base, Scoped
 
@@ -12,6 +14,7 @@ class Organization(Scoped, Base):
 
 class User(Scoped, Base):
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("email", name="users_email_key"),)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -43,6 +46,9 @@ class Project(Scoped, Base):
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     slug: Mapped[str] = mapped_column(String(80), nullable=False)
+    event_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    max_concurrency: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    last_dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Repository(Scoped, Base):
@@ -57,6 +63,7 @@ class Repository(Scoped, Base):
 class Task(Scoped, Base):
     __tablename__ = "tasks"
     __table_args__ = (
+        Index("ix_tasks_dispatch", "stage", "run_status", "available_at", "priority"),
         CheckConstraint(
             "stage IN ('BACKLOG','SPECIFYING','READY','IN_PROGRESS','VERIFYING','HUMAN_REVIEW','LEARNING','DONE','CLARIFYING','HARNESS_PROBE','REJECTED','CANCELLED','RETRY_EXHAUSTED')",
             name="ck_tasks_stage",
@@ -75,11 +82,15 @@ class Task(Scoped, Base):
         ForeignKey("projects.id", ondelete="CASCADE"), index=True
     )
     title: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     stage: Mapped[str] = mapped_column(String(32), default="BACKLOG", nullable=False)
     run_status: Mapped[str] = mapped_column(String(32), default="QUEUED", nullable=False)
     blocked_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     return_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ProjectMembership(Scoped, Base):
@@ -103,4 +114,4 @@ class IdempotencyRecord(Scoped, Base):
     key: Mapped[str] = mapped_column(String(200), nullable=False)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     response_status: Mapped[int] = mapped_column(Integer, nullable=False)
-    response_body: Mapped[dict] = mapped_column(JSON, nullable=False)
+    response_body: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

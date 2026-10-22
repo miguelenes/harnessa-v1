@@ -1,6 +1,6 @@
 # Harnessa
 
-A self-hosted repository-change control plane. Milestone 1 establishes the modular monorepo, server-owned contracts, project-scoped identity, and explicit repository registration. Agent execution and later product views are not part of this milestone.
+A self-hosted repository-change control plane. Milestone 1 established the modular monorepo, server-owned contracts, project-scoped identity, and explicit repository registration. Milestone 2 adds durable task orchestration, audit history, outbox events, worker leases, and recovery APIs. No real agent/provider adapter or later product views are included yet.
 
 ## Start locally
 
@@ -21,7 +21,7 @@ Requirements: Podman with `podman compose` (or Docker Compose), network access f
    podman compose -f infra/compose.yaml up --build -d
    ```
 
-   The API automatically applies Alembic migrations before it starts. Check `http://localhost:${API_PORT}/health/live`, `http://localhost:${API_PORT}/health/ready`, and `http://localhost:${WEB_PORT}`.
+The API automatically applies Alembic migrations before it starts. The separate worker publishes durable events, reconciles effect intents, and recovers expired leases; it does not claim tasks until a real execution adapter is configured. Check `http://localhost:${API_PORT}/health/live`, `http://localhost:${API_PORT}/health/ready`, and `http://localhost:${WEB_PORT}`.
 
 3. Bootstrap the first administrator once. Use the configured token and a password of at least 12 characters:
 
@@ -52,6 +52,7 @@ pnpm install --frozen-lockfile
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm test:integration
 pnpm --filter @harnessa/web lint
 pnpm --filter @harnessa/web typecheck
 pnpm --filter @harnessa/web build
@@ -60,13 +61,23 @@ pnpm contracts:generate
 
 `pnpm contracts:generate` reads the running API OpenAPI document at `http://localhost:8010/openapi.json` by default. Set `HARNESSA_API_URL` to use another URL. Generated files live in `packages/contracts/src/generated.ts` and must not be hand-edited.
 
+The integration suite requires disposable real PostgreSQL and Redis services. Start Compose, create a database ending in `_test`, and run it against PostgreSQL plus Redis database 1:
+
+```sh
+podman compose -f infra/compose.yaml exec -T db createdb -U "$POSTGRES_USER" harnessa_test
+TEST_DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/harnessa_test" \
+TEST_REDIS_URL="redis://127.0.0.1:${REDIS_PORT}/1" pnpm test:integration
+```
+
+These integration tests truncate their disposable test database and flush Redis database 1 before and after each case. Never point them at a development or production database.
+
 ## Structure
 
 - `apps/web`: Next.js application shell, sign-in, project selection, and repository registration UI.
 - `apps/api`: FastAPI application, domain/services/adapters boundaries, async persistence, Alembic, and separately runnable worker entry point.
 - `packages/contracts`: TypeScript types generated from the API's OpenAPI schema.
 - `infra`: Compose and digest-pinned API/web images.
-- `tests`: server contract and API boundary checks.
+- `tests`: server contract, API boundary, and opt-in real-service orchestration checks.
 - `docs`: architecture, compatibility, and milestone record.
 
-Read [docs/architecture.md](docs/architecture.md), [docs/compatibility.md](docs/compatibility.md), and [docs/milestones/01.md](docs/milestones/01.md) for implementation boundaries and verified results.
+Read [docs/architecture.md](docs/architecture.md), [docs/compatibility.md](docs/compatibility.md), and the [milestone reports](docs/milestones/) for implementation boundaries and verified results.

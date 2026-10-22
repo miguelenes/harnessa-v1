@@ -27,6 +27,8 @@ def test_task_transition_guard_checks_version_and_lifecycle():
         TaskStage.SPECIFYING,
         expected_version=1,
         current_version=1,
+        reason="specification started",
+        return_stage=None,
     )
     with pytest.raises(TaskVersionConflict):
         assert_transition(
@@ -34,6 +36,8 @@ def test_task_transition_guard_checks_version_and_lifecycle():
             TaskStage.SPECIFYING,
             expected_version=1,
             current_version=2,
+            reason="stale",
+            return_stage=None,
         )
     with pytest.raises(InvalidTaskTransition):
         assert_transition(
@@ -41,4 +45,6 @@ def test_task_transition_guard_checks_version_and_lifecycle():
             TaskStage.IN_PROGRESS,
             expected_version=1,
             current_version=1,
+            reason="terminal",
+            return_stage=None,
         )

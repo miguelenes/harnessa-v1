@@ -11,12 +11,24 @@ from fastapi.exceptions import RequestValidationError
 from redis.asyncio import Redis
 from harnessa.config import settings
 from harnessa.api.routes import router
+from harnessa.api.task_routes import router as task_router
 from harnessa.contracts import (
     ArtifactMetadata,
     AuthorizationContext,
     ErrorResponse,
     EventEnvelope,
     Identity,
+    TaskCreate,
+    TaskRead,
+    TaskTransitionRequest,
+    TaskCommandRequest,
+    RunRead,
+    EventReplayPage,
+    EventReplayItem,
+    DeadLetterRead,
+    RecoveryRequest,
+    TaskTransitionRead,
+    DispatchRebuildResult,
     SpecificationRevision,
     TaskState,
 )
@@ -45,6 +57,17 @@ CONTRACT_MODELS = (
     Identity,
     AuthorizationContext,
     TaskState,
+    TaskCreate,
+    TaskRead,
+    TaskTransitionRequest,
+    TaskCommandRequest,
+    RunRead,
+    EventReplayPage,
+    EventReplayItem,
+    DeadLetterRead,
+    RecoveryRequest,
+    TaskTransitionRead,
+    DispatchRebuildResult,
     SpecificationRevision,
     ArtifactMetadata,
 )
@@ -128,12 +151,25 @@ async def http_error(request: Request, exc: HTTPException):
         409: "conflict",
         422: "validation_error",
     }
-    return JSONResponse(
-        ErrorResponse(
-            code=status_codes.get(exc.status_code, "http_error"),
-            message=str(exc.detail),
+    detail = exc.detail
+    if isinstance(detail, dict) and "code" in detail:
+        error = ErrorResponse(
+            code=str(detail["code"]),
+            message=str(detail.get("reason", detail.get("message", detail["code"]))),
             request_id=getattr(request.state, "request_id", None),
-        ).model_dump(),
+            details={
+                key: value for key, value in detail.items()
+                if key not in {"code", "reason", "message"}
+            },
+        )
+    else:
+        error = ErrorResponse(
+            code=status_codes.get(exc.status_code, "http_error"),
+            message=str(detail),
+            request_id=getattr(request.state, "request_id", None),
+        )
+    return JSONResponse(
+        error.model_dump(),
         status_code=exc.status_code,
         headers={**(exc.headers or {}), "X-Request-ID": getattr(request.state, "request_id", "")},
     )
@@ -159,6 +195,7 @@ async def validation_error(request: Request, exc: RequestValidationError):
 
 
 app.include_router(router)
+app.include_router(task_router)
 
 
 @app.get("/health/live", tags=["health"])

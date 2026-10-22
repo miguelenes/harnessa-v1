@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:3000"
     cookie_secure: bool = False
     repository_targets: str = ""
+    max_concurrent_runs: int = 4
+    run_lease_seconds: int = 30
+    run_heartbeat_seconds: int = 10
+    run_max_attempts: int = 3
+    run_max_wall_seconds: int = 1800
+    event_retention_days: int = 30
+    event_replay_limit: int = 500
+    redis_stream_maxlen: int = 10000
 
 
 settings = Settings()

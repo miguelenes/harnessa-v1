@@ -26,3 +26,7 @@ Milestones 1–9 are integrated. Identify and repair missing integration work wi
 - Every required scenario has evidence or is explicitly listed as an external release blocker. No unsupported integration is advertised as verified.
 
 Write `docs/acceptance-report.md`, operator/setup/recovery guides, the final compatibility matrix, and `docs/milestones/10.md`. Return what ships, exact verification results, remaining blockers, and user-run setup steps. Prepare a reviewable release; do not publish or deploy to an external environment without existing authorization.
+
+## Archive this planning step
+
+After every acceptance criterion above is met and `docs/milestones/10.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.

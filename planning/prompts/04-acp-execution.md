@@ -24,3 +24,7 @@ Task leases, cancellation, model budgets, and route configuration are functional
 - Lease expiry prevents stale artifact/state publication; cancellation terminates owned processes; cleanup preserves artifacts required for audit.
 
 Write sandbox policy, agent compatibility/setup instructions, and `docs/milestones/04.md`. Distinguish protocol fixture success, real agent execution, and provider-backed evidence.
+
+## Archive this planning step
+
+After every acceptance criterion above is met and `docs/milestones/04.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.

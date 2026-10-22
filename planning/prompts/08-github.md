@@ -25,3 +25,7 @@ Durable effect intents, scoped project grants, interviews, review bundles, revis
 - A disposable authorized repository completes issue → interview → code/spec PR → verified merge → archive → cleanup → DONE.
 
 Use replayable webhook fixtures and local API fakes in CI; record live evidence separately. If external setup is unavailable, ship exact setup/check instructions and mark live acceptance pending. Write `docs/milestones/08.md` including repository/installation scope without secrets.
+
+## Archive this planning step
+
+After every acceptance criterion above is met and `docs/milestones/08.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.

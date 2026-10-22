@@ -1,0 +1,660 @@
+"""PostgreSQL-backed scheduler, leases, retries, checkpoint recovery, and fencing."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import asyncio
+import random
+from typing import Any, cast
+from uuid import UUID
+
+from sqlalchemy import func, or_, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from harnessa.adapters.execution import (
+    ExecutionAdapter,
+    ExecutionFailure,
+    RunInput,
+    StaleLease,
+    TaskInput,
+)
+from harnessa.config import settings
+from harnessa.contracts import RetryClass, RunStatus, TaskStage
+from harnessa.db.models import Project, Task
+from harnessa.db.orchestration import (
+    DeadLetter,
+    Run,
+    RunCheckpoint,
+    TaskLease,
+    TaskTransition,
+)
+from harnessa.db.session import SessionLocal
+from harnessa.services.lifecycle import record_system_transition, _record_event
+
+
+@dataclass(frozen=True)
+class ClaimedRun:
+    task_id: UUID
+    project_id: UUID
+    run_id: UUID
+    owner_id: str
+    fencing_token: int
+    attempt: int
+    task: TaskInput
+    checkpoint: Mapping[str, Any] | None = None
+
+
+def retry_delay_seconds(
+    attempt: int,
+    retry_class: str,
+    *,
+    retry_after_seconds: float | None = None,
+    random_value: float | None = None,
+) -> float:
+    if retry_class == RetryClass.RATE_LIMITED.value and retry_after_seconds is not None:
+        return max(0.0, min(retry_after_seconds, 3600.0))
+    random_value = random.random() if random_value is None else random_value
+    base = min(300.0, 2.0 ** max(0, attempt - 1))
+    return max(0.0, base * (0.8 + 0.4 * random_value))
+
+
+class Scheduler:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
+        *,
+        global_limit: int | None = None,
+        lease_seconds: int | None = None,
+        heartbeat_seconds: int | None = None,
+        max_attempts: int | None = None,
+        max_wall_seconds: int | None = None,
+        rng: Callable[[], float] = random.random,
+    ) -> None:
+        self.sessions = session_factory
+        self.global_limit = global_limit or settings.max_concurrent_runs
+        self.lease_seconds = lease_seconds or settings.run_lease_seconds
+        self.heartbeat_seconds = heartbeat_seconds or settings.run_heartbeat_seconds
+        self.max_attempts = max_attempts or settings.run_max_attempts
+        self.max_wall_seconds = max_wall_seconds or settings.run_max_wall_seconds
+        self.rng = rng
+
+    async def claim(self, owner_id: str, adapter_name: str) -> ClaimedRun | None:
+        await self.recover_expired_leases()
+        now = datetime.now(timezone.utc)
+        async with self.sessions() as db:
+            try:
+                await db.execute(text("SELECT pg_advisory_xact_lock(710203041)"))
+                global_active = await db.scalar(
+                    select(func.count(TaskLease.id)).where(
+                        TaskLease.owner_id.is_not(None), TaskLease.expires_at > now
+                    )
+                ) or 0
+                if global_active >= self.global_limit:
+                    await db.rollback()
+                    return None
+                query = (
+                    select(Task, Project)
+                    .join(Project, Project.id == Task.project_id)
+                    .where(
+                        Task.stage == TaskStage.READY.value,
+                        Task.run_status == RunStatus.QUEUED.value,
+                        Task.cancel_requested_at.is_(None),
+                        or_(Task.available_at.is_(None), Task.available_at <= now),
+                    )
+                    .order_by(
+                        Project.last_dispatched_at.asc().nulls_first(),
+                        Task.priority.desc(),
+                        Task.created_at.asc(),
+                        Task.id,
+                    )
+                    .with_for_update(skip_locked=True, of=Task)
+                )
+                candidates = (await db.execute(query.limit(100))).all()
+                selected: tuple[Task, Project] | None = None
+                for task, project in candidates:
+                    project_active = await db.scalar(
+                        select(func.count(TaskLease.id))
+                        .join(Task, Task.id == TaskLease.task_id)
+                        .where(
+                            Task.project_id == project.id,
+                            TaskLease.owner_id.is_not(None),
+                            TaskLease.expires_at > now,
+                        )
+                    ) or 0
+                    lease = await db.scalar(
+                        select(TaskLease).where(TaskLease.task_id == task.id).with_for_update()
+                    )
+                    if project_active >= project.max_concurrency:
+                        continue
+                    if lease and lease.owner_id and lease.expires_at and lease.expires_at > now:
+                        continue
+                    selected = (task, project)
+                    break
+                if selected is None:
+                    await db.rollback()
+                    return None
+
+                task, project = selected
+                lease = await db.scalar(
+                    select(TaskLease).where(TaskLease.task_id == task.id).with_for_update()
+                )
+                token = (lease.fencing_token + 1) if lease else 1
+                if lease is None:
+                    lease = TaskLease(task_id=task.id, fencing_token=0)
+                    db.add(lease)
+                previous_runs = await db.execute(
+                    select(Run).where(Run.task_id == task.id).order_by(Run.attempt.desc())
+                )
+                previous = previous_runs.scalars().first()
+                attempt = (previous.attempt + 1) if previous else 1
+                if attempt > self.max_attempts:
+                    task.blocked_reason = "attempt_limit_exhausted"
+                    await record_system_transition(
+                        db, task=task, target=TaskStage.RETRY_EXHAUSTED,
+                        reason="Attempt limit exhausted before dispatch",
+                        event_type="task.retry_exhausted", run_status=RunStatus.FAILED,
+                        payload={"attempt": attempt, "limit": self.max_attempts},
+                    )
+                    db.add(
+                        DeadLetter(
+                            project_id=project.id,
+                            task_id=task.id,
+                            run_id=previous.id if previous else None,
+                            kind="attempt_limit_exhausted",
+                            reason="Run attempt limit reached before dispatch",
+                            payload={"attempt": attempt, "limit": self.max_attempts},
+                        )
+                    )
+                    await db.commit()
+                    return None
+
+                first_started = await db.scalar(
+                    select(func.min(Run.started_at)).where(Run.task_id == task.id)
+                )
+                if first_started and (now - first_started).total_seconds() >= self.max_wall_seconds:
+                    task.blocked_reason = "wall_time_limit_exhausted"
+                    await record_system_transition(
+                        db, task=task, target=TaskStage.RETRY_EXHAUSTED,
+                        reason="Wall time limit exhausted before dispatch",
+                        event_type="task.retry_exhausted", run_status=RunStatus.FAILED,
+                        payload={"limit_seconds": self.max_wall_seconds},
+                    )
+                    db.add(
+                        DeadLetter(
+                            project_id=project.id,
+                            task_id=task.id,
+                            run_id=previous.id if previous else None,
+                            kind="wall_time_limit_exhausted",
+                            reason="Run wall-time limit reached before dispatch",
+                            payload={"limit_seconds": self.max_wall_seconds},
+                        )
+                    )
+                    await db.commit()
+                    return None
+
+                checkpoint = None
+                if task.blocked_reason == "worker_lost_checkpoint":
+                    row = await db.scalar(
+                        select(RunCheckpoint)
+                        .where(RunCheckpoint.task_id == task.id, RunCheckpoint.resumable.is_(True))
+                        .order_by(RunCheckpoint.created_at.desc())
+                        .limit(1)
+                    )
+                    if row:
+                        checkpoint = row.state
+                run = Run(
+                    task_id=task.id,
+                    project_id=project.id,
+                    attempt=attempt,
+                    status=RunStatus.RUNNING.value,
+                    fencing_token=token,
+                    started_at=now,
+                    heartbeat_at=now,
+                    deadline_at=now + timedelta(seconds=self.max_wall_seconds),
+                    adapter_name=adapter_name,
+                    checkpoint_id=row.id if checkpoint and row else None,
+                    resume_from_run_id=previous.id if checkpoint and previous else None,
+                )
+                db.add(run)
+                await db.flush()
+                lease.run_id = run.id
+                lease.owner_id = owner_id
+                lease.fencing_token = token
+                lease.heartbeat_at = now
+                lease.expires_at = now + timedelta(seconds=self.lease_seconds)
+                project.last_dispatched_at = now
+                task.blocked_reason = None
+                await record_system_transition(
+                    db,
+                    task=task,
+                    target=TaskStage.IN_PROGRESS,
+                    reason="Scheduler atomically claimed a READY task",
+                    event_type="task.run_claimed",
+                    payload={"run_id": str(run.id), "attempt": attempt, "fencing_token": token},
+                    run_id=run.id,
+                    run_status=RunStatus.RUNNING,
+                )
+                await db.commit()
+                return ClaimedRun(
+                    task_id=task.id,
+                    project_id=project.id,
+                    run_id=run.id,
+                    owner_id=owner_id,
+                    fencing_token=token,
+                    attempt=attempt,
+                    task=TaskInput(task.id, project.id, task.title, task.description),
+                    checkpoint=checkpoint,
+                )
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def heartbeat(self, job: ClaimedRun) -> bool:
+        now = datetime.now(timezone.utc)
+        async with self.sessions() as db:
+            result = await db.execute(
+                update(TaskLease)
+                .where(
+                    TaskLease.task_id == job.task_id,
+                    TaskLease.run_id == job.run_id,
+                    TaskLease.owner_id == job.owner_id,
+                    TaskLease.fencing_token == job.fencing_token,
+                    TaskLease.expires_at > now,
+                )
+                .values(heartbeat_at=now, expires_at=now + timedelta(seconds=self.lease_seconds))
+            )
+            if cast(Any, result).rowcount != 1:
+                await db.rollback()
+                return False
+            await db.execute(
+                update(Run)
+                .where(Run.id == job.run_id, Run.fencing_token == job.fencing_token,
+                       Run.status == RunStatus.RUNNING.value)
+                .values(heartbeat_at=now)
+            )
+            await db.commit()
+            return True
+
+    async def save_checkpoint(self, job: ClaimedRun, state: Mapping[str, Any]) -> UUID:
+        now = datetime.now(timezone.utc)
+        async with self.sessions() as db:
+            try:
+                lease = await db.scalar(
+                    select(TaskLease).where(
+                        TaskLease.task_id == job.task_id,
+                        TaskLease.run_id == job.run_id,
+                        TaskLease.owner_id == job.owner_id,
+                        TaskLease.fencing_token == job.fencing_token,
+                        TaskLease.expires_at > now,
+                    ).with_for_update()
+                )
+                if lease is None:
+                    raise StaleLease("Checkpoint rejected because the lease is no longer current")
+                sequence = await db.scalar(
+                    select(func.coalesce(func.max(RunCheckpoint.sequence), 0)).where(
+                        RunCheckpoint.run_id == job.run_id
+                    )
+                )
+                import hashlib
+                import json
+                data = dict(state)
+                digest = hashlib.sha256(
+                    json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                checkpoint = RunCheckpoint(
+                    run_id=job.run_id,
+                    task_id=job.task_id,
+                    project_id=job.project_id,
+                    sequence=(sequence or 0) + 1,
+                    fencing_token=job.fencing_token,
+                    state=data,
+                    state_hash=digest,
+                )
+                db.add(checkpoint)
+                await db.flush()
+                await db.execute(
+                    update(Run).where(Run.id == job.run_id).values(checkpoint_id=checkpoint.id)
+                )
+                await db.commit()
+                return checkpoint.id
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def is_cancelled(self, job: ClaimedRun) -> bool:
+        async with self.sessions() as db:
+            task = await db.get(Task, job.task_id)
+            run = await db.get(Run, job.run_id)
+            return bool(
+                task is None
+                or run is None
+                or task.run_status in {RunStatus.CANCELLED.value, RunStatus.PAUSED.value}
+                or task.cancel_requested_at
+                or run.cancel_requested_at
+            )
+
+    async def complete(self, job: ClaimedRun, result: Mapping[str, Any]) -> None:
+        now = datetime.now(timezone.utc)
+        async with self.sessions() as db:
+            try:
+                lease = await db.scalar(
+                    select(TaskLease).where(
+                        TaskLease.task_id == job.task_id,
+                        TaskLease.run_id == job.run_id,
+                        TaskLease.owner_id == job.owner_id,
+                        TaskLease.fencing_token == job.fencing_token,
+                        TaskLease.expires_at > now,
+                    ).with_for_update()
+                )
+                task = await db.scalar(select(Task).where(Task.id == job.task_id).with_for_update())
+                run = await db.scalar(select(Run).where(Run.id == job.run_id).with_for_update())
+                if not lease or not task or not run or run.fencing_token != job.fencing_token:
+                    raise StaleLease("Completion rejected because the lease is no longer current")
+                if task.cancel_requested_at or task.run_status in {
+                    RunStatus.CANCELLED.value, RunStatus.PAUSED.value
+                }:
+                    await self._finish_interrupted(db, task, run, lease, now)
+                    await db.commit()
+                    return
+                run.status = RunStatus.SUCCEEDED.value
+                run.finished_at = now
+                run.error_code = None
+                run.error_message = None
+                task.run_status = RunStatus.SUCCEEDED.value
+                task.version += 1
+                lease.owner_id = None
+                lease.expires_at = now
+                lease.heartbeat_at = now
+                db.add(
+                    TaskTransition(
+                        task_id=task.id, project_id=task.project_id, actor_id=None,
+                        from_stage=task.stage, to_stage=task.stage,
+                        from_run_status=RunStatus.RUNNING.value, to_run_status=RunStatus.SUCCEEDED.value,
+                        reason="Execution adapter completed successfully", command="run_succeeded",
+                        version_before=task.version - 1, version_after=task.version,
+                    )
+                )
+                await _record_event(
+                    db, task=task, event_type="run.succeeded", actor_id=None,
+                    run_id=run.id, payload={"result": dict(result), "version": task.version}
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def fail(self, job: ClaimedRun, failure: ExecutionFailure) -> None:
+        now = datetime.now(timezone.utc)
+        async with self.sessions() as db:
+            try:
+                lease = await db.scalar(
+                    select(TaskLease).where(
+                        TaskLease.task_id == job.task_id,
+                        TaskLease.run_id == job.run_id,
+                        TaskLease.owner_id == job.owner_id,
+                        TaskLease.fencing_token == job.fencing_token,
+                        TaskLease.expires_at > now,
+                    ).with_for_update()
+                )
+                task = await db.scalar(select(Task).where(Task.id == job.task_id).with_for_update())
+                run = await db.scalar(select(Run).where(Run.id == job.run_id).with_for_update())
+                if not lease or not task or not run or run.fencing_token != job.fencing_token:
+                    raise StaleLease("Failure write rejected because the lease is no longer current")
+                run.status = RunStatus.FAILED.value
+                run.retry_class = failure.retry_class
+                run.error_code = failure.code
+                run.error_message = str(failure)
+                run.finished_at = now
+                lease.owner_id = None
+                lease.expires_at = now
+                attempt_exhausted = job.attempt >= self.max_attempts
+                first_started = await db.scalar(
+                    select(func.min(Run.started_at)).where(Run.task_id == task.id)
+                )
+                wall_exhausted = bool(
+                    first_started and (now - first_started).total_seconds() >= self.max_wall_seconds
+                )
+                retryable = failure.retry_class in {
+                    RetryClass.TRANSIENT.value,
+                    RetryClass.RATE_LIMITED.value,
+                }
+                if not retryable or attempt_exhausted or wall_exhausted:
+                    task.blocked_reason = (
+                        "attempt_limit_exhausted" if attempt_exhausted else
+                        "wall_time_limit_exhausted" if wall_exhausted else failure.code
+                    )
+                    if retryable:
+                        await record_system_transition(
+                            db, task=task, target=TaskStage.RETRY_EXHAUSTED,
+                            reason=f"Retry policy stopped execution: {failure.code}",
+                            event_type="task.retry_exhausted", run_id=run.id,
+                            run_status=RunStatus.FAILED,
+                            payload={"retry_class": failure.retry_class, "attempt": job.attempt},
+                        )
+                    else:
+                        task.run_status = RunStatus.FAILED.value
+                        task.version += 1
+                        db.add(
+                            TaskTransition(
+                                task_id=task.id, project_id=task.project_id, actor_id=None,
+                                from_stage=task.stage, to_stage=task.stage,
+                                from_run_status=RunStatus.RUNNING.value, to_run_status=RunStatus.FAILED.value,
+                                reason=str(failure), command="run_failed",
+                                version_before=task.version - 1, version_after=task.version,
+                            )
+                        )
+                        await _record_event(
+                            db, task=task, event_type="run.failed", actor_id=None,
+                            run_id=run.id, payload={"code": failure.code,
+                            "retry_class": failure.retry_class, "version": task.version}
+                        )
+                    db.add(
+                        DeadLetter(
+                            project_id=task.project_id, task_id=task.id, run_id=run.id,
+                            kind=failure.code, reason=str(failure),
+                            payload={"retry_class": failure.retry_class, "attempt": job.attempt},
+                        )
+                    )
+                else:
+                    delay = retry_delay_seconds(
+                        job.attempt, failure.retry_class,
+                        retry_after_seconds=failure.retry_after_seconds,
+                        random_value=self.rng(),
+                    )
+                    task.available_at = now + timedelta(seconds=delay)
+                    task.blocked_reason = "retry_backoff"
+                    await record_system_transition(
+                        db, task=task, target=TaskStage.READY,
+                        reason=f"Retrying {failure.retry_class} failure after bounded backoff",
+                        event_type="task.ready", run_id=run.id,
+                        run_status=RunStatus.QUEUED,
+                        recovery=True,
+                        payload={"retry_class": failure.retry_class,
+                                 "attempt": job.attempt, "delay_seconds": delay},
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def _finish_interrupted(
+        self, db: AsyncSession, task: Task, run: Run, lease: TaskLease, now: datetime
+    ) -> None:
+        cancelled = task.run_status == RunStatus.CANCELLED.value or task.cancel_requested_at
+        run.status = RunStatus.CANCELLED.value if cancelled else RunStatus.PAUSED.value
+        run.finished_at = now
+        lease.owner_id = None
+        lease.expires_at = now
+        task.version += 1
+        db.add(
+            TaskTransition(
+                task_id=task.id, project_id=task.project_id, actor_id=None,
+                from_stage=task.stage, to_stage=task.stage,
+                from_run_status=RunStatus.RUNNING.value, to_run_status=run.status,
+                reason="Execution acknowledged cancellation" if cancelled else "Execution paused",
+                command="run_cancelled" if cancelled else "run_paused",
+                version_before=task.version - 1, version_after=task.version,
+            )
+        )
+        await _record_event(
+            db, task=task, event_type="run.cancelled" if cancelled else "run.paused",
+            actor_id=None, run_id=run.id,
+            payload={"version": task.version, "run_status": run.status},
+        )
+
+    async def recover_expired_leases(self) -> int:
+        now = datetime.now(timezone.utc)
+        recovered = 0
+        async with self.sessions() as db:
+            try:
+                leases = (
+                    await db.execute(
+                        select(TaskLease)
+                        .where(TaskLease.owner_id.is_not(None), TaskLease.expires_at <= now)
+                        .order_by(TaskLease.expires_at)
+                        .with_for_update(skip_locked=True)
+                        .limit(100)
+                    )
+                ).scalars().all()
+                for lease in leases:
+                    task = await db.scalar(select(Task).where(Task.id == lease.task_id).with_for_update())
+                    run = await db.get(Run, lease.run_id) if lease.run_id else None
+                    lease.owner_id = None
+                    lease.expires_at = now
+                    if not task or not run or run.status != RunStatus.RUNNING.value:
+                        continue
+                    if task.run_status in {RunStatus.CANCELLED.value, RunStatus.PAUSED.value}:
+                        run.status = task.run_status
+                        run.finished_at = now
+                        recovered += 1
+                        continue
+                    checkpoint = await db.scalar(
+                        select(RunCheckpoint)
+                        .where(RunCheckpoint.run_id == run.id, RunCheckpoint.resumable.is_(True))
+                        .order_by(RunCheckpoint.sequence.desc())
+                        .limit(1)
+                    )
+                    run.status = RunStatus.FAILED.value
+                    run.error_code = "worker_lost"
+                    run.error_message = "Worker lease expired before run completion"
+                    run.retry_class = RetryClass.TRANSIENT.value if checkpoint else RetryClass.PERMANENT.value
+                    run.finished_at = now
+                    task.version += 1
+                    if checkpoint and run.attempt < self.max_attempts:
+                        task.stage = TaskStage.READY.value
+                        task.run_status = RunStatus.QUEUED.value
+                        task.blocked_reason = "worker_lost_checkpoint"
+                        task.available_at = now
+                        db.add(
+                            TaskTransition(
+                                task_id=task.id, project_id=task.project_id, actor_id=None,
+                                from_stage=TaskStage.IN_PROGRESS.value, to_stage=TaskStage.READY.value,
+                                from_run_status=RunStatus.RUNNING.value,
+                                to_run_status=RunStatus.QUEUED.value,
+                                reason="Expired worker recovered from durable checkpoint",
+                                command="checkpoint_recovery",
+                                version_before=task.version - 1, version_after=task.version,
+                            )
+                        )
+                        await _record_event(
+                            db, task=task, event_type="task.ready", actor_id=None,
+                            run_id=run.id,
+                            payload={"reason": "checkpoint_recovery", "checkpoint_id": str(checkpoint.id),
+                                     "version": task.version},
+                        )
+                    else:
+                        task.run_status = RunStatus.FAILED.value
+                        task.blocked_reason = "worker_lost_unrecoverable"
+                        db.add(
+                            TaskTransition(
+                                task_id=task.id, project_id=task.project_id, actor_id=None,
+                                from_stage=task.stage, to_stage=task.stage,
+                                from_run_status=RunStatus.RUNNING.value,
+                                to_run_status=RunStatus.FAILED.value,
+                                reason="Expired worker had no resumable checkpoint; automatic replay refused",
+                                command="worker_lost",
+                                version_before=task.version - 1, version_after=task.version,
+                            )
+                        )
+                        db.add(
+                            DeadLetter(
+                                project_id=task.project_id, task_id=task.id, run_id=run.id,
+                                kind="worker_lost_unrecoverable",
+                                reason="Worker lease expired and no resumable checkpoint was retained",
+                                payload={"attempt": run.attempt},
+                            )
+                        )
+                        await _record_event(
+                            db, task=task, event_type="task.worker_lost", actor_id=None,
+                            run_id=run.id,
+                            payload={"reason": task.blocked_reason, "version": task.version},
+                        )
+                    recovered += 1
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return recovered
+
+    async def run_once(self, adapter: ExecutionAdapter, owner_id: str) -> bool:
+        await self.recover_expired_leases()
+        if not adapter.available:
+            return False
+        job = await self.claim(owner_id, adapter.name)
+        if job is None:
+            return False
+        heartbeat_task = asyncio.create_task(self._heartbeat_loop(job, adapter))
+
+        async def save_checkpoint(state: Mapping[str, Any]) -> None:
+            await self.save_checkpoint(job, state)
+
+        async def cancelled() -> bool:
+            result = await self.is_cancelled(job)
+            if result:
+                await adapter.cancel(job.run_id)
+            return result
+
+        try:
+            result = await adapter.execute(
+                job.task,
+                RunInput(job.run_id, job.attempt, job.fencing_token),
+                checkpoint=job.checkpoint,
+                save_checkpoint=save_checkpoint,
+                is_cancelled=cancelled,
+            )
+            if await self.is_cancelled(job):
+                await self.complete(job, result)
+            else:
+                await self.complete(job, result)
+        except asyncio.CancelledError:
+            await adapter.cancel(job.run_id)
+            raise
+        except ExecutionFailure as failure:
+            await self.fail(job, failure)
+        except StaleLease:
+            # The new lease owner is authoritative; stale worker output is discarded.
+            return True
+        except Exception as exc:
+            await self.fail(
+                job,
+                ExecutionFailure(RetryClass.TRANSIENT.value, "adapter_error", str(exc)),
+            )
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        return True
+
+    async def _heartbeat_loop(self, job: ClaimedRun, adapter: ExecutionAdapter) -> None:
+        while True:
+            await asyncio.sleep(self.heartbeat_seconds)
+            if not await self.heartbeat(job):
+                await adapter.cancel(job.run_id)
+                return
+            if await self.is_cancelled(job):
+                await adapter.cancel(job.run_id)
+                return

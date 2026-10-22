@@ -24,3 +24,7 @@ Durable requests, worker dispatch, authorization, and effect intent interfaces e
 - API responses, database records intended for users, logs, and traces contain no provider secrets.
 
 Use deterministic local provider fixtures for automated tests. With explicitly configured credentials and spending authorization, record one real compatibility check; otherwise label it pending and list the exact user-run setup command. Update compatibility documentation and write `docs/milestones/03.md` with measured facts and limitations.
+
+## Archive this planning step
+
+After every acceptance criterion above is met and `docs/milestones/03.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.

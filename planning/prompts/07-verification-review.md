@@ -25,3 +25,7 @@ The platform produces frozen READY specifications and can execute an isolated co
 - Cancelling, crashing, or retrying verification/publication preparation does not duplicate changes or erase evidence.
 
 Add a disposable local sample repository and run an end-to-end acceptance scenario. Write `docs/milestones/07.md` with the final bundle, commands/results, pending GitHub responsibilities, and any external execution limitations.
+
+## Archive this planning step
+
+After every acceptance criterion above is met and `docs/milestones/07.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.

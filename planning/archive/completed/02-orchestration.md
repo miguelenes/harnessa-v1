@@ -24,3 +24,7 @@ Milestone 1 is accepted. Fix any foundational blocker needed for this milestone 
 - Illegal transitions, stale task versions, exhausted retries, cancellation, and Redis rebuild are covered by focused integration/fault tests against real PostgreSQL and Redis.
 
 Use a deterministic fake execution adapter for these tests; label it as a test adapter. Do not add simulated agent activity to production behavior. Update API contracts and write `docs/milestones/02.md` with invariants, recovery procedures, commands/results, and the hooks later adapters must implement.
+
+## Archive this planning step
+
+After every acceptance criterion above is met and `docs/milestones/02.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.

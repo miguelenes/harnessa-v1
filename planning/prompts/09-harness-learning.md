@@ -24,3 +24,7 @@ Exact-revision sandbox execution, primary/probe routing, budget reservations, ve
 - No automatically active global harness is created just because a task merged.
 
 Write `docs/harness-integration.md` and `docs/milestones/09.md`. State precisely which behavior is upstream, which is product policy, and which real combinations remain unverified.
+
+## Archive this planning step
+
+After every acceptance criterion above is met and `docs/milestones/09.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.

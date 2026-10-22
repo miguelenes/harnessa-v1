@@ -142,6 +142,177 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Tasks */
+        get: operations["list_project_tasks_projects__project_id__tasks_get"];
+        put?: never;
+        /** Create Project Task */
+        post: operations["create_project_task_projects__project_id__tasks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Task */
+        get: operations["get_task_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/transition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Transition */
+        post: operations["transition_tasks__task_id__transition_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Command */
+        post: operations["command_tasks__task_id__commands_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Runs */
+        get: operations["list_runs_tasks__task_id__runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/transitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Transitions */
+        get: operations["list_transitions_tasks__task_id__transitions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Replay Events */
+        get: operations["replay_events_projects__project_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/dead-letters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Dead Letters */
+        get: operations["list_dead_letters_projects__project_id__dead_letters_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dead-letters/{dead_letter_id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replay Dead Letter Route */
+        post: operations["replay_dead_letter_route_dead_letters__dead_letter_id__replay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/dispatch/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rebuild Dispatch */
+        post: operations["rebuild_dispatch_ops_dispatch_rebuild_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -234,6 +405,49 @@ export interface components {
              */
             organization_name: string;
         };
+        /** DeadLetterRead */
+        DeadLetterRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /**
+             * Run Id
+             * @default null
+             */
+            run_id: string | null;
+            /**
+             * Event Id
+             * @default null
+             */
+            event_id: string | null;
+            /** Kind */
+            kind: string;
+            /** Reason */
+            reason: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Status */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** DispatchRebuildResult */
+        DispatchRebuildResult: {
+            /** Rebuilt */
+            rebuilt: number;
+        };
         /** ErrorModel */
         ErrorModel: {
             /** Detail */
@@ -256,144 +470,6 @@ export interface components {
             details?: {
                 [key: string]: unknown;
             };
-        };
-        /** HTTPValidationError */
-        HTTPValidationError: {
-            /** Detail */
-            detail?: components["schemas"]["ValidationError"][];
-        };
-        /** Identity */
-        Identity: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Email */
-            email: string;
-            /**
-             * Organization Id
-             * Format: uuid
-             */
-            organization_id: string;
-            role: components["schemas"]["Role"];
-        };
-        /** ProjectCreate */
-        ProjectCreate: {
-            /** Name */
-            name: string;
-            /** Slug */
-            slug: string;
-        };
-        /** ProjectRead */
-        ProjectRead: {
-            /** Name */
-            name: string;
-            /** Slug */
-            slug: string;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-        };
-        /** RepositoryCreate */
-        RepositoryCreate: {
-            /** Target Id */
-            target_id: string;
-            /** Display Name */
-            display_name: string;
-            /**
-             * Default Branch
-             * @default main
-             */
-            default_branch: string;
-        };
-        /** RepositoryRead */
-        RepositoryRead: {
-            /** Target Id */
-            target_id: string;
-            /** Display Name */
-            display_name: string;
-            /**
-             * Default Branch
-             * @default main
-             */
-            default_branch: string;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-        };
-        /**
-         * Role
-         * @enum {string}
-         */
-        Role: "administrator" | "operator" | "reviewer" | "viewer";
-        /** ValidationError */
-        ValidationError: {
-            /** Location */
-            loc: (string | number)[];
-            /** Message */
-            msg: string;
-            /** Error Type */
-            type: string;
-        };
-        /** ArtifactMetadata */
-        ArtifactMetadata: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /**
-             * Task Id
-             * Format: uuid
-             */
-            task_id: string;
-            /** Sha256 */
-            sha256: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Media Type */
-            media_type: string;
-            /**
-             * Retention Until
-             * @default null
-             */
-            retention_until: string | null;
-            /**
-             * Redacted
-             * @default true
-             */
-            redacted: boolean;
-        };
-        /**
-         * AuthorizationContext
-         * @description Resolved internal authority for one organization and optional project scope.
-         */
-        AuthorizationContext: {
-            identity: components["schemas"]["Identity"];
-            /**
-             * Project Id
-             * @default null
-             */
-            project_id: string | null;
-            /** @default null */
-            project_role: components["schemas"]["Role"] | null;
-            /** Scopes */
-            scopes?: string[];
         };
         /** EventEnvelope */
         EventEnvelope: {
@@ -461,11 +537,336 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** EventReplayItem */
+        EventReplayItem: {
+            /** Cursor */
+            cursor: number;
+            event: components["schemas"]["EventEnvelope"];
+        };
+        /** EventReplayPage */
+        EventReplayPage: {
+            /** Items */
+            items: components["schemas"]["EventReplayItem"][];
+            /** Next Cursor */
+            next_cursor: number | null;
+            /** Replay Limit */
+            replay_limit: number;
+        };
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
+        /** Identity */
+        Identity: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Email */
+            email: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            role: components["schemas"]["Role"];
+        };
+        /** ProjectCreate */
+        ProjectCreate: {
+            /** Name */
+            name: string;
+            /** Slug */
+            slug: string;
+        };
+        /** ProjectRead */
+        ProjectRead: {
+            /** Name */
+            name: string;
+            /** Slug */
+            slug: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+        };
+        /** RecoveryRequest */
+        RecoveryRequest: {
+            /** Reason */
+            reason: string;
+        };
+        /** RepositoryCreate */
+        RepositoryCreate: {
+            /** Target Id */
+            target_id: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Default Branch
+             * @default main
+             */
+            default_branch: string;
+        };
+        /** RepositoryRead */
+        RepositoryRead: {
+            /** Target Id */
+            target_id: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Default Branch
+             * @default main
+             */
+            default_branch: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+        };
+        /**
+         * RetryClass
+         * @enum {string}
+         */
+        RetryClass: "transient" | "rate_limited" | "permanent" | "operator";
+        /**
+         * Role
+         * @enum {string}
+         */
+        Role: "administrator" | "operator" | "reviewer" | "viewer";
+        /** RunRead */
+        RunRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Attempt */
+            attempt: number;
+            status: components["schemas"]["RunStatus"];
+            /** @default null */
+            retry_class: components["schemas"]["RetryClass"] | null;
+            /**
+             * Error Code
+             * @default null
+             */
+            error_code: string | null;
+            /**
+             * Error Message
+             * @default null
+             */
+            error_message: string | null;
+            /** Fencing Token */
+            fencing_token: number;
+            /**
+             * Started At
+             * @default null
+             */
+            started_at: string | null;
+            /**
+             * Finished At
+             * @default null
+             */
+            finished_at: string | null;
+            /**
+             * Checkpoint Id
+             * @default null
+             */
+            checkpoint_id: string | null;
+        };
         /**
          * RunStatus
          * @enum {string}
          */
         RunStatus: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "FAILED" | "CANCELLED" | "SUCCEEDED";
+        /**
+         * TaskCommand
+         * @enum {string}
+         */
+        TaskCommand: "pause" | "resume" | "cancel" | "retry";
+        /** TaskCommandRequest */
+        TaskCommandRequest: {
+            command: components["schemas"]["TaskCommand"];
+            /** Reason */
+            reason: string;
+        };
+        /** TaskCreate */
+        TaskCreate: {
+            /** Title */
+            title: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Priority
+             * @default 0
+             */
+            priority: number;
+        };
+        /** TaskRead */
+        TaskRead: {
+            /** Title */
+            title: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Priority
+             * @default 0
+             */
+            priority: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            stage: components["schemas"]["TaskStage"];
+            run_status: components["schemas"]["RunStatus"];
+            /**
+             * Blocked Reason
+             * @default null
+             */
+            blocked_reason: string | null;
+            /** @default null */
+            return_stage: components["schemas"]["TaskStage"] | null;
+            /** Version */
+            version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * TaskStage
+         * @enum {string}
+         */
+        TaskStage: "BACKLOG" | "SPECIFYING" | "READY" | "IN_PROGRESS" | "VERIFYING" | "HUMAN_REVIEW" | "LEARNING" | "DONE" | "CLARIFYING" | "HARNESS_PROBE" | "REJECTED" | "CANCELLED" | "RETRY_EXHAUSTED";
+        /** TaskTransitionRead */
+        TaskTransitionRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Actor Id */
+            actor_id: string | null;
+            from_stage: components["schemas"]["TaskStage"] | null;
+            to_stage: components["schemas"]["TaskStage"];
+            from_run_status: components["schemas"]["RunStatus"] | null;
+            to_run_status: components["schemas"]["RunStatus"] | null;
+            /** Reason */
+            reason: string;
+            /** Command */
+            command: string;
+            /** Version Before */
+            version_before: number;
+            /** Version After */
+            version_after: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** TaskTransitionRequest */
+        TaskTransitionRequest: {
+            target_stage: components["schemas"]["TaskStage"];
+            /** Reason */
+            reason: string;
+            /** @default null */
+            return_stage: components["schemas"]["TaskStage"] | null;
+        };
+        /** ValidationError */
+        ValidationError: {
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+        };
+        /** ArtifactMetadata */
+        ArtifactMetadata: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Media Type */
+            media_type: string;
+            /**
+             * Retention Until
+             * @default null
+             */
+            retention_until: string | null;
+            /**
+             * Redacted
+             * @default true
+             */
+            redacted: boolean;
+        };
+        /**
+         * AuthorizationContext
+         * @description Resolved internal authority for one organization and optional project scope.
+         */
+        AuthorizationContext: {
+            identity: components["schemas"]["Identity"];
+            /**
+             * Project Id
+             * @default null
+             */
+            project_id: string | null;
+            /** @default null */
+            project_role: components["schemas"]["Role"] | null;
+            /** Scopes */
+            scopes?: string[];
+        };
         /** SpecificationRevision */
         SpecificationRevision: {
             /**
@@ -492,11 +893,6 @@ export interface components {
             /** Policy Revision */
             policy_revision: string;
         };
-        /**
-         * TaskStage
-         * @enum {string}
-         */
-        TaskStage: "BACKLOG" | "SPECIFYING" | "READY" | "IN_PROGRESS" | "VERIFYING" | "HUMAN_REVIEW" | "LEARNING" | "DONE" | "CLARIFYING" | "HARNESS_PROBE" | "REJECTED" | "CANCELLED" | "RETRY_EXHAUSTED";
         /**
          * TaskState
          * @description Versioned lifecycle snapshot; execution status is independent of board stage.
@@ -866,6 +1262,368 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_project_tasks_projects__project_id__tasks_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                before?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_project_task_projects__project_id__tasks_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transition_tasks__task_id__transition_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskTransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    command_tasks__task_id__commands_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runs_tasks__task_id__runs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_transitions_tasks__task_id__transitions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskTransitionRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replay_events_projects__project_id__events_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventReplayPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_dead_letters_projects__project_id__dead_letters_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeadLetterRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replay_dead_letter_route_dead_letters__dead_letter_id__replay_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                dead_letter_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rebuild_dispatch_ops_dispatch_rebuild_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DispatchRebuildResult"];
                 };
             };
         };

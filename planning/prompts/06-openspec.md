@@ -25,3 +25,7 @@ The application can create tasks, run an isolated agent, and stream persisted ac
 - An agent can ask a question, wait durably, receive an authorized answer, and resume without duplicate execution.
 
 Verify with fixture-driven automated tests and one real topic/interview when authorized credentials are available. Write `docs/milestones/06.md` with artifacts, gate evidence, commands, and unsupported capabilities.
+
+## Archive this planning step
+
+After every acceptance criterion above is met and `docs/milestones/06.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.

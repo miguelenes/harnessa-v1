@@ -26,3 +26,7 @@ Authenticated project/task APIs, durable event replay, and an execution adapter 
 - Keyboard board actions, focus management, and principal responsive states work.
 
 Follow the repository's Browser Harness instructions for actual browser verification. Write `docs/milestones/05.md` with protocol mapping, reconnect semantics, UI evidence, shared component coverage, brand consistency, and remaining feature dependencies.
+
+## Archive this planning step
+
+After every acceptance criterion above is met and `docs/milestones/05.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.
