@@ -1,5 +1,5 @@
 packages:
-  - apps/web
-  - packages/contracts
+  - apps/*
+  - packages/*
 allowBuilds:
   unrs-resolver: true

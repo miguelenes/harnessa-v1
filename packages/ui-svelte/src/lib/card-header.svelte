@@ -1,0 +1,8 @@
+<script lang="ts">
+  import type { Snippet } from "svelte";
+  import type { HTMLAttributes } from "svelte/elements";
+  import { cn } from "./utils.js";
+  type Props = HTMLAttributes<HTMLDivElement> & { class?: string; children?: Snippet };
+  let { class: className, children, ...rest }: Props = $props();
+</script>
+<div data-slot="card-header" class={cn("flex flex-col gap-1.5 p-6", className)} {...rest}>{@render children?.()}</div>

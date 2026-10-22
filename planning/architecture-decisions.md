@@ -21,6 +21,12 @@ Keep third-party types behind Harnessa ports: execution/session, specification, 
 
 Context7 research identified the official ACP, AG-UI and Qdrant client repositories and inspected LangGraph 1.0.8 and LlamaIndex v0.14.6 reference docs. These are research references, not installed or mandated package versions. Verify Python 3.12, actual Next.js 16/React, database and protocol compatibility, licenses and supported APIs; pin exact packages/images during implementation.
 
+## Parallel web foundation
+
+The public Harnessa marketing site and cloud portal shell are two independent static applications: Astro at `harnessa.cloud` and SvelteKit at `app.harnessa.cloud`, each deployed to its own Cloudflare Pages project in the selected `swarmnet` account. They share framework-neutral light/dark CSS tokens and framework-native component entry points (`@harnessa/ui-react` for the existing Next.js frontend's future prompt 8 adoption, and `@harnessa/ui-svelte` for the portal). Astro may use standalone Svelte components; it does not host the SvelteKit application.
+
+This web foundation is a parallel workstream rather than a numbered milestone and adds no API, OpenAPI, database, authentication, or billing behavior. The portal remains an honest static setup/unavailable shell until the cloud offering and its contracts are designed. Marketing copy must not present planned capabilities as live. Custom domains require provider-side verification; preserve existing mail and unrelated DNS records. See [the parallel implementation prompt](prompts/parallel-design-system-cloud-sites.md) and [the workstream report](../docs/milestones/parallel-web-foundation.md).
+
 ## Core evidence contract and authority
 
 Before a new subsystem emits results, extend the existing event/artifact contracts with stable task/run/attempt IDs, source-system IDs, revision/hash, occurred/recorded time, schema version, correlation/causation, scope and sensitivity/redaction labels. Keep unknown fields explicitly unknown. Source-specific records retain their authority: gateway usage is not task completion; a GitHub webhook is not current PR truth; a model score is not permission or acceptance.
