@@ -137,6 +137,63 @@ async def test_repository_sync_preview_duplicate_update_and_deletion_tombstone(
         assert all(".evals" not in source.source_uri for source in records)
         assert len(list(await db.scalars(select(RetrievalChunk).where(RetrievalChunk.state == "current")))) >= 2
 
+        unchanged_path = "openspec/specs/example/spec.md"
+        unchanged_before = await db.scalar(
+            select(RetrievalSource).where(RetrievalSource.source_uri.endswith(unchanged_path))
+        )
+        assert unchanged_before is not None and unchanged_before.state == "current"
+        old_guide = await db.scalar(
+            select(RetrievalSource).where(RetrievalSource.source_uri.endswith("docs/guide.md"))
+        )
+        assert old_guide is not None
+        old_guide_revision = old_guide.revision
+
+        (root / "docs/guide.md").write_text("Updated approved project operations.\n")
+        _git(root, "add", "docs/guide.md")
+        await asyncio.to_thread(_commit, root, "update guide")
+        updated = await sync_repository_index(
+            db, project_id=project_id, repository_id=repository_id, actor=actor, manager=manager, dry_run=False
+        )
+        assert updated["incremental"] is True
+        assert updated["source_count"] == 1
+        assert updated["chunk_count"] == 1
+        guide_revisions = list(
+            await db.scalars(
+                select(RetrievalSource).where(RetrievalSource.source_uri.endswith("docs/guide.md"))
+            )
+        )
+        assert len(guide_revisions) == 2
+        assert next(source for source in guide_revisions if source.revision == old_guide_revision).state == "stale"
+        current_guide = next(source for source in guide_revisions if source.state == "current")
+        assert current_guide.revision == updated["revision"]
+        unchanged_after = await db.scalar(
+            select(RetrievalSource).where(RetrievalSource.source_uri.endswith(unchanged_path))
+        )
+        assert unchanged_after is not None and unchanged_after.state == "current"
+        assert unchanged_after.revision == unchanged_before.revision
+
+        repository = await db.get(Repository, repository_id)
+        assert repository is not None
+        fallback = await manager.snapshot_changes(repository, "0" * 40)
+        assert fallback[0] == updated["revision"]
+        assert fallback[4] is False
+        assert fallback[1]
+
+        (root / "docs/guide.md").write_text("OPENAI_API_KEY=sk-123456789012345678901234567890\n")
+        _git(root, "add", "docs/guide.md")
+        await asyncio.to_thread(_commit, root, "replace guide with secret-like content")
+        filtered_update = await sync_repository_index(
+            db, project_id=project_id, repository_id=repository_id, actor=actor, manager=manager, dry_run=False
+        )
+        assert filtered_update["incremental"] is True
+        assert filtered_update["source_count"] == 0
+        assert await db.scalar(
+            select(RetrievalSource.id).where(
+                RetrievalSource.source_uri.endswith("docs/guide.md"),
+                RetrievalSource.state == "current",
+            )
+        ) is None
+
         (root / "docs/guide.md").unlink()
         _git(root, "add", "--all")
         await asyncio.to_thread(_commit, root, "delete source")

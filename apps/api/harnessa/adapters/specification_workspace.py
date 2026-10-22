@@ -189,6 +189,21 @@ class SpecificationWorkspaceManager:
             approved_skill_paths,
         )
 
+    async def snapshot_changes(
+        self,
+        repository: Repository,
+        base_revision: str,
+        approved_skill_paths: tuple[str, ...] = (),
+    ) -> tuple[str, tuple[RepositorySourceFile, ...], tuple[str, ...], dict[str, int], bool]:
+        """Read bounded changed blobs and deletions since an indexed ancestor commit."""
+        return await asyncio.to_thread(
+            self._snapshot_changes,
+            repository.target_id,
+            repository.default_branch,
+            base_revision,
+            approved_skill_paths,
+        )
+
     async def remove(self, workspace: SpecificationWorkspace) -> None:
         await asyncio.to_thread(self._remove, workspace)
 
@@ -645,6 +660,119 @@ class SpecificationWorkspaceManager:
             for (_, relative), raw in zip(bounded, contents, strict=True)
         )
         return revision, files, omitted
+
+    def _snapshot_changes(
+        self,
+        target_id: str,
+        default_branch: str,
+        base_revision: str,
+        approved_skill_paths: tuple[str, ...],
+    ) -> tuple[str, tuple[RepositorySourceFile, ...], tuple[str, ...], dict[str, int], bool]:
+        source = self._source_path(target_id)
+        revision = self._current_base(source, default_branch)
+        if not re.fullmatch(r"[0-9a-f]{40,64}", base_revision):
+            raise SpecificationWorkspaceError("Indexed base revision is invalid")
+        base_exists = subprocess.run(
+            ["git", "-C", str(source), "cat-file", "-e", f"{base_revision}^{{commit}}"],
+            check=False,
+            capture_output=True,
+            env=self._git_env(),
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+        if base_exists.returncode:
+            full_revision, full_files, full_omitted = self._snapshot(
+                target_id, default_branch, approved_skill_paths
+            )
+            return full_revision, full_files, (), full_omitted, False
+        ancestry = subprocess.run(
+            ["git", "-C", str(source), "merge-base", "--is-ancestor", base_revision, revision],
+            check=False,
+            capture_output=True,
+            env=self._git_env(),
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+        if ancestry.returncode == 1:
+            full_revision, full_files, full_omitted = self._snapshot(
+                target_id, default_branch, approved_skill_paths
+            )
+            return full_revision, full_files, (), full_omitted, False
+        if ancestry.returncode:
+            raise SpecificationWorkspaceError("Could not compare the prior indexed commit")
+
+        changed_output = self._git(
+            source, "diff", "--name-only", "-z", "--no-renames", base_revision, revision, "--"
+        )
+        changed_paths = tuple(path for path in changed_output.split("\0") if path)
+        if len(changed_paths) > _SEARCH_FILE_LIMIT:
+            full_revision, full_files, full_omitted = self._snapshot(
+                target_id, default_branch, approved_skill_paths
+            )
+            return full_revision, full_files, (), full_omitted, False
+        tree = self._git(source, "ls-tree", "-r", "-z", revision)
+        current_blobs: dict[str, str] = {}
+        for entry in tree.split("\0"):
+            if not entry or "\t" not in entry:
+                continue
+            metadata, relative = entry.split("\t", 1)
+            fields = metadata.split()
+            if (
+                len(fields) == 3
+                and fields[1] == "blob"
+                and fields[0] in {"100644", "100755"}
+                and self._searchable_path(relative, approved_skill_paths)
+            ):
+                current_blobs[relative] = fields[2]
+
+        omitted: dict[str, int] = {}
+        bounded_paths = changed_paths
+        changed_files = [(current_blobs[path], path) for path in bounded_paths if path in current_blobs]
+        deleted_paths = tuple(path for path in bounded_paths if path not in current_blobs)
+        checked = cast(
+            list[str],
+            self._git_batch(
+                source, "cat-file", "--batch-check", objects=[oid for oid, _ in changed_files]
+            ),
+        )
+        bounded: list[tuple[str, str]] = []
+        total_bytes = 0
+        for index, ((oid, relative), metadata) in enumerate(zip(changed_files, checked, strict=True)):
+            fields = metadata.split()
+            if len(fields) < 3 or fields[1] != "blob":
+                omitted["invalid_file_size"] = omitted.get("invalid_file_size", 0) + 1
+                continue
+            try:
+                size = int(fields[2])
+            except ValueError:
+                omitted["invalid_file_size"] = omitted.get("invalid_file_size", 0) + 1
+                continue
+            if size < 0 or size > _SEARCH_FILE_BYTES_LIMIT:
+                omitted["file_bytes"] = omitted.get("file_bytes", 0) + 1
+                continue
+            if total_bytes + size > _SEARCH_TOTAL_BYTES_LIMIT:
+                omitted["total_bytes"] = omitted.get("total_bytes", 0) + len(changed_files) - index
+                break
+            total_bytes += size
+            bounded.append((oid, relative))
+        if omitted:
+            full_revision, full_files, full_omitted = self._snapshot(
+                target_id, default_branch, approved_skill_paths
+            )
+            return full_revision, full_files, (), full_omitted, False
+        contents = cast(
+            list[bytes],
+            self._git_batch(
+                source, "cat-file", "--batch", objects=[oid for oid, _ in bounded], binary=True
+            ),
+        )
+        files = tuple(
+            RepositorySourceFile(
+                path=relative,
+                content=raw.decode("utf-8", errors="replace"),
+                content_hash=hashlib.sha256(raw).hexdigest(),
+            )
+            for (_, relative), raw in zip(bounded, contents, strict=True)
+        )
+        return revision, files, deleted_paths, omitted, True
 
     @staticmethod
     def _searchable_path(relative: str, approved_skill_paths: tuple[str, ...] = ()) -> bool:

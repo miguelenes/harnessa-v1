@@ -27,12 +27,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 CONNECTOR_VERSIONS = {
-    "repository": "git-tree-v1",
+    "repository": "git-tree-v2",
     "openspec": "openspec-git-v1",
     "approved_docs": "approved-docs-v1",
     "verified_runs": "verified-runs-v1",
     "approved_skills": "approved-skills-v1",
 }
+
+
+def repository_connector_version(approved_skill_paths: tuple[str, ...]) -> str:
+    policy_hash = hashlib.sha256("\0".join(sorted(approved_skill_paths)).encode()).hexdigest()[:32]
+    return f"git-tree-v2-{policy_hash}"
 
 
 def approved_skill_paths_for_project(project_id: UUID) -> tuple[str, ...]:
@@ -87,11 +92,36 @@ async def sync_repository_index(
     if project is None:
         raise HTTPException(404, "Project not found")
     approved_paths = approved_skill_paths_for_project(project_id)
+    connector_version = repository_connector_version(approved_paths)
+    previous_sync = await db.scalar(
+        select(RetrievalSync)
+        .where(
+            RetrievalSync.repository_id == repository_id,
+            RetrievalSync.state == "succeeded",
+            RetrievalSync.revision.is_not(None),
+        )
+        .order_by(RetrievalSync.finished_at.desc())
+        .limit(1)
+    )
+    delta_snapshot = getattr(manager, "snapshot_changes", None)
+    use_delta = (
+        not dry_run
+        and previous_sync is not None
+        and previous_sync.connector_version == connector_version
+        and callable(delta_snapshot)
+    )
     try:
         await require_membership(db, actor, project_id)
-        current_revision, files, snapshot_omitted = await manager.snapshot(
-            repository, tuple(approved_paths)
-        )
+        deleted_paths: tuple[str, ...] = ()
+        incremental = False
+        if use_delta and previous_sync is not None and callable(delta_snapshot):
+            current_revision, files, deleted_paths, snapshot_omitted, incremental = await delta_snapshot(
+                repository, previous_sync.revision, tuple(approved_paths)
+            )
+        else:
+            current_revision, files, snapshot_omitted = await manager.snapshot(
+                repository, tuple(approved_paths)
+            )
     except (OSError, SpecificationWorkspaceError) as exc:
         failed_at = datetime.now(UTC)
         db.add(
@@ -149,6 +179,7 @@ async def sync_repository_index(
     if dry_run:
         return {
             "dry_run": True,
+            "incremental": False,
             "snapshot_complete": snapshot_complete,
             "revision": current_revision,
             "considered": len(files) + sum(snapshot_omitted.values()),
@@ -165,7 +196,7 @@ async def sync_repository_index(
         project_id=project_id,
         repository_id=repository_id,
         connector_id="git-repository-v1",
-        connector_version=CONNECTOR_VERSIONS["repository"],
+        connector_version=connector_version,
         revision=current_revision,
         state="running",
         started_at=now,
@@ -184,19 +215,33 @@ async def sync_repository_index(
         )
     )
     current_keys = {document.source_id for document, _ in candidates}
+    changed_keys = {
+        hashlib.sha256(f"{repository_id}:{path}".encode()).hexdigest()
+        for path in deleted_paths
+    }
+    changed_keys.update(
+        hashlib.sha256(f"{repository_id}:{item.path}".encode()).hexdigest() for item in files
+    )
+    if not incremental:
+        changed_keys.update(source.source_key for source in existing_sources)
     for source in existing_sources:
-        if source.source_key not in current_keys:
-            source.state = "tombstoned" if snapshot_complete else "stale"
-        elif source.revision != current_revision:
+        if source.source_key not in changed_keys:
+            if incremental or source.source_key in current_keys or snapshot_complete:
+                continue
+            source.state = "stale"
+        elif source.source_key in current_keys:
+            if source.revision == current_revision:
+                continue
             source.state = "stale"
         else:
+            source.state = "tombstoned" if incremental or snapshot_complete else "stale"
+        if source.state not in {"stale", "tombstoned"}:
             continue
-        if source.state in {"stale", "tombstoned"}:
-            chunks = await db.scalars(
-                select(RetrievalChunk).where(RetrievalChunk.source_record_id == source.id)
-            )
-            for stored_chunk in chunks:
-                stored_chunk.state = "tombstoned"
+        chunks = await db.scalars(
+            select(RetrievalChunk).where(RetrievalChunk.source_record_id == source.id)
+        )
+        for stored_chunk in chunks:
+            stored_chunk.state = "tombstoned"
 
     for document, candidate_chunks in candidates:
         existing = await db.scalar(
@@ -220,7 +265,7 @@ async def sync_repository_index(
                 retention=document.retention,
                 sensitivity=document.sensitivity,
                 access_policy=document.access_policy,
-                connector_version=CONNECTOR_VERSIONS.get(document.source_type, "git-tree-v1"),
+                connector_version=CONNECTOR_VERSIONS.get(document.source_type, "git-tree-v2"),
                 state="current",
                 source_created_at=None,
                 synced_at=now,
@@ -252,6 +297,7 @@ async def sync_repository_index(
     await db.commit()
     return {
         "dry_run": False,
+        "incremental": incremental,
         "snapshot_complete": snapshot_complete,
         "revision": current_revision,
         "considered": len(files) + sum(snapshot_omitted.values()),
