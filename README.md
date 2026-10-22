@@ -59,6 +59,8 @@ pnpm --filter @harnessa/web build
 pnpm contracts:generate
 ```
 
+Codex project-level development MCPs are documented in [the development MCP guide](docs/development/mcp-servers.md). They provide version-aware documentation and read-only GitHub research; they do not configure product-agent tools.
+
 `pnpm contracts:generate` reads the running API OpenAPI document at `http://localhost:8010/openapi.json` by default. Set `HARNESSA_API_URL` to use another URL. Generated files live in `packages/contracts/src/generated.ts` and must not be hand-edited.
 
 Model gateway configuration, status, usage, request history, and project budget routes are documented in [the architecture](docs/architecture.md). Configure provider keys only in your local `.env`, add an explicit model entry to `infra/litellm/config.yaml`, and register a matching account/deployment/alias/pool route through the administrator API. The credential-free doctor endpoint is `GET /ops/models/doctor`; the explicitly invoked paid compatibility check is `POST /projects/{project_id}/models/live-check` and requires both an administrator session and `authorize_paid_request: true`. No model call is made by startup, health checks, or the doctor.

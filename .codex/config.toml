@@ -1,0 +1,5 @@
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp/oauth"
+
+[mcp_servers.github_readonly]
+url = "https://api.githubcopilot.com/mcp/readonly"
