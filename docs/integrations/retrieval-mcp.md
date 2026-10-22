@@ -10,7 +10,7 @@ The index stores source and chunk metadata, hashes and line ranges, not source t
 
 The repository/OpenSpec/docs/approved-skill paths share the Git-tree connector. A verified-run connector is not enabled: the current schema has successful run/artifact records but no durable verification evidence record, and run success alone is not accepted as verification. Do not index run artifacts until that evidence and its authorization/retention contract exist. No external corpus connector is configured.
 
-Repository status reports `indexed_revision` from the latest successful sync. `coverage` and `coverage_revision` refer to the latest complete full snapshot, so incremental/no-change syncs cannot produce a misleading repository-wide ratio. The status freshness is `incremental_since_coverage_snapshot` until a newer complete full snapshot is recorded; legacy sync rows without completeness metadata trigger a full snapshot before incremental sync resumes. An incomplete bounded snapshot does not replace a previous complete coverage baseline.
+Repository status reports `indexed_revision` from the latest successful sync. `coverage` and `coverage_revision` refer to the latest complete full snapshot, so incremental/no-change syncs cannot produce a misleading repository-wide ratio. An empty complete snapshot is a valid baseline with 100% coverage and can seed incremental sync. The status freshness is `incremental_since_coverage_snapshot` until a newer complete full snapshot is recorded; legacy sync rows without completeness metadata trigger a full snapshot before incremental sync resumes. An incomplete bounded snapshot does not replace a previous complete coverage baseline.
 
 ## Lexical search and optional vector pilot
 

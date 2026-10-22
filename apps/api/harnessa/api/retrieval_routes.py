@@ -142,7 +142,6 @@ async def retrieval_status(
                 RetrievalSync.state == "succeeded",
                 RetrievalSync.incremental.is_(False),
                 RetrievalSync.snapshot_complete.is_(True),
-                RetrievalSync.considered_count > 0,
             )
             .order_by(RetrievalSync.finished_at.desc())
             .limit(1)
@@ -155,7 +154,11 @@ async def retrieval_status(
         )
         coverage = 0.0
         if coverage_sync is not None:
-            coverage = min(1.0, float(coverage_sync.indexed_count) / coverage_sync.considered_count)
+            coverage = (
+                1.0
+                if coverage_sync.considered_count == 0
+                else min(1.0, float(coverage_sync.indexed_count) / coverage_sync.considered_count)
+            )
         if sync is None:
             freshness = "not_indexed"
         elif sync.state == "failed":

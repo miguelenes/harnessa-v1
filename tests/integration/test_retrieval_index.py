@@ -310,6 +310,50 @@ async def test_incremental_sync_requires_a_complete_coverage_baseline(
         assert latest is not None and latest.snapshot_complete is True
 
 
+async def test_empty_complete_snapshot_is_a_coverage_and_incremental_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, project_id, repository_id, actor, manager = await _source_fixture(tmp_path, monkeypatch)
+    _git(root, "rm", "-r", "--", ".")
+    await asyncio.to_thread(_commit, root, "empty repository")
+
+    async with SessionLocal() as db:
+        empty = await sync_repository_index(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            manager=manager,
+            dry_run=False,
+        )
+        assert empty["snapshot_complete"] is True
+        assert empty["considered"] == 0
+        empty_status = await retrieval_routes.retrieval_status(project_id, actor, db)
+        empty_source_status = next(item for item in empty_status.sources if item.repository_id == repository_id)
+        assert empty_source_status.coverage_revision == empty["revision"]
+        assert empty_source_status.coverage == 1.0
+        assert empty_source_status.freshness == "last_sync_only"
+
+        (root / "docs").mkdir()
+        (root / "docs/new.md").write_text("Added after an empty baseline.\n")
+        _git(root, "add", "docs/new.md")
+        await asyncio.to_thread(_commit, root, "add initial eligible document")
+        added = await sync_repository_index(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            manager=manager,
+            dry_run=False,
+        )
+        assert added["incremental"] is True
+        status = await retrieval_routes.retrieval_status(project_id, actor, db)
+        source_status = next(item for item in status.sources if item.repository_id == repository_id)
+        assert source_status.coverage_revision == empty["revision"]
+        assert source_status.coverage == 1.0
+        assert source_status.freshness == "incremental_since_coverage_snapshot"
+
+
 async def test_connector_outage_is_recorded_without_losing_current_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
