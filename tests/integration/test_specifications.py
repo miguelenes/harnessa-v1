@@ -98,6 +98,9 @@ async def _specification_fixture(
         "openspec_repository_sources_json",
         json.dumps({"fixture/specifications": str(source)}),
     )
+    monkeypatch.setattr(settings, "acp_execution_enabled", True)
+    monkeypatch.setattr(settings, "acp_model_broker_enabled", True)
+    monkeypatch.setattr(settings, "model_gateway_url", "http://fixture-model-gateway.invalid")
     async with SessionLocal() as db:
         organization = Organization(name="Specification Integration")
         user = User(
@@ -153,6 +156,34 @@ async def _create_ready_interview(
         assert evaluation.state == "READY"
         assert evaluation.score == 1
         return interview.id
+
+
+@pytest.mark.anyio
+async def test_readiness_stays_in_specifying_when_required_model_route_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, _, _ = await _specification_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(settings, "acp_model_broker_enabled", False)
+
+    async with SessionLocal() as db:
+        interview, replayed = await create_interview(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            topic="Create a route-gated task",
+            idempotency_key="missing-model-route",
+        )
+        assert replayed is False
+        interview, evaluation = await evaluate_readiness(
+            db, interview_id=interview.id, actor=actor
+        )
+        task = await db.get(Task, interview.task_id, populate_existing=True)
+
+        assert evaluation.state == "NOT_READY"
+        assert evaluation.gates["execution_capabilities"]["model_route_ready"] is False
+        assert interview.readiness_state == "NOT_READY"
+        assert task is not None and task.stage == TaskStage.SPECIFYING.value
 
 
 @pytest.mark.anyio

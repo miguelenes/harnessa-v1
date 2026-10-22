@@ -206,7 +206,7 @@ class ACPExecutionAdapter:
                         "specification_not_ready",
                         "Run was rejected because its specification is not READY",
                     )
-                if interview is not None and recovery_context.get("run_id"):
+                if interview is not None:
                     repository_record = await db.get(Repository, interview.repository_id)
                     if repository_record is None:
                         raise ExecutionFailure(
@@ -219,12 +219,16 @@ class ACPExecutionAdapter:
                             self.specification_workspaces,
                             interview,
                             repository_record,
-                            expected_base_commit=recovery_context.get("base_commit"),
+                            expected_base_commit=(
+                                recovery_context.get("base_commit")
+                                if recovery_context.get("run_id")
+                                else interview.base_sha
+                            ),
                         )
                     except SpecificationWorkspaceError as exc:
                         raise ExecutionFailure(
                             "permanent",
-                            "specification_recovery_context_unavailable",
+                            "specification_context_unavailable",
                             str(exc)[:300],
                         ) from exc
 
@@ -716,6 +720,7 @@ async def _latest_specification_context(
     return {
         "interview_revision": interview.revision,
         "artifact_revision": interview.artifact_revision,
+        "content_hash": interview.artifact_hash,
         "base_sha": interview.base_sha,
         "head_sha": interview.head_sha,
         "files": files,

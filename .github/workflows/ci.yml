@@ -17,17 +17,38 @@ concurrency:
 jobs:
   verify:
     name: Local CI
-    runs-on: [self-hosted, linux, x64, harnessa-local, harnessa-m6-ephemeral]
-    environment: harnessa-local-ci
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       TEST_DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:55432/harnessa_ci_test
       TEST_REDIS_URL: redis://127.0.0.1:56379/1
+    services:
+      postgres:
+        image: postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: harnessa_ci_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d harnessa_ci_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli -n 1 ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
-      - name: Reject untrusted fork code on the local runner
+      - name: Reject untrusted fork code
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         run: |
-          echo "Fork pull requests require maintainer-controlled local acceptance before execution."
+          echo "Fork pull requests are not accepted by this workflow."
           exit 1
       - name: Check out the event revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,35 +58,22 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26.12.0"
-      - name: Add pre-provisioned user tools to PATH
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.15"
+      - name: Install pinned package managers
         run: |
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          echo "${PNPM_HOME:-$HOME/.local/share/pnpm}/bin" >> "$GITHUB_PATH"
-      - name: Verify pre-provisioned toolchain
-        run: |
-          python3 --version
+          python -m pip install --disable-pip-version-check uv==0.13.1
+          npm install --global pnpm@10.34.7
           uv --version
           node --version
           pnpm --version
-          podman --version
           echo "OPENSPEC_NODE_PATH=$(node -p 'process.execPath')" >> "$GITHUB_ENV"
-      - name: Install locked dependencies from local caches
+      - name: Install locked dependencies
         run: |
-          uv sync --frozen --offline
-          pnpm install --offline --frozen-lockfile
-      - name: Start bounded disposable PostgreSQL and Redis
-        run: |
-          podman run --pull=never --rm --detach --name harnessa-ci-${GITHUB_RUN_ID}-pg --cpus 2 --memory 1g --pids-limit 256 -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=harnessa_ci_test -p 127.0.0.1:55432:5432 docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
-          podman run --pull=never --rm --detach --name harnessa-ci-${GITHUB_RUN_ID}-redis --cpus 1 --memory 256m --pids-limit 128 -p 127.0.0.1:56379:6379 docker.io/library/redis@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952 redis-server --save '' --appendonly no
-      - name: Wait for disposable services
-        run: |
-          for attempt in $(seq 1 30); do
-            if podman exec harnessa-ci-${GITHUB_RUN_ID}-pg pg_isready -U postgres -d harnessa_ci_test && podman exec harnessa-ci-${GITHUB_RUN_ID}-redis redis-cli -n 1 ping | grep -q PONG; then
-              exit 0
-            fi
-            sleep 1
-          done
-          exit 1
+          uv sync --frozen
+          pnpm install --frozen-lockfile
       - name: Lint and typecheck
         run: |
           pnpm lint
@@ -78,8 +86,3 @@ jobs:
           pnpm build:sites
       - name: Run unit, integration, and application tests with coverage
         run: pnpm test
-      - name: Stop disposable services
-        if: always()
-        run: |
-          podman stop --time 5 harnessa-ci-${GITHUB_RUN_ID}-pg || true
-          podman stop --time 5 harnessa-ci-${GITHUB_RUN_ID}-redis || true

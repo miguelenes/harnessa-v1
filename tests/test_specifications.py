@@ -205,6 +205,24 @@ def test_missing_scenario_prevents_high_readiness_score():
     assert score < 0.9
 
 
+def test_missing_model_route_is_reported_as_a_blocking_execution_capability():
+    files = {
+        Path(path).name: value
+        for path, value in _initial_bundle("Topic", "safe-change").items()
+    }
+    _score, gates = _readiness_gates(
+        files,
+        OpenSpecValidation("1.14.3", True, {"items": [{"valid": True}]}),
+        blocking_questions=0,
+        base_current=True,
+        signoff_required=False,
+        signoff_received=False,
+        model_route_ready=False,
+    )
+
+    assert gates["execution_capabilities"]["model_route_ready"] is False
+
+
 def test_repository_search_cites_exact_commit_path_line_and_untrusted_content(
     specification_repository,
 ):

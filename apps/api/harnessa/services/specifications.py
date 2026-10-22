@@ -1011,6 +1011,7 @@ async def answer_question(
 def _readiness_gates(
     files: dict[str, str], validation: OpenSpecValidation, *, blocking_questions: int,
     base_current: bool, signoff_required: bool, signoff_received: bool,
+    model_route_ready: bool = True,
 ) -> tuple[float, dict[str, Any]]:
     proposal = files.get("proposal.md", "")
     spec = files.get("spec.md", "")
@@ -1061,6 +1062,7 @@ def _readiness_gates(
                                 "result": validation.result},
         "unresolved_blocking_questions": blocking_questions,
         "base_current": base_current,
+        "execution_capabilities": {"model_route_ready": model_route_ready},
         "signoff_required": signoff_required,
         "signoff_received": signoff_received,
     }
@@ -1107,12 +1109,18 @@ async def evaluate_readiness(
         base_current=current_base == interview.base_sha,
         signoff_required=settings.openspec_require_signoff,
         signoff_received=signoff_received,
+        model_route_ready=(
+            settings.acp_execution_enabled
+            and settings.acp_model_broker_enabled
+            and bool(settings.model_gateway_url.strip())
+        ),
     )
     ready = (
         score >= 0.90
         and validation.valid
         and blocking_count == 0
         and gates["base_current"] is True
+        and gates["execution_capabilities"]["model_route_ready"] is True
         and gates["rubric"]["tasks"]["requirement_mapping"] is True
         and (not settings.openspec_require_signoff or signoff_received)
     )

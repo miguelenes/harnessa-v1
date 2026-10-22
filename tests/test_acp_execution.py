@@ -217,6 +217,19 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
     workspace.workspace_path.mkdir()
     completed: list[str] = []
     checkpoints: list[dict[str, Any]] = []
+    prompt_texts: list[str] = []
+    specification_repository = SimpleNamespace(id=uuid4(), target_id="fixture/repository")
+    interview = SimpleNamespace(
+        id=uuid4(),
+        repository_id=specification_repository.id,
+        readiness_state="READY",
+        base_sha=workspace.base_commit,
+        head_sha="e" * 40,
+        change_id="approved-change",
+        revision=7,
+        artifact_revision=3,
+        artifact_hash="f" * 64,
+    )
 
     class DB:
         async def __aenter__(self) -> Self:
@@ -226,11 +239,15 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
             return None
 
         async def get(self, model: object, key: object) -> object:
-            assert key == task.project_id
-            return SimpleNamespace(organization_id=uuid4())
+            if getattr(model, "__name__", None) == "Project":
+                assert key == task.project_id
+                return SimpleNamespace(organization_id=uuid4())
+            assert getattr(model, "__name__", None) == "Repository"
+            assert key == specification_repository.id
+            return specification_repository
 
-        async def scalar(self, _: object) -> None:
-            return None
+        async def scalar(self, _: object) -> object:
+            return interview
 
     class Workspaces:
         async def provision(self, *_: object, **__: object) -> object:
@@ -300,6 +317,7 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
             return None
 
         async def prompt(self, _: str, *, timeout_seconds: float) -> str:
+            prompt_texts.append(_)
             assert timeout_seconds > 0
             return "end_turn"
 
@@ -310,6 +328,26 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
         agent_id = "opencode"
         command = ("opencode", "acp")
 
+    class SpecificationWorkspaces:
+        async def open(self, *_: object, **__: object) -> object:
+            return object()
+
+        async def read_bundle(self, *_: object) -> dict[str, str]:
+            return {
+                "openspec/changes/approved-change/tasks.md": (
+                    "Exact approved task artifact content"
+                )
+            }
+
+    class OrchestratorBroker:
+        socket_path = tmp_path / "orchestrator.sock"
+
+        async def start(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            completed.append("orchestrator-broker:closed")
+
     adapter = _adapter(tmp_path)
     adapter.repository_sources[str(task.project_id)] = tmp_path
     adapter.enabled = True
@@ -317,10 +355,12 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
     adapter.model_router = object()  # type: ignore[assignment]
     adapter.model_alias = "budgeted"
     adapter.agent = Agent()  # type: ignore[assignment]
+    adapter.specification_workspaces = SpecificationWorkspaces()  # type: ignore[assignment]
     adapter.backend = Backend()  # type: ignore[assignment]
     adapter.workspaces = Workspaces()  # type: ignore[assignment]
     adapter.sessions_factory = lambda: DB()  # type: ignore[assignment]
     monkeypatch.setattr(module, "ACPModelBroker", lambda **_: Broker())
+    monkeypatch.setattr(module, "ACPOrchestratorBroker", lambda **_: OrchestratorBroker())
     monkeypatch.setattr(module, "ACPAgentSession", Session)
 
     async def save_checkpoint(value: object) -> None:
@@ -348,6 +388,10 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
     )
 
     assert result["status"] == "completed"
+    assert len(prompt_texts) == 1
+    assert '"artifact_revision": 3' in prompt_texts[0]
+    assert '"content_hash": "' + "f" * 64 + '"' in prompt_texts[0]
+    assert "Exact approved task artifact content" in prompt_texts[0]
     assert result["agent_version"] == "2.0.32"
     assert result["patch_artifact"] == {"artifact_id": "fixture"}
     assert checkpoints[0]["fencing_token"] == run.fencing_token
@@ -356,6 +400,7 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
         "workspace:removed",
     ]
     assert "broker:closed" in completed
+    assert "orchestrator-broker:closed" in completed
     assert "session:closed" in completed
 
 
