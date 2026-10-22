@@ -1,6 +1,10 @@
-# Prompt 14 — Governed agent-to-agent delegation
+# Prompt 15 — Governed agent-to-agent delegation
 
-Implement milestone 14 only after prompt 10 is complete and prompts 11–13 are complete. Read the revised specification, prompts 04, 06, 09, 11–13, the integration assessment, and current milestone reports. Inspect the existing ACP executor, task/lease system, model gateway, MCP registry, and Harness² adapter before changing scope. Preserve unrelated work. Do not assume any protocol or remote agent is supported until its exact version and capabilities are verified.
+Implement milestone 15 only after milestones 1–14 have completion evidence. Read the revised specification, `planning/architecture-decisions.md`, the planning index, and reports `docs/milestones/01.md` through `14.md`. Inspect the current code, versions, and worktree before editing; preserve unrelated changes. Complete this milestone and stop before milestone 16.
+
+## Prerequisites and owned scope
+
+Milestone 13 release acceptance and all preceding milestone reports are complete. Extend the named subsystem through its existing ports, budgets and evidence records; use `planning/architecture-decisions.md` for shared failure/recovery and authority rules. Provider/agent access and spending remain explicitly configured, with offline fixtures for unavailable services.
 
 ## Goal
 
@@ -39,7 +43,7 @@ Write `docs/integrations/agent-delegation.md` with a capability matrix for exist
 - Budget reservations include all child model/tool costs where measurable; missing telemetry is unknown and cannot be treated as free.
 - Offline acceptance proves lifecycle, isolation, restart, reconciliation, and limits without credentials. The compatibility matrix reports remote protocol support only for tested versions and capabilities.
 
-Write `docs/integrations/agent-delegation.md`, update architecture, compatibility and API contracts as needed, and write `docs/milestones/14.md` with exact commands/results, protocol versions, live-versus-offline evidence, migration/rollback notes, and remaining setup. Archive this prompt only after all acceptance criteria are evidenced.
+Write `docs/integrations/agent-delegation.md`, update architecture, compatibility and API contracts as needed, and write `docs/milestones/15.md` with exact commands/results, protocol versions, live-versus-offline evidence, migration/rollback notes, and remaining setup. Archive this prompt only after all acceptance criteria are evidenced.
 
 ## References to verify against pinned versions
 
@@ -47,3 +51,9 @@ Write `docs/integrations/agent-delegation.md`, update architecture, compatibilit
 - [ACP overview](https://agentclientprotocol.com/protocol/overview) and [ACP extensibility](https://agentclientprotocol.com/protocol/v1/extensibility) define the existing coding-agent client/session boundary and negotiated extensions.
 - [LiteLLM Agent Gateway](https://docs.litellm.ai/docs/a2a) may provide A2A routing/logging. Evaluate it as an optional adapter; its task/usage records do not replace Harnessa's records or policy.
 - [AG-UI overview](https://docs.ag-ui.com/introduction) describes the agent-to-user boundary. Keep browser updates a projection of Harnessa's durable state.
+
+## Delivery contract
+
+Own only the subsystem named by this prompt and its existing adapters/UI projections. Preserve the shared authority, contract-generation, cost, recovery, and retention rules in `planning/architecture-decisions.md`. Produce the implementation, focused acceptance evidence, updated compatibility/setup notes, and `docs/milestones/15.md`. Record offline versus live results separately, exact versions/configuration and source revisions, pending external setup, recovery/rollback commands, and the next milestone’s prerequisites. Missing required evidence keeps the milestone active.
+
+Apply the archive lifecycle in `planning/README.md` only after acceptance is evidenced; the future archive target is `planning/archive/completed/15-agent-delegation.md`. Never run the next milestone as part of this request.

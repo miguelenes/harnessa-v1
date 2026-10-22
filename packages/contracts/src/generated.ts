@@ -313,6 +313,212 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ops/models/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Model Configuration */
+        get: operations["get_model_configuration_ops_models_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/models/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Provider Account */
+        post: operations["create_provider_account_ops_models_accounts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/models/deployments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Deployment */
+        post: operations["create_deployment_ops_models_deployments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/models/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Alias */
+        post: operations["create_alias_ops_models_aliases_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/models/pools/{pool_id}/routes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Pool Route */
+        post: operations["add_pool_route_ops_models_pools__pool_id__routes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/models/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Model Status */
+        get: operations["model_status_ops_models_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/models/doctor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Model Doctor */
+        get: operations["model_doctor_ops_models_doctor_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/models/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Model Budget */
+        get: operations["get_project_model_budget_projects__project_id__models_budget_get"];
+        /** Set Project Model Budget */
+        put: operations["set_project_model_budget_projects__project_id__models_budget_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/models/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Model Usage */
+        get: operations["get_project_model_usage_projects__project_id__models_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/models/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Model Requests */
+        get: operations["list_project_model_requests_projects__project_id__models_requests_get"];
+        put?: never;
+        /** Model Request */
+        post: operations["model_request_projects__project_id__models_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/models/requests/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Model Stream */
+        post: operations["model_stream_projects__project_id__models_requests_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/models/live-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Live Route Check */
+        post: operations["live_route_check_projects__project_id__models_live_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -573,6 +779,602 @@ export interface components {
             organization_id: string;
             role: components["schemas"]["Role"];
         };
+        /** ModelAliasCreate */
+        ModelAliasCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Deployment Ids */
+            deployment_ids: string[];
+        };
+        /** ModelAliasRead */
+        ModelAliasRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Deployment Ids */
+            deployment_ids: string[];
+        };
+        /** ModelBudgetPolicyRead */
+        ModelBudgetPolicyRead: {
+            /** Project Limit Usd */
+            project_limit_usd: number | string;
+            /** Task Limit Usd */
+            task_limit_usd: number | string;
+            /** Run Limit Usd */
+            run_limit_usd: number | string;
+            /** Project Token Limit */
+            project_token_limit: number;
+            /** Task Token Limit */
+            task_token_limit: number;
+            /** Run Token Limit */
+            run_token_limit: number;
+            /** Max Steps */
+            max_steps: number;
+            /** Max Wall Seconds */
+            max_wall_seconds: number;
+            /** Max Output Tokens */
+            max_output_tokens: number;
+            /**
+             * Max Attempts
+             * @default 3
+             */
+            max_attempts: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+        };
+        /** ModelBudgetPolicyWrite */
+        ModelBudgetPolicyWrite: {
+            /** Project Limit Usd */
+            project_limit_usd: number | string;
+            /** Task Limit Usd */
+            task_limit_usd: number | string;
+            /** Run Limit Usd */
+            run_limit_usd: number | string;
+            /** Project Token Limit */
+            project_token_limit: number;
+            /** Task Token Limit */
+            task_token_limit: number;
+            /** Run Token Limit */
+            run_token_limit: number;
+            /** Max Steps */
+            max_steps: number;
+            /** Max Wall Seconds */
+            max_wall_seconds: number;
+            /** Max Output Tokens */
+            max_output_tokens: number;
+            /**
+             * Max Attempts
+             * @default 3
+             */
+            max_attempts: number;
+        };
+        /** ModelDeploymentCapabilities */
+        ModelDeploymentCapabilities: {
+            /** Protocols */
+            protocols: components["schemas"]["ModelProtocol"][];
+            /**
+             * Streaming
+             * @default false
+             */
+            streaming: boolean;
+            /**
+             * Tools
+             * @default false
+             */
+            tools: boolean;
+            /**
+             * Usage Reporting
+             * @default false
+             */
+            usage_reporting: boolean;
+            /**
+             * Cancellation
+             * @default false
+             */
+            cancellation: boolean;
+        };
+        /** ModelDeploymentCreate */
+        ModelDeploymentCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Provider Account Id
+             * Format: uuid
+             */
+            provider_account_id: string;
+            /** Actual Model */
+            actual_model: string;
+            /** Proxy Model */
+            proxy_model: string;
+            capabilities: components["schemas"]["ModelDeploymentCapabilities"];
+            /** Context Window */
+            context_window: number;
+            /** Input Cost Per Million */
+            input_cost_per_million: number | string;
+            /** Output Cost Per Million */
+            output_cost_per_million: number | string;
+            /** Price Revision */
+            price_revision: string;
+            /**
+             * Max Concurrency
+             * @default 4
+             */
+            max_concurrency: number;
+        };
+        /** ModelDeploymentRead */
+        ModelDeploymentRead: {
+            /** Name */
+            name: string;
+            /**
+             * Provider Account Id
+             * Format: uuid
+             */
+            provider_account_id: string;
+            /** Actual Model */
+            actual_model: string;
+            /** Proxy Model */
+            proxy_model: string;
+            capabilities: components["schemas"]["ModelDeploymentCapabilities"];
+            /** Context Window */
+            context_window: number;
+            /** Input Cost Per Million */
+            input_cost_per_million: number | string;
+            /** Output Cost Per Million */
+            output_cost_per_million: number | string;
+            /** Price Revision */
+            price_revision: string;
+            /**
+             * Max Concurrency
+             * @default 4
+             */
+            max_concurrency: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Cooldown Until
+             * @default null
+             */
+            cooldown_until: string | null;
+            /**
+             * Failure Count
+             * @default 0
+             */
+            failure_count: number;
+        };
+        /** ModelDoctorRead */
+        ModelDoctorRead: {
+            /** Status */
+            status: string;
+            /** Gateway Ready */
+            gateway_ready: boolean;
+            /** Configured Accounts */
+            configured_accounts: number;
+            /** Configured Deployments */
+            configured_deployments: number;
+            /** Configured Aliases */
+            configured_aliases: number;
+            /** Pools */
+            pools: string[];
+            /**
+             * Provider Credentials Checked
+             * @default false
+             */
+            provider_credentials_checked: boolean;
+            /**
+             * Live Request Sent
+             * @default false
+             */
+            live_request_sent: boolean;
+            /** Findings */
+            findings?: string[];
+        };
+        /** ModelGatewayConfiguration */
+        ModelGatewayConfiguration: {
+            /** Pools */
+            pools: components["schemas"]["ModelPoolRead"][];
+            /** Accounts */
+            accounts: components["schemas"]["ModelProviderAccountRead"][];
+            /** Deployments */
+            deployments: components["schemas"]["ModelDeploymentRead"][];
+            /** Aliases */
+            aliases: components["schemas"]["ModelAliasRead"][];
+        };
+        /** ModelInvocationRead */
+        ModelInvocationRead: {
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Model Alias */
+            model_alias: string;
+            /** Actual Model */
+            actual_model: string;
+            /** Deployment */
+            deployment: string;
+            /** Provider Account */
+            provider_account: string;
+            /**
+             * Input Tokens
+             * @default null
+             */
+            input_tokens: number | null;
+            /**
+             * Output Tokens
+             * @default null
+             */
+            output_tokens: number | null;
+            /**
+             * Usage Known
+             * @default false
+             */
+            usage_known: boolean;
+            /**
+             * Billed Usd
+             * @default null
+             */
+            billed_usd: number | string | null;
+            /**
+             * Estimated Usd
+             * @default null
+             */
+            estimated_usd: number | string | null;
+            /** Route Decisions */
+            route_decisions: string[];
+            /** Response */
+            response: {
+                [key: string]: unknown;
+            };
+        };
+        /** ModelLiveCheckRead */
+        ModelLiveCheckRead: {
+            /** Outcome */
+            outcome: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Deployment
+             * @default null
+             */
+            deployment: string | null;
+            /**
+             * Provider Account
+             * @default null
+             */
+            provider_account: string | null;
+            /**
+             * Actual Model
+             * @default null
+             */
+            actual_model: string | null;
+            /**
+             * Usage Known
+             * @default false
+             */
+            usage_known: boolean;
+            /**
+             * Billed Usd
+             * @default null
+             */
+            billed_usd: number | string | null;
+            /**
+             * Estimated Usd
+             * @default null
+             */
+            estimated_usd: number | string | null;
+            /**
+             * Error Code
+             * @default null
+             */
+            error_code: string | null;
+        };
+        /** ModelLiveCheckRequest */
+        ModelLiveCheckRequest: {
+            /** Alias */
+            alias: string;
+            /** Authorize Paid Request */
+            authorize_paid_request: boolean;
+        };
+        /** ModelMessage */
+        ModelMessage: {
+            /** Role */
+            role: string;
+            /**
+             * Content
+             * @default null
+             */
+            content: string | {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Name
+             * @default null
+             */
+            name: string | null;
+            /**
+             * Tool Call Id
+             * @default null
+             */
+            tool_call_id: string | null;
+        };
+        /**
+         * ModelPoolKind
+         * @enum {string}
+         */
+        ModelPoolKind: "interactive" | "probe";
+        /** ModelPoolRead */
+        ModelPoolRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            kind: components["schemas"]["ModelPoolKind"];
+            /** Max Concurrency */
+            max_concurrency: number;
+            /** Interactive Reserve */
+            interactive_reserve: number;
+            /** Probe Overflow Limit */
+            probe_overflow_limit: number;
+            /** Active Interactive */
+            active_interactive: number;
+            /** Active Probe */
+            active_probe: number;
+        };
+        /** ModelPoolRouteCreate */
+        ModelPoolRouteCreate: {
+            /**
+             * Model Alias Id
+             * Format: uuid
+             */
+            model_alias_id: string;
+            /** Priority */
+            priority: number;
+        };
+        /**
+         * ModelProtocol
+         * @enum {string}
+         */
+        ModelProtocol: "chat_completions" | "responses" | "anthropic_messages";
+        /** ModelProviderAccountCreate */
+        ModelProviderAccountCreate: {
+            /** Name */
+            name: string;
+            /** Provider */
+            provider: string;
+            /** Secret Ref */
+            secret_ref: string;
+        };
+        /** ModelProviderAccountRead */
+        ModelProviderAccountRead: {
+            /** Name */
+            name: string;
+            /** Provider */
+            provider: string;
+            /** Secret Ref */
+            secret_ref: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** ModelRequestLedgerRead */
+        ModelRequestLedgerRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Attempt */
+            attempt: number;
+            /** Event Type */
+            event_type: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Task Id
+             * @default null
+             */
+            task_id: string | null;
+            /**
+             * Run Id
+             * @default null
+             */
+            run_id: string | null;
+            /**
+             * Account Id
+             * @default null
+             */
+            account_id: string | null;
+            /**
+             * Deployment Id
+             * @default null
+             */
+            deployment_id: string | null;
+            /** Pool Name */
+            pool_name: string;
+            /** Model Alias */
+            model_alias: string;
+            /**
+             * Actual Model
+             * @default null
+             */
+            actual_model: string | null;
+            /**
+             * Request Identifier
+             * @default null
+             */
+            request_identifier: string | null;
+            /** Route Decision */
+            route_decision: string;
+            /**
+             * Price Revision
+             * @default null
+             */
+            price_revision: string | null;
+            /**
+             * Input Tokens
+             * @default null
+             */
+            input_tokens: number | null;
+            /**
+             * Output Tokens
+             * @default null
+             */
+            output_tokens: number | null;
+            /** Usage Known */
+            usage_known: boolean;
+            /**
+             * Latency Ms
+             * @default null
+             */
+            latency_ms: number | null;
+            /**
+             * Billed Usd
+             * @default null
+             */
+            billed_usd: number | string | null;
+            /**
+             * Estimated Usd
+             * @default null
+             */
+            estimated_usd: number | string | null;
+            /**
+             * Http Status
+             * @default null
+             */
+            http_status: number | null;
+            /**
+             * Error Code
+             * @default null
+             */
+            error_code: string | null;
+            /** Details */
+            details: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ModelRouteRequest */
+        ModelRouteRequest: {
+            /**
+             * Task Id
+             * @default null
+             */
+            task_id: string | null;
+            /**
+             * Run Id
+             * @default null
+             */
+            run_id: string | null;
+            /** @default interactive */
+            pool: components["schemas"]["ModelPoolKind"];
+            /**
+             * Model Alias
+             * @default null
+             */
+            model_alias: string | null;
+            requirements: components["schemas"]["RouteRequirements"];
+            /** Max Output Tokens */
+            max_output_tokens: number;
+            /** Estimated Input Tokens */
+            estimated_input_tokens: number;
+            /**
+             * Stream
+             * @default false
+             */
+            stream: boolean;
+            /**
+             * Messages
+             * @default null
+             */
+            messages: components["schemas"]["ModelMessage"][] | null;
+            /**
+             * Input
+             * @default null
+             */
+            input: string | {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * System
+             * @default null
+             */
+            system: string | null;
+            /**
+             * Tools
+             * @default null
+             */
+            tools: {
+                [key: string]: unknown;
+            }[] | null;
+        };
+        /** ModelUsageRead */
+        ModelUsageRead: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Billed Usd */
+            billed_usd: number | string;
+            /** Estimated Usd */
+            estimated_usd: number | string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Unknown Usage Requests */
+            unknown_usage_requests: number;
+            /** Pending Reservations */
+            pending_reservations: number;
+        };
         /** ProjectCreate */
         ProjectCreate: {
             /** Name */
@@ -641,6 +1443,35 @@ export interface components {
          * @enum {string}
          */
         Role: "administrator" | "operator" | "reviewer" | "viewer";
+        /** RouteRequirements */
+        RouteRequirements: {
+            protocol: components["schemas"]["ModelProtocol"];
+            /**
+             * Streaming
+             * @default false
+             */
+            streaming: boolean;
+            /**
+             * Tools
+             * @default false
+             */
+            tools: boolean;
+            /**
+             * Minimum Context
+             * @default 1
+             */
+            minimum_context: number;
+            /**
+             * Usage Reporting
+             * @default true
+             */
+            usage_reporting: boolean;
+            /**
+             * Cancellation
+             * @default false
+             */
+            cancellation: boolean;
+        };
         /** RunRead */
         RunRead: {
             /**
@@ -1624,6 +2455,443 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DispatchRebuildResult"];
+                };
+            };
+        };
+    };
+    get_model_configuration_ops_models_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelGatewayConfiguration"];
+                };
+            };
+        };
+    };
+    create_provider_account_ops_models_accounts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelProviderAccountCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelProviderAccountRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_deployment_ops_models_deployments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelDeploymentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeploymentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_alias_ops_models_aliases_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelAliasCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelAliasRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_pool_route_ops_models_pools__pool_id__routes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pool_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelPoolRouteCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string | number;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_status_ops_models_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDoctorRead"];
+                };
+            };
+        };
+    };
+    model_doctor_ops_models_doctor_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDoctorRead"];
+                };
+            };
+        };
+    };
+    get_project_model_budget_projects__project_id__models_budget_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBudgetPolicyRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_project_model_budget_projects__project_id__models_budget_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelBudgetPolicyWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBudgetPolicyRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_model_usage_projects__project_id__models_usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelUsageRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_project_model_requests_projects__project_id__models_requests_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRequestLedgerRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_request_projects__project_id__models_requests_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelRouteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInvocationRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_stream_projects__project_id__models_requests_stream_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelRouteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    live_route_check_projects__project_id__models_live_check_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelLiveCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelLiveCheckRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

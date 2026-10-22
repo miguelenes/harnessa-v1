@@ -1,10 +1,14 @@
-# Prompt 4 of 10 — Isolated workspaces and ACP execution
+# Prompt 5 of 13 — Isolated workspaces and ACP execution
 
-Implement milestone 4 of Harnessa. Read `planning/revised-specification.md` and milestone reports 01–03. Use the existing scheduler and model gateway. Preserve unrelated work. Complete this milestone and stop before milestone 5.
+Implement milestone 5 only after milestones 1–4 have completion evidence. Read the revised specification, `planning/architecture-decisions.md`, the planning index, and reports `docs/milestones/01.md` through `04.md`. Inspect the current code, versions, and worktree before editing; preserve unrelated changes. Complete this milestone and stop before milestone 6.
 
 ## Prerequisites
 
 Task leases, cancellation, model budgets, and route configuration are functional. Inspect available container tooling and agent versions; do not assume installed names establish protocol compatibility.
+
+## SDK and runtime boundary
+
+Use the official ACP Python SDK behind `AgentSession` for framing, schema models, initialization/capabilities, permission callbacks, session updates, cancellation, and advertised resume. Pin a Python 3.12-compatible release and test the selected real agent. Sandbox/process ownership, fencing, resource limits, and publication remain Harnessa responsibilities. Apply milestone 4’s runtime decision; do not build a second checkpoint owner. SDK use must still bound frames/output and handle process failure. If the ADR is GO, integrate the selected run-level graph backend before agent dispatch, with its checkpoint schema migration, drained old runs, idempotent event projection and rollback rehearsal; re-run the milestone 4 conformance suite through this production adapter. If NO-GO, retain the existing scheduler and verify the ACP adapter against it. Do not implement two active checkpoint owners.
 
 ## Implement
 
@@ -23,8 +27,10 @@ Task leases, cancellation, model budgets, and route configuration are functional
 - Isolation checks prove no host checkout, other task workspace, secret, or engine socket is accessible.
 - Lease expiry prevents stale artifact/state publication; cancellation terminates owned processes; cleanup preserves artifacts required for audit.
 
-Write sandbox policy, agent compatibility/setup instructions, and `docs/milestones/04.md`. Distinguish protocol fixture success, real agent execution, and provider-backed evidence.
+Write sandbox policy, agent compatibility/setup instructions, and `docs/milestones/05.md`. Distinguish protocol fixture success, real agent execution, and provider-backed evidence.
 
-## Archive this planning step
+## Delivery contract
 
-After every acceptance criterion above is met and `docs/milestones/04.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.
+Own only the subsystem named by this prompt and its existing adapters/UI projections. Preserve the shared authority, contract-generation, cost, recovery, and retention rules in `planning/architecture-decisions.md`. Produce the implementation, focused acceptance evidence, updated compatibility/setup notes, and `docs/milestones/05.md`. Record offline versus live results separately, exact versions/configuration and source revisions, pending external setup, recovery/rollback commands, and the next milestone’s prerequisites. Missing required evidence keeps the milestone active.
+
+Apply the archive lifecycle in `planning/README.md` only after acceptance is evidenced; the future archive target is `planning/archive/completed/05-acp-execution.md`. Never run the next milestone as part of this request.

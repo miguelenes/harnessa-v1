@@ -1,6 +1,6 @@
 # Harnessa
 
-A self-hosted repository-change control plane. Milestone 1 established the modular monorepo, server-owned contracts, project-scoped identity, and explicit repository registration. Milestone 2 adds durable task orchestration, audit history, outbox events, worker leases, and recovery APIs. No real agent/provider adapter or later product views are included yet.
+A self-hosted repository-change control plane. Milestone 1 established the modular monorepo, server-owned contracts, project-scoped identity, and explicit repository registration. Milestone 2 adds durable task orchestration, audit history, outbox events, worker leases, and recovery APIs. Milestone 3 adds a private LiteLLM gateway with explicit routing, capability checks, budget reservations, and a redacted request ledger. The coding-agent runner and later product views are not included yet.
 
 ## Start locally
 
@@ -15,13 +15,13 @@ Requirements: Podman with `podman compose` (or Docker Compose), network access f
 
    Keep `DATABASE_URL`'s password in sync with `POSTGRES_PASSWORD`. `REPOSITORY_TARGETS` is a comma-separated allowlist of exact IDs, for example `acme/service-a,acme/service-b`. The default development API and web ports are 8010 and 3000; set `API_PORT` or `WEB_PORT` if needed. Keep `ALLOWED_ORIGINS` aligned with the web origin. For HTTPS deployments set `COOKIE_SECURE=true` and configure a TLS-terminating reverse proxy.
 
-2. Build and start the four services:
+2. Build and start the six services:
 
    ```sh
    podman compose -f infra/compose.yaml up --build -d
    ```
 
-The API automatically applies Alembic migrations before it starts. The separate worker publishes durable events, reconciles effect intents, and recovers expired leases; it does not claim tasks until a real execution adapter is configured. Check `http://localhost:${API_PORT}/health/live`, `http://localhost:${API_PORT}/health/ready`, and `http://localhost:${WEB_PORT}`.
+The API automatically applies Alembic migrations before it starts. The LiteLLM Proxy uses `infra/litellm/config.yaml`; its default model list is empty and makes no provider calls. Provider keys, when configured, are passed only to LiteLLM, which is the only service with provider egress. The separate worker publishes durable events, reconciles effect intents and stale model reservations, and recovers expired leases; it does not claim tasks until a real execution adapter is configured. Check `http://localhost:${API_PORT}/health/live`, `http://localhost:${API_PORT}/health/ready`, and `http://localhost:${WEB_PORT}`.
 
 3. Bootstrap the first administrator once. Use the configured token and a password of at least 12 characters:
 
@@ -60,6 +60,8 @@ pnpm contracts:generate
 ```
 
 `pnpm contracts:generate` reads the running API OpenAPI document at `http://localhost:8010/openapi.json` by default. Set `HARNESSA_API_URL` to use another URL. Generated files live in `packages/contracts/src/generated.ts` and must not be hand-edited.
+
+Model gateway configuration, status, usage, request history, and project budget routes are documented in [the architecture](docs/architecture.md). Configure provider keys only in your local `.env`, add an explicit model entry to `infra/litellm/config.yaml`, and register a matching account/deployment/alias/pool route through the administrator API. The credential-free doctor endpoint is `GET /ops/models/doctor`; the explicitly invoked paid compatibility check is `POST /projects/{project_id}/models/live-check` and requires both an administrator session and `authorize_paid_request: true`. No model call is made by startup, health checks, or the doctor.
 
 The integration suite requires disposable real PostgreSQL and Redis services. Start Compose, create a database ending in `_test`, and run it against PostgreSQL plus Redis database 1:
 

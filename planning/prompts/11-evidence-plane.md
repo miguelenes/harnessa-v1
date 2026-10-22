@@ -1,6 +1,10 @@
-# Prompt 11 — Cross-system evidence and result provenance
+# Prompt 11 of 13 — Cross-system evidence and result provenance
 
-Implement the first post-release evolution milestone for Harnessa only after prompt 10 is integrated and `docs/milestones/10.md` records its completion evidence. Read `planning/revised-specification.md`, `planning/README.md`, all applicable prompts, `docs/architecture.md`, `docs/compatibility.md`, and `docs/milestones/01.md` through `10.md`. Inspect the current code and live repository state before changing anything. Preserve unrelated work and do not assume any external integration is complete unless its evidence exists.
+Implement milestone 11 only after milestones 1–10 have completion evidence. Read the revised specification, `planning/architecture-decisions.md`, the planning index, and reports `docs/milestones/01.md` through `10.md`. Inspect the current code, versions, and worktree before editing; preserve unrelated changes. Complete this milestone and stop before milestone 12.
+
+## Prerequisites and owned scope
+
+All milestones through 10 have completed acceptance evidence. The existing task, authorization, artifact and model-budget services are operational. Extend the named subsystem through its current ports; use the shared decisions for failure/recovery, retention and cost rules. External services require configured access; deterministic fixtures cover unavailable integrations.
 
 ## Goal
 
@@ -16,10 +20,14 @@ Before implementation, write a concise current-state matrix in `docs/integration
 - **AG-UI:** map durable domain/run events to protocol events and record stream cursor/replay information. AG-UI is a browser-facing projection; it never authorizes a mutation or replaces durable event storage.
 - **MCP and skills:** record the server/tool identity and revision or digest, authorization scope, invocation/result references, and skill source/revision used to construct the agent context. Never treat retrieved or tool-returned text as policy.
 
+## Core evidence before framework evolution
+
+Extend the core evidence envelope defined before execution rather than introducing a new event authority. Existing task, request, invocation and artifact IDs remain stable. Complete core delivery/GitHub/AG-UI joins now; provide versioned fixture contracts for later Harness², skill, A2A and Jev sources. Later milestones add real adapters and acceptance traces as their integrations land. Never require future milestone execution to complete this milestone.
+
 ## Implement
 
-1. Define a versioned evidence envelope and typed links among organization, project, repository, task, task revision, run, attempt, model request, tool invocation, webhook delivery, Git effect, artifact, evaluation, harness revision, and skill revision. Include stable IDs, source, occurred/recorded times, correlation/causation, idempotency key where applicable, content hash, sensitivity/redaction state, and schema version. Use nullable/unknown values instead of fabricated defaults.
-2. Implement adapters that ingest metadata and artifact references from LiteLLM, Harness², GitHub, and AG-UI without conflating their IDs or trust levels. Deduplicate repeated imports and webhook deliveries. Retain raw payloads only when required, encrypted/access-controlled and under explicit retention; default to minimized metadata and redacted content.
+1. Extend and version the shared core evidence envelope and typed links among organization, project, repository, task, task revision, run, attempt, model request, tool invocation, webhook delivery, Git effect, artifact, evaluation, harness revision, and skill revision. Include stable IDs, source, occurred/recorded times, correlation/causation, idempotency key where applicable, content hash, sensitivity/redaction state, and schema version. Use nullable/unknown values instead of fabricated defaults.
+2. Implement adapters that ingest metadata and artifact references from LiteLLM, GitHub, and AG-UI; define fixture-tested Harness² import contracts for milestone 12 without conflating their IDs or trust levels. Deduplicate repeated imports and webhook deliveries. Retain raw payloads only when required, encrypted/access-controlled and under explicit retention; default to minimized metadata and redacted content.
 3. Preserve exact request, attempt, and result semantics: one agent run may produce multiple model requests, retries, MCP calls, and Git effects. Track provider-reported, gateway-recorded, estimated, reconciled, and unknown spend separately. Do not equate stream events, webhook deliveries, model calls, or benchmark scores with completed task outcomes.
 4. Add read APIs and a provenance view to the existing event/task inspector. Support filters by task/run/source/revision and show evidence gaps, stale head/revision, redaction, import status, and reconciliation status. Use project authorization and cursor-based pagination. Do not add raw chain-of-thought display or expose secrets.
 5. Add operational reconciliation for missing/late gateway usage, webhook delivery replay, artifact checksum mismatch, and failed imports. Reconciliation must be idempotent, bounded, auditable, and unable to repeat external writes. Preserve original evidence when a corrected/reconciled record arrives.
@@ -27,7 +35,7 @@ Before implementation, write a concise current-state matrix in `docs/integration
 
 ## Acceptance
 
-- A complete task can be traced from its READY specification/base SHA through agent run, all model requests and tool calls, GitHub PR/check events, AG-UI activity projection, verification evidence, evaluation, and terminal outcome.
+- A complete core-delivery task can be traced from its READY specification/base SHA through agent run, all model requests and tool calls, GitHub PR/check events, AG-UI activity projection, verification evidence, available evaluation records, and terminal outcome. Harness² imports use deterministic fixtures until milestone 12 supplies real runs; missing future integrations are explicit gaps, not completion blockers for this core trace.
 - Replayed webhooks, duplicate gateway records, stream reconnect/replay, worker retry, and repeated imports do not duplicate domain transitions or external effects.
 - Every displayed result names its source and exact revisions/SHAs; stale or unknown evidence is visibly marked and cannot satisfy a current acceptance gate.
 - Budget reconciliation distinguishes gateway/provider actuals from Harnessa reservations and estimates; missing usage remains unknown and alerts do not fabricate zero spend.
@@ -40,3 +48,9 @@ Write `docs/integrations/evidence-plane.md`, update architecture/compatibility d
 
 - [LiteLLM gateway and spend logs](https://docs.litellm.ai/docs/simple_proxy), [Harness² upstream](https://github.com/google-research/harness2), [GitHub webhook best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks), [GitHub signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries), and [AG-UI event model](https://docs.ag-ui.com/sdk/python/core/events).
 - Pin versions and verify current interfaces/capabilities against those versions. Documentation links are discovery references, not runtime compatibility guarantees.
+
+## Delivery contract
+
+Own only the subsystem named by this prompt and its existing adapters/UI projections. Preserve the shared authority, contract-generation, cost, recovery, and retention rules in `planning/architecture-decisions.md`. Produce the implementation, focused acceptance evidence, updated compatibility/setup notes, and `docs/milestones/11.md`. Record offline versus live results separately, exact versions/configuration and source revisions, pending external setup, recovery/rollback commands, and the next milestone’s prerequisites. Missing required evidence keeps the milestone active.
+
+Apply the archive lifecycle in `planning/README.md` only after acceptance is evidenced; the future archive target is `planning/archive/completed/11-evidence-plane.md`. Never run the next milestone as part of this request.

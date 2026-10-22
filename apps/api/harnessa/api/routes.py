@@ -19,6 +19,7 @@ from harnessa.db.models import (
     IdempotencyRecord,
 )
 from harnessa.db.session import get_db
+from harnessa.db.model_gateway import ModelPool
 from harnessa.auth.users import current_active_user, fastapi_users, auth_backend
 from harnessa.services.authorization import require_membership
 from harnessa.contracts import (
@@ -62,6 +63,25 @@ async def bootstrap(body: BootstrapUser, request: Request, db: AsyncSession = De
     db.add_all([user, org])
     await db.flush()
     db.add(Membership(organization_id=org.id, user_id=user.id, role="administrator"))
+    db.add_all(
+        [
+            ModelPool(
+                organization_id=org.id,
+                name="interactive/primary",
+                kind="interactive",
+                max_concurrency=settings.model_interactive_concurrency,
+                interactive_reserve=settings.model_interactive_reserve,
+            ),
+            ModelPool(
+                organization_id=org.id,
+                name="probe/batch",
+                kind="probe",
+                max_concurrency=settings.model_interactive_concurrency,
+                interactive_reserve=settings.model_interactive_reserve,
+                probe_overflow_limit=settings.model_probe_overflow_limit,
+            ),
+        ]
+    )
     await db.commit()
     return {"id": str(user.id), "email": user.email, "organization_id": str(org.id)}
 

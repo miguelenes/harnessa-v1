@@ -12,6 +12,7 @@ from redis.asyncio import Redis
 from harnessa.config import settings
 from harnessa.api.routes import router
 from harnessa.api.task_routes import router as task_router
+from harnessa.api.model_routes import router as model_router
 from harnessa.contracts import (
     ArtifactMetadata,
     AuthorizationContext,
@@ -31,6 +32,18 @@ from harnessa.contracts import (
     DispatchRebuildResult,
     SpecificationRevision,
     TaskState,
+    ModelRouteRequest,
+    ModelProviderAccountRead,
+    ModelDeploymentRead,
+    ModelAliasRead,
+    ModelPoolRead,
+    ModelBudgetPolicyRead,
+    ModelUsageRead,
+    ModelDoctorRead,
+    ModelLiveCheckRead,
+    ModelGatewayConfiguration,
+    ModelInvocationRead,
+    ModelRequestLedgerRead,
 )
 
 
@@ -70,6 +83,18 @@ CONTRACT_MODELS = (
     DispatchRebuildResult,
     SpecificationRevision,
     ArtifactMetadata,
+    ModelRouteRequest,
+    ModelProviderAccountRead,
+    ModelDeploymentRead,
+    ModelAliasRead,
+    ModelPoolRead,
+    ModelBudgetPolicyRead,
+    ModelUsageRead,
+    ModelDoctorRead,
+    ModelLiveCheckRead,
+    ModelGatewayConfiguration,
+    ModelInvocationRead,
+    ModelRequestLedgerRead,
 )
 
 
@@ -196,6 +221,7 @@ async def validation_error(request: Request, exc: RequestValidationError):
 
 app.include_router(router)
 app.include_router(task_router)
+app.include_router(model_router)
 
 
 @app.get("/health/live", tags=["health"])
@@ -212,6 +238,14 @@ async def ready(request: Request):
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
         await request.app.state.redis.ping()
+        if settings.model_gateway_url:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.get(
+                    f"{settings.model_gateway_url.rstrip('/')}/health/readiness"
+                )
+                response.raise_for_status()
     except Exception:
         return JSONResponse({"status": "unavailable"}, status_code=503)
     return {"status": "ready"}

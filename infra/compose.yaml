@@ -2,8 +2,11 @@ name: harnessa
 services:
   db:
     image: postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
-    env_file:
-      - ../.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-harnessa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-harnessa}
+      POSTGRES_DB: ${POSTGRES_DB:-harnessa}
+    networks: [app_internal]
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
     healthcheck:
@@ -20,14 +23,40 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    networks: [app_internal]
     ports:
       - "${REDIS_PORT:-6380}:6379"
   api:
     build:
       context: ..
       dockerfile: infra/api.Dockerfile
-    env_file:
-      - ../.env
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://harnessa:harnessa@db:5432/harnessa}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SECRET_KEY: ${SECRET_KEY:-}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      REPOSITORY_TARGETS: ${REPOSITORY_TARGETS:-}
+      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-4}
+      RUN_LEASE_SECONDS: ${RUN_LEASE_SECONDS:-30}
+      RUN_HEARTBEAT_SECONDS: ${RUN_HEARTBEAT_SECONDS:-10}
+      RUN_MAX_ATTEMPTS: ${RUN_MAX_ATTEMPTS:-3}
+      RUN_MAX_WALL_SECONDS: ${RUN_MAX_WALL_SECONDS:-1800}
+      EVENT_RETENTION_DAYS: ${EVENT_RETENTION_DAYS:-30}
+      EVENT_REPLAY_LIMIT: ${EVENT_REPLAY_LIMIT:-500}
+      REDIS_STREAM_MAXLEN: ${REDIS_STREAM_MAXLEN:-10000}
+      MODEL_GATEWAY_URL: http://litellm:4000
+      MODEL_MAX_ATTEMPTS: ${MODEL_MAX_ATTEMPTS:-3}
+      MODEL_HTTP_TIMEOUT_SECONDS: ${MODEL_HTTP_TIMEOUT_SECONDS:-60}
+      MODEL_COOLDOWN_SECONDS: ${MODEL_COOLDOWN_SECONDS:-30}
+      MODEL_MAX_RETRY_AFTER_SECONDS: ${MODEL_MAX_RETRY_AFTER_SECONDS:-15}
+      MODEL_RESERVATION_LEASE_SECONDS: ${MODEL_RESERVATION_LEASE_SECONDS:-180}
+      MODEL_INTERACTIVE_CONCURRENCY: ${MODEL_INTERACTIVE_CONCURRENCY:-4}
+      MODEL_INTERACTIVE_RESERVE: ${MODEL_INTERACTIVE_RESERVE:-2}
+      MODEL_PROBE_OVERFLOW_LIMIT: ${MODEL_PROBE_OVERFLOW_LIMIT:-0}
+    networks: [app_internal]
     command: ["sh", "-c", "cd apps/api && uv run --no-sync alembic upgrade head && uv run --no-sync uvicorn harnessa.main:app --host 0.0.0.0 --port 8000"]
     ports:
       - "${API_PORT:-8010}:8000"
@@ -41,6 +70,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      litellm:
+        condition: service_healthy
   web:
     build:
       context: ..
@@ -53,15 +84,65 @@ services:
       - "${WEB_PORT:-3000}:3000"
     depends_on:
       - api
+    networks: [app_internal]
   worker:
     build:
       context: ..
       dockerfile: infra/api.Dockerfile
-    env_file:
-      - ../.env
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://harnessa:harnessa@db:5432/harnessa}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SECRET_KEY: ${SECRET_KEY:-}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      REPOSITORY_TARGETS: ${REPOSITORY_TARGETS:-}
+      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-4}
+      RUN_LEASE_SECONDS: ${RUN_LEASE_SECONDS:-30}
+      RUN_HEARTBEAT_SECONDS: ${RUN_HEARTBEAT_SECONDS:-10}
+      RUN_MAX_ATTEMPTS: ${RUN_MAX_ATTEMPTS:-3}
+      RUN_MAX_WALL_SECONDS: ${RUN_MAX_WALL_SECONDS:-1800}
+      EVENT_RETENTION_DAYS: ${EVENT_RETENTION_DAYS:-30}
+      EVENT_REPLAY_LIMIT: ${EVENT_REPLAY_LIMIT:-500}
+      REDIS_STREAM_MAXLEN: ${REDIS_STREAM_MAXLEN:-10000}
+      MODEL_GATEWAY_URL: http://litellm:4000
+      MODEL_MAX_ATTEMPTS: ${MODEL_MAX_ATTEMPTS:-3}
+      MODEL_HTTP_TIMEOUT_SECONDS: ${MODEL_HTTP_TIMEOUT_SECONDS:-60}
+      MODEL_COOLDOWN_SECONDS: ${MODEL_COOLDOWN_SECONDS:-30}
+      MODEL_MAX_RETRY_AFTER_SECONDS: ${MODEL_MAX_RETRY_AFTER_SECONDS:-15}
+      MODEL_RESERVATION_LEASE_SECONDS: ${MODEL_RESERVATION_LEASE_SECONDS:-180}
+      MODEL_INTERACTIVE_CONCURRENCY: ${MODEL_INTERACTIVE_CONCURRENCY:-4}
+      MODEL_INTERACTIVE_RESERVE: ${MODEL_INTERACTIVE_RESERVE:-2}
+      MODEL_PROBE_OVERFLOW_LIMIT: ${MODEL_PROBE_OVERFLOW_LIMIT:-0}
+    networks: [app_internal]
     command: ["uv", "run", "--no-sync", "python", "-m", "harnessa.worker"]
     depends_on:
       api:
         condition: service_healthy
+      litellm:
+        condition: service_healthy
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.83.3-stable@sha256:1bc003a50e5c9177909975e1523cf780a5f385c76216e26e96c50fb02611209f
+    command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "__import__('urllib.request',fromlist=['urlopen']).urlopen('http://127.0.0.1:4000/health/readiness',timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [app_internal, provider_egress]
 volumes:
   pgdata: {}
+networks:
+  app_internal:
+    internal: true
+  provider_egress: {}

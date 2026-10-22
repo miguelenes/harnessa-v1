@@ -1,48 +1,52 @@
 # Harnessa: specification and implementation prompts
 
-This index tracks the Harnessa implementation prompts and completed milestone evidence. Milestones 1 and 2 are the only milestones with completion reports and archived prompts; later work may be in progress but is not complete until its evidence is recorded.
+This index tracks the Harnessa implementation prompts and completed milestone evidence. Milestones 1–3 have completion reports and archived prompts; later work may be in progress but is not complete until its evidence is recorded.
 
 Start with [the revised specification](revised-specification.md), then execute the prompts below in order in the same repository. Each prompt names its prerequisites and includes implementation scope and acceptance criteria. They are separate implementation requests, not concurrent agent assignments.
 
-Prompts 1–10 are the initial release sequence, which is why their headings say “of 10.” Prompts 11–16 are gated follow-on milestones and must not begin until milestone 10 is integrated and reported complete.
+Milestones 1–3 retain their original scope and identifiers. Milestones 4–13 complete the initial release; 14–17 extend it. Historical prompts 1–3 retain their original “of 10” titles. Active release prompts use the revised boundary at 13.
 
-See [the integration assessment](integration-assessment.md) for shared boundaries and sequencing rationale for prompts 11–16.
+Read [shared planning decisions](architecture-decisions.md) for runtime ownership, SDK choices, evidence, cost and recovery rules and [the integration assessment](integration-assessment.md) for protocol responsibilities. Every milestone requires actual completion evidence for all earlier milestones; report presence alone is insufficient. Verify milestone 3's report and acceptance before beginning milestone 4, including any required checks still pending in the working tree.
 
 | Order | Copy-ready prompt | Working outcome |
 | --- | --- | --- |
 | 1 | [Foundation, contracts, and access control](archive/completed/01-foundation.md) — **archived complete** | Runnable application skeleton, pinned dependencies, migrations, authentication, project authorization |
 | 2 | [Durable orchestration and task lifecycle](archive/completed/02-orchestration.md) — **archived complete** | Crash-safe tasks, events, leases, bounded retries, cancellation |
-| 3 | [LiteLLM routing and spend controls](prompts/03-model-gateway.md) | Interactive/primary and probe/batch pools, explicit fallbacks, budget reservations, request ledger |
-| 4 | [Isolated workspaces and ACP execution](prompts/04-acp-execution.md) | One real coding agent running safely, capability checks, resumable run records |
-| 5 | [Web workspace and AG-UI streaming](prompts/05-web-ag-ui.md) | Live board, task inspector, reconnectable agent activity and interview UI |
-| 6 | [OpenSpec discovery and clarification](prompts/06-openspec.md) | Topic → interview → validated frozen specification → READY |
-| 7 | [Implementation, verification, and review](prompts/07-verification-review.md) | READY → isolated implementation → evidence-backed local review bundle |
-| 8 | [GitHub synchronization and completion](prompts/08-github.md) | Issues, authorized answers, PRs, check reconciliation, merge and archive workflow |
-| 9 | [Harness² adaptation and learning](prompts/09-harness-learning.md) | Bounded propose/probe/compose, isolated evaluations, governed harness promotion |
-| 10 | [Complete control plane and release](prompts/10-release.md) | All six product views, operational tooling, acceptance evidence, self-hosted release |
-| 11 | [Cross-system evidence and result provenance](prompts/11-evidence-plane.md) | Correlated, immutable evidence spanning LiteLLM, Harness², GitHub, AG-UI, MCP, and skills |
-| 12 | [Governed retrieval and MCP context](prompts/12-retrieval-mcp.md) | Permission-aware RAG and scoped tools grounded in versioned repository and run evidence |
-| 13 | [Measured skill and harness evolution](prompts/13-skill-evolution.md) | Evidence-derived candidates, isolated evaluations, controlled promotion and rollback |
-| 14 | [Governed agent-to-agent delegation](prompts/14-agent-delegation.md) | Durable, budgeted delegation across ACP agents and optional remote A2A agents |
-| 15 | [Structured decision workflows with Jev](prompts/15-jev-decision-workflows.md) | Typed, evaluated decisions for routing, workflow branching, review, and cost control |
-| 16 | [End-to-end LiteLLM integration and optimization](prompts/16-litellm-end-to-end.md) | Version-pinned gateway operations, refreshed zero-price model inventory, Qdrant, caching, compression, evaluations, routing, A2A, and measured cost/quality controls |
+| 3 | [LiteLLM routing and spend controls](archive/completed/03-model-gateway.md) — **archived complete** | Interactive/primary and probe/batch pools, explicit fallbacks, budget reservations, request ledger |
+| 4 | [Run orchestration decision](prompts/04-runtime-decision.md) | LangGraph parity spike and ADR |
+| 5 | [Isolated workspaces and ACP execution](prompts/05-acp-execution.md) | ACP SDK, trusted runner and safe execution |
+| 6 | [OpenSpec discovery and clarification](prompts/06-openspec.md) | Topic to validated READY through APIs |
+| 7 | [Governed retrieval and MCP](prompts/07-retrieval-mcp.md) | LlamaIndex/Qdrant pilot, lexical fallback and scoped tools |
+| 8 | [Web control plane and AG-UI](prompts/08-web-ag-ui.md) | Real API-backed UI, typed events and replay |
+| 9 | [Implementation, verification and review](prompts/09-verification-review.md) | Revision-bound implementation and independent verification |
+| 10 | [GitHub synchronization and completion](prompts/10-github.md) | Authorized issue/PR workflow and reconciled effects |
+| 11 | [Cross-system evidence and provenance](prompts/11-evidence-plane.md) | Core delivery joins and future-source contracts |
+| 12 | [Harness² adaptation and learning](prompts/12-harness-learning.md) | Matched baseline/candidate/composed evaluation |
+| 13 | [Complete control plane and release](prompts/13-release.md) | All views, operations, restore and clean-install acceptance |
+| 14 | [Measured skill and harness evolution](prompts/14-skill-evolution.md) | Scoped candidates, evaluation, promotion and rollback |
+| 15 | [Governed A2A delegation](prompts/15-agent-delegation.md) | Bounded parent/child execution |
+| 16 | [Structured decisions with Jev](prompts/16-jev-decision-workflows.md) | Evaluated routing and workflow decisions |
+| 17 | [End-to-end LiteLLM optimization](prompts/17-litellm-end-to-end.md) | Model inventory, cache, compression, evals and operations |
 
 ## How to use
 
-Give the implementation agent one prompt file at a time, with access to this directory and the application repository. Each prompt instructs the agent to read the revised specification and previous milestone evidence. Prompts 11–16 extend the initial product release with evidence, interoperability, improvement, structured decisions, and complete LiteLLM integration; they do not replace or silently widen prompt 10. Do not execute the attached source document's Google AI Studio instructions as an additional task.
+Give the implementation agent one prompt at a time, with the revised specification, shared decisions and current evidence. Preserve existing domain and adapter contracts. Required external blockers remain explicit; optional live checks are recorded separately. Follow-on milestones 14–17 require the completed milestone 13 release.
 
-For each milestone, require working code, focused verification, and `docs/milestones/NN.md` recording exact commands, outcomes, limitations, and the next milestone's prerequisites. Carry unresolved prerequisites forward explicitly. Never turn a blocked external integration into a fabricated success.
+## Renumbering map
+
+Previous prompt → current prompt: 4→5, 5→8, 6→6, 7→9, 8→10, 9→12, 10→13, 11→11, 12→7, 13→14, 14→15, 15→16, 16→17. Prompt 4 is new. Use current numbers for execution and future reports. Completed reports and archived prompt contents remain historical records.
 
 ## Per-step archive lifecycle
 
 A planning prompt is archived only after its implementation milestone meets its acceptance criteria and its `docs/milestones/NN.md` report records actual evidence, limitations, and follow-up prerequisites. At that point, move the prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents, update the matching index row here to link to the archived prompt and mark it **archived complete**, and leave later prompts active. Do not archive a milestone that is blocked, partially complete, or merely started; record that state in its milestone report and keep the prompt active. Keep `planning/revised-specification.md` and this index as the active planning references.
 
-Milestones 1 and 2 have met this archive condition: their prompts are preserved in `planning/archive/completed/`, their index rows are marked **archived complete**, and their evidence is recorded in `docs/milestones/01.md` and `docs/milestones/02.md`. Milestones 3–10 remain active until their own acceptance evidence is recorded. Prompts 11–16 depend on the completed milestone 10 release and then follow their listed order. Prompt 16 reconciles and completes LiteLLM work from prompt 3 and connected contracts from prompts 11–15; it must extend those systems rather than create parallel model, retrieval, evaluation, decision, or delegation services.
+Milestones 1–3 retain their currently recorded archive status and report paths. Milestones 4–17 remain active until their own acceptance evidence is recorded. Recheck current reports rather than inferring completion from file presence or from this index.
+
 
 The revised specification supersedes conflicting technical details in the source attachment. It preserves the product's seven pillars, ten board columns, six main views, and autonomous execution intent. The original attachment remains unchanged at `/home/menes/Downloads/acp_orchestrator_harness2_self_learning_platform_specification.md`.
 
 AG-UI is recommended for agent-to-browser interaction. It reduces custom message/tool/state streaming work; it does not supply the scheduler, durable workflow engine, GitHub synchronization, sandbox, or learning engine. No complete third-party chat framework is required.
 
-The web product must have a deliberate Harnessa brand and a documented UI system. Use the selected component framework as the source of reusable interaction patterns; do not assemble each screen from unrelated one-off controls. Generate suitable visual assets (such as a brand illustration or photographic artwork) with the image-generation capability when they improve the product, while keeping logos, icons, and other geometry crisp and maintainable as project-native SVG/vector assets unless a raster treatment is explicitly appropriate. See the brand and asset requirements in the revised specification and milestones 1, 5, and 10.
+The web product must have a deliberate Harnessa brand and a documented UI system. Use the selected component framework as the source of reusable interaction patterns; do not assemble each screen from unrelated one-off controls. Generate suitable visual assets (such as a brand illustration or photographic artwork) with the image-generation capability when they improve the product, while keeping logos, icons, and other geometry crisp and maintainable as project-native SVG/vector assets unless a raster treatment is explicitly appropriate. See the brand and asset requirements in the revised specification and milestones 1, 8, and 13.
 
 Research links and the rationale for technical corrections are in the revised specification. Dependencies must be checked and pinned during implementation; this plan does not assert that all proposed agent/provider combinations are supported today.

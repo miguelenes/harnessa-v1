@@ -1,6 +1,6 @@
 # Integration assessment: model, tool, agent, and user protocols
 
-This assessment extends the initial ten Harnessa milestones. It does not claim those milestones are implemented or verified; current local evidence covers only milestones 1 and 2. Recheck upstream versions and interfaces when implementing because provider products and protocols change.
+This assessment supports initial release through milestone 13 and evolution in 14–17. Check the current index and actual milestone reports for completion status; draft reports and missing acceptance evidence cannot authorize execution. Verify upstream interfaces at implementation time.
 
 ## The shared integration point
 
@@ -39,7 +39,7 @@ The common foundation is a **versioned evidence and provenance graph** with stab
 
 **MCP opportunity:** LiteLLM's MCP Gateway can centralize server access and key/team-level controls. Treat that as an additional access layer, not a replacement for project grants or domain authorization. For mutation tools, have the server call Harnessa's existing command/effect-intent service.
 
-**End-to-end optimization:** prompt 16 audits the exact pinned LiteLLM build and configures the supported capabilities that fit Harnessa's workloads. It joins model discovery and zero-price eligibility, provider credentials, task routes and spend ceilings, cache policies, Qdrant retrieval, compression/guardrails, evaluations, observability, and the Agent Gateway into one evidence-backed operating model. It owns a versioned feature applicability matrix (enabled, opt-in, deferred, or unsupported for the pinned build) and a repeatable refresh/reconciliation process. LiteLLM's model price map is useful for discovery, but a listed $0 rate does not prove the user's account has quota, that access is enabled, or that provider terms permit the workload. Therefore, track public zero-price metadata, verified account quota, and local models with no provider fee as distinct states.
+**End-to-end optimization:** prompt 17 audits the exact pinned LiteLLM build and configures the supported capabilities that fit Harnessa's workloads. It joins model discovery and zero-price eligibility, provider credentials, task routes and spend ceilings, cache policies, Qdrant retrieval, compression/guardrails, evaluations, observability, and the Agent Gateway into one evidence-backed operating model. It owns a versioned feature applicability matrix (enabled, opt-in, deferred, or unsupported for the pinned build) and a repeatable refresh/reconciliation process. LiteLLM's model price map is useful for discovery, but a listed $0 rate does not prove the user's account has quota, that access is enabled, or that provider terms permit the workload. Therefore, track public zero-price metadata, verified account quota, and local models with no provider fee as distinct states.
 
 **Qdrant and cache boundary:** Harnessa RAG collections hold permission-filtered source chunks with revision and citation provenance. LiteLLM semantic-cache entries are response-reuse records with their own namespace, metadata, and invalidation policy. Do not treat a cache hit as retrieval evidence, share cache entries across projects/teams by default, or apply semantic response reuse to stateful agent/tool traffic without a passing false-hit evaluation. Evaluate deterministic exact-request cache policies where safe; provider prompt-prefix caching is a separate capability.
 
@@ -79,18 +79,11 @@ The common foundation is a **versioned evidence and provenance graph** with stab
 
 **Limits and evaluation:** TypeSafe describes Jev as early access and reports its own workflow comparisons against reference-model consensus, while noting possible workflow-author bias. Treat pricing, latency, confidence calibration, and accuracy as vendor claims until verified on Harnessa's tasks. Build a separately adjudicated gold set; compare Jev, deterministic rules, fixed-tier LLM, and Jev-plus-LLM cascade on the same frozen workflow. Measure task-level quality, selective coverage/abstention, escalation rate, calibration (for example Brier score/reliability bins), p50/p95 latency, retries, and all-in cost. Segment by task type and risk; do not promote routing on aggregate savings if high-risk strata regress.
 
-## Recommended prompt order
+## Dependency sequence
 
-1. **Prompt 11 — Evidence and provenance.** Establish source-specific adapters, join keys, replay/reconciliation, result lineage, and UI inspection. This gives RAG and learning a trustworthy substrate.
-2. **Prompt 12 — Governed retrieval and MCP.** Index only authorized, versioned sources; provide citations and manifests; scope tool access and bind mutations to existing authority. Lexical search should work without an embedding vendor.
-3. **Prompt 13 — Skill and harness evolution.** Derive candidates from verified evidence; compare against matched baselines in isolated environments; promote only under configured policy; retain rollback.
-4. **Prompt 14 — Governed agent delegation.** Extend local ACP capability records and add optional remote A2A delegation only where independent agent interoperability is useful; retain Harnessa-owned parent/child lifecycle, budgets, permissions, and evidence validation.
-5. **Prompt 15 — Structured Jev decisions.** Add versioned typed decision workflows and an evaluated cascade/routing layer after route and provenance contracts exist; make all thresholds and fallback policy application-owned.
-6. **Prompt 16 — End-to-end LiteLLM operations and optimization.** Complete the pinned gateway feature audit and integrate refreshed model eligibility, provider setup, Qdrant, cache and compression experiments, route selection, A2A, evaluations, spend reconciliation, and operational controls over the foundations established above. Measure all-in quality, latency, reliability, and cost before enabling optimizations by default.
+Follow the [index](README.md) and [shared decisions](architecture-decisions.md). Milestone 4 evaluates LangGraph and establishes the runtime decision/core evidence seam. Milestones 5–7 supply ACP execution, OpenSpec APIs and governed retrieval/MCP; 8 adds web/AG-UI; 9–10 complete local delivery and GitHub effects. Milestone 11 reconciles core evidence before milestone 12 Harness² adaptation and milestone 13 release acceptance. Future-source evidence uses fixtures until its own milestone lands.
 
-Do not start these prompts until milestone 10 has integrated the initial views and runtime contracts. If an earlier milestone creates equivalent features, reconcile the prompt scope and acceptance evidence instead of duplicating subsystems.
-
-Prompt 16 is not a request to turn on every LiteLLM feature. Provider APIs, add-ons, and beta features change independently; record applicability against the selected LiteLLM release and test exact configuration behavior before exposure. Keep Harnessa as the authority for project/repository grants, durable task lifecycle, parent/child delegation, overall budget reservation, acceptance, and promotion. LiteLLM remains the model/tool/agent gateway and per-request telemetry layer.
+Milestones 14–17 then deliver skill evolution, A2A delegation, Jev decisions and full LiteLLM optimization. They extend existing retrieval, model, evaluation and evidence services. Each milestone requires earlier completion evidence. Framework adoption follows the runtime ADR, which may retain the current scheduler. Gateways and model outputs cannot broaden Harnessa authority.
 
 ## Current source references
 

@@ -1,8 +1,12 @@
-# Prompt 13 — Measured skill and harness evolution
+# Prompt 14 — Measured skill and harness evolution
 
-Implement milestone 13 only after prompt 10 is complete and prompts 11 and 12 have delivered evidence provenance and governed retrieval/MCP. Read the revised specification, prompts 09–12, all milestone evidence, and current Harness² adapter. Preserve unrelated changes. Use the pinned upstream Harness² implementation through the established adapter; do not fork its algorithm or claim learning gains without measured results.
+Implement milestone 14 only after milestones 1–13 have completion evidence. Read the revised specification, `planning/architecture-decisions.md`, the planning index, and reports `docs/milestones/01.md` through `13.md`. Inspect the current code, versions, and worktree before editing; preserve unrelated changes. Complete this milestone and stop before milestone 15.
 
-Extend prompt 9's harness candidate, evaluation, promotion, rollback, Harness Studio, and experience lifecycle. Add skill-specific provenance and scope where needed, but reuse those existing contracts and interfaces rather than creating a parallel learning or promotion subsystem.
+Extend prompt 12's harness candidate, evaluation, promotion, rollback, Harness Studio, and experience lifecycle. Add skill-specific provenance and scope where needed, but reuse those existing contracts and interfaces rather than creating a parallel learning or promotion subsystem.
+
+## Prerequisites and owned scope
+
+Milestone 13 release acceptance and all preceding milestone reports are complete. Extend the named subsystem through its existing ports, budgets and evidence records; use `planning/architecture-decisions.md` for shared failure/recovery and authority rules. Provider/agent access and spending remain explicitly configured, with offline fixtures for unavailable services.
 
 ## Goal
 
@@ -28,9 +32,15 @@ Turn verified task outcomes into scoped, reviewable skill and harness candidates
 - Promotion and rollback are revisioned, authorized, idempotent, and auditable. Rollback restores the selected prior bundle and does not erase evidence.
 - Offline deterministic evaluation demonstrates lifecycle, isolation, manifests, and rollback without asserting real-world performance improvements.
 
-Write `docs/integrations/skill-evolution.md`, update the compatibility matrix with tested Harness² revisions/executors, and write `docs/milestones/13.md` with exact evidence and limitations. Archive this prompt only after all criteria have been met.
+Write `docs/integrations/skill-evolution.md`, update the compatibility matrix with tested Harness² revisions/executors, and write `docs/milestones/14.md` with exact evidence and limitations. Archive this prompt only after all criteria have been met.
 
 ## References to verify at implementation time
 
 - [Harness² upstream component model and Propose–Probe–Compose](https://github.com/google-research/harness2) and its [setup requirements](https://github.com/google-research/harness2/blob/main/docs/SETUP.md).
 - Verify upstream executor, component layout, benchmark support, setup/licensing, and result schema at the pinned commit. Keep Harnessa's policy and acceptance authority outside editable Harness² components.
+
+## Delivery contract
+
+Own only the subsystem named by this prompt and its existing adapters/UI projections. Preserve the shared authority, contract-generation, cost, recovery, and retention rules in `planning/architecture-decisions.md`. Produce the implementation, focused acceptance evidence, updated compatibility/setup notes, and `docs/milestones/14.md`. Record offline versus live results separately, exact versions/configuration and source revisions, pending external setup, recovery/rollback commands, and the next milestone’s prerequisites. Missing required evidence keeps the milestone active.
+
+Apply the archive lifecycle in `planning/README.md` only after acceptance is evidenced; the future archive target is `planning/archive/completed/14-skill-evolution.md`. Never run the next milestone as part of this request.

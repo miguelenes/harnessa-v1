@@ -1,10 +1,14 @@
-# Prompt 9 of 10 — Harness² adaptation and learning
+# Prompt 12 of 13 — Harness² adaptation and learning
 
-Implement milestone 9 of Harnessa. Read `planning/revised-specification.md` and milestone reports 01–08. Integrate pinned upstream Harness² through an adapter; do not replace it with a vaguely similar bespoke optimizer. Preserve unrelated work. Complete this milestone and stop before milestone 10.
+Implement milestone 12 only after milestones 1–11 have completion evidence. Read the revised specification, `planning/architecture-decisions.md`, the planning index, and reports `docs/milestones/01.md` through `11.md`. Inspect the current code, versions, and worktree before editing; preserve unrelated changes. Complete this milestone and stop before milestone 13.
 
 ## Prerequisites
 
 Exact-revision sandbox execution, interactive/primary and probe/batch routing, budget reservations, verification, immutable artifacts, and delivery outcomes work. Check upstream APIs/layout/licensing and executor compatibility before choosing the integration seam.
+
+## Evaluation and release handoff
+
+Provide the minimal reusable evaluation runner/manifests required for matched Harness² comparisons here. Milestone 13 completes the eval center and benchmark adapters; do not depend on that future UI or create another evaluator. Consume milestone 11 evidence contracts and extend the existing Harness Studio with real baseline/candidate/composed runs before release acceptance.
 
 ## Implement
 
@@ -23,8 +27,10 @@ Exact-revision sandbox execution, interactive/primary and probe/batch routing, b
 - Tests prove budget bounds, workspace isolation, prohibited-policy edits, held-out feedback separation, safe cancellation, and promotion rollback.
 - No automatically active global harness is created just because a task merged.
 
-Write `docs/harness-integration.md` and `docs/milestones/09.md`. State precisely which behavior is upstream, which is product policy, and which real combinations remain unverified.
+Write `docs/harness-integration.md` and `docs/milestones/12.md`. State precisely which behavior is upstream, which is product policy, and which real combinations remain unverified.
 
-## Archive this planning step
+## Delivery contract
 
-After every acceptance criterion above is met and `docs/milestones/09.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.
+Own only the subsystem named by this prompt and its existing adapters/UI projections. Preserve the shared authority, contract-generation, cost, recovery, and retention rules in `planning/architecture-decisions.md`. Produce the implementation, focused acceptance evidence, updated compatibility/setup notes, and `docs/milestones/12.md`. Record offline versus live results separately, exact versions/configuration and source revisions, pending external setup, recovery/rollback commands, and the next milestone’s prerequisites. Missing required evidence keeps the milestone active.
+
+Apply the archive lifecycle in `planning/README.md` only after acceptance is evidenced; the future archive target is `planning/archive/completed/12-harness-learning.md`. Never run the next milestone as part of this request.

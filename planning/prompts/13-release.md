@@ -1,10 +1,10 @@
-# Prompt 10 of 10 — Complete control plane and self-hosted release
+# Prompt 13 of 13 — Complete control plane and self-hosted release
 
-Complete Harnessa end to end. Read `planning/revised-specification.md`, all prior milestone reports, and the current code. Preserve unrelated work. Audit actual behavior against every product requirement; a completed checklist without evidence is not sufficient.
+Implement milestone 13 only after milestones 1–12 have completion evidence. Read the revised specification, `planning/architecture-decisions.md`, the planning index, and reports `docs/milestones/01.md` through `12.md`. Inspect the current code, versions, and worktree before editing; preserve unrelated changes. Complete this milestone and stop before milestone 14.
 
 ## Prerequisites
 
-Milestones 1–9 are integrated. Identify and repair missing integration work within this release scope. Surface external credential/provider/repository constraints explicitly rather than hiding them behind demo data.
+Milestones 1–12 are integrated with their completion evidence. Identify and repair missing integration work within this release scope. Surface external credential/provider/repository constraints explicitly rather than hiding them behind demo data.
 
 ## Implement
 
@@ -25,8 +25,10 @@ Milestones 1–9 are integrated. Identify and repair missing integration work wi
 - Restore a backup into a fresh instance and prove task/artifact/provenance continuity.
 - Every required scenario has evidence or is explicitly listed as an external release blocker. No unsupported integration is advertised as verified.
 
-Write `docs/acceptance-report.md`, operator/setup/recovery guides, the final compatibility matrix, and `docs/milestones/10.md`. Return what ships, exact verification results, remaining blockers, and user-run setup steps. Prepare a reviewable release; do not publish or deploy to an external environment without existing authorization.
+Write `docs/acceptance-report.md`, operator/setup/recovery guides, the final compatibility matrix, and `docs/milestones/13.md`. Return what ships, exact verification results, remaining blockers, and user-run setup steps. Prepare a reviewable release; do not publish or deploy to an external environment without existing authorization.
 
-## Archive this planning step
+## Delivery contract
 
-After every acceptance criterion above is met and `docs/milestones/10.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.
+Own only the subsystem named by this prompt and its existing adapters/UI projections. Preserve the shared authority, contract-generation, cost, recovery, and retention rules in `planning/architecture-decisions.md`. Produce the implementation, focused acceptance evidence, updated compatibility/setup notes, and `docs/milestones/13.md`. Record offline versus live results separately, exact versions/configuration and source revisions, pending external setup, recovery/rollback commands, and the next milestone’s prerequisites. Missing required evidence keeps the milestone active.
+
+Apply the archive lifecycle in `planning/README.md` only after acceptance is evidenced; the future archive target is `planning/archive/completed/13-release.md`. Never run the next milestone as part of this request.

@@ -4,7 +4,7 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from harnessa.config import settings
 from harnessa.db.base import Base
-from harnessa.db import models, orchestration  # noqa: F401
+from harnessa.db import models, orchestration, model_gateway  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

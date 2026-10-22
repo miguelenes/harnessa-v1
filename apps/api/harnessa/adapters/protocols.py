@@ -2,12 +2,33 @@
 
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Protocol
+from uuid import UUID
 
-from harnessa.contracts import EventEnvelope, SpecificationRevision
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from harnessa.contracts import EventEnvelope, ModelRouteRequest, SpecificationRevision
 
 
 class ModelRouter(Protocol):
-    async def complete(self, request: Mapping[str, Any]) -> Mapping[str, Any]: ...
+    async def complete(
+        self,
+        db: AsyncSession,
+        *,
+        organization_id: UUID,
+        project_id: UUID,
+        request: ModelRouteRequest,
+        idempotency_key: str,
+    ) -> Mapping[str, Any]: ...
+
+    async def stream(
+        self,
+        db: AsyncSession,
+        *,
+        organization_id: UUID,
+        project_id: UUID,
+        request: ModelRouteRequest,
+        idempotency_key: str,
+    ) -> tuple[UUID, AsyncIterator[bytes]]: ...
 
 
 class SpecificationAdapter(Protocol):

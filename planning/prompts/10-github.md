@@ -1,6 +1,6 @@
-# Prompt 8 of 10 — GitHub synchronization and completion
+# Prompt 10 of 13 — GitHub synchronization and completion
 
-Implement milestone 8 of Harnessa. Read `planning/revised-specification.md` and milestone reports 01–07. Implement the GitHub channel and review publication adapters against existing domain services. Preserve unrelated work. Complete this milestone and stop before milestone 9.
+Implement milestone 10 only after milestones 1–9 have completion evidence. Read the revised specification, `planning/architecture-decisions.md`, the planning index, and reports `docs/milestones/01.md` through `09.md`. Inspect the current code, versions, and worktree before editing; preserve unrelated changes. Complete this milestone and stop before milestone 11.
 
 ## Prerequisites
 
@@ -24,8 +24,10 @@ Durable effect intents, scoped project grants, interviews, review bundles, revis
 - Correct-head check failure triggers bounded remediation; stale-head failure does not.
 - A disposable authorized repository completes issue → interview → code/spec PR → verified merge → archive → cleanup → DONE.
 
-Use replayable webhook fixtures and local API fakes in CI; record live evidence separately. If external setup is unavailable, ship exact setup/check instructions and mark live acceptance pending. Write `docs/milestones/08.md` including repository/installation scope without secrets.
+Use replayable webhook fixtures and local API fakes in CI; record live evidence separately. If external setup is unavailable, ship exact setup/check instructions and mark live acceptance pending. Write `docs/milestones/10.md` including repository/installation scope without secrets.
 
-## Archive this planning step
+## Delivery contract
 
-After every acceptance criterion above is met and `docs/milestones/08.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.
+Own only the subsystem named by this prompt and its existing adapters/UI projections. Preserve the shared authority, contract-generation, cost, recovery, and retention rules in `planning/architecture-decisions.md`. Produce the implementation, focused acceptance evidence, updated compatibility/setup notes, and `docs/milestones/10.md`. Record offline versus live results separately, exact versions/configuration and source revisions, pending external setup, recovery/rollback commands, and the next milestone’s prerequisites. Missing required evidence keeps the milestone active.
+
+Apply the archive lifecycle in `planning/README.md` only after acceptance is evidenced; the future archive target is `planning/archive/completed/10-github.md`. Never run the next milestone as part of this request.

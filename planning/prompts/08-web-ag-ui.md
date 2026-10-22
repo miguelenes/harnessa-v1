@@ -1,10 +1,14 @@
-# Prompt 5 of 10 — Web workspace and AG-UI streaming
+# Prompt 8 of 13 — Web workspace and AG-UI streaming
 
-Implement milestone 5 of Harnessa. Read `planning/revised-specification.md` and milestone reports 01–04. Use existing APIs, domain events, and run records. Preserve unrelated work. Complete this milestone and stop before milestone 6.
+Implement milestone 8 only after milestones 1–7 have completion evidence. Read the revised specification, `planning/architecture-decisions.md`, the planning index, and reports `docs/milestones/01.md` through `07.md`. Inspect the current code, versions, and worktree before editing; preserve unrelated changes. Complete this milestone and stop before milestone 9.
 
 ## Prerequisites
 
 Authenticated project/task APIs, durable event replay, and an execution adapter exist. Recheck pinned AG-UI SDK APIs in official documentation before implementation.
+
+## Protocol and frontend boundary
+
+Use official AG-UI Python event models/encoding and compatible TypeScript core/client packages. Keep SDK types inside `UIEventProjector` and the browser protocol client; Harnessa owns durable event persistence, authorization, cursors and replay. Test valid event ordering, snapshot/delta recovery, cancellation versus stream truncation, and disconnect/reconnect without starting duplicate work. Use the existing shared shadcn/Tailwind components and generated OpenAPI types. Build the currently supported task/specification/retrieval flows; later milestones extend these same screens with review, GitHub, evidence and Harness² controls.
 
 ## Implement
 
@@ -25,8 +29,10 @@ Authenticated project/task APIs, durable event replay, and an execution adapter 
 - Unauthorized subscriptions and mutations fail; browser rendering cannot execute untrusted Markdown/script content.
 - Keyboard board actions, focus management, and principal responsive states work.
 
-Follow the repository's Browser Harness instructions for actual browser verification. Write `docs/milestones/05.md` with protocol mapping, reconnect semantics, UI evidence, shared component coverage, brand consistency, and remaining feature dependencies.
+Follow the repository's Browser Harness instructions for actual browser verification. Write `docs/milestones/08.md` with protocol mapping, reconnect semantics, UI evidence, shared component coverage, brand consistency, and remaining feature dependencies.
 
-## Archive this planning step
+## Delivery contract
 
-After every acceptance criterion above is met and `docs/milestones/05.md` records actual commands/results, limitations, and the next milestone's prerequisites, move this prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents. Update the matching milestone row in `planning/README.md` to link to the archived prompt and mark it **archived complete**. Do this only after the milestone is complete; if it is blocked or partial, keep this prompt active and record the state and evidence in the milestone report.
+Own only the subsystem named by this prompt and its existing adapters/UI projections. Preserve the shared authority, contract-generation, cost, recovery, and retention rules in `planning/architecture-decisions.md`. Produce the implementation, focused acceptance evidence, updated compatibility/setup notes, and `docs/milestones/08.md`. Record offline versus live results separately, exact versions/configuration and source revisions, pending external setup, recovery/rollback commands, and the next milestone’s prerequisites. Missing required evidence keeps the milestone active.
+
+Apply the archive lifecycle in `planning/README.md` only after acceptance is evidenced; the future archive target is `planning/archive/completed/08-web-ag-ui.md`. Never run the next milestone as part of this request.

@@ -16,6 +16,8 @@ from harnessa.config import settings
 from harnessa.services.effects import ReconcileOutcome, reconcile_effect_intents
 from harnessa.services.scheduler import Scheduler
 from harnessa.services.streams import OutboxPublisher, StreamConsumer, prune_retained_events
+from harnessa.db.session import SessionLocal
+from harnessa.services.model_gateway import reconcile_stale_model_reservations
 
 logger = logging.getLogger("harnessa.worker")
 
@@ -30,6 +32,7 @@ async def run() -> None:
     adapter = UnconfiguredExecutionAdapter()
     active_runs: set[asyncio.Task[bool]] = set()
     last_prune = 0.0
+    last_model_reconcile = 0.0
     await consumer.ensure_group()
     try:
         while True:
@@ -52,6 +55,9 @@ async def run() -> None:
                     for _ in range(available):
                         active_runs.add(asyncio.create_task(scheduler.run_once(adapter, owner)))
                 now = asyncio.get_running_loop().time()
+                if now - last_model_reconcile >= 30:
+                    await reconcile_stale_model_reservations(SessionLocal)
+                    last_model_reconcile = now
                 if now - last_prune >= 3600:
                     await prune_retained_events()
                     last_prune = now

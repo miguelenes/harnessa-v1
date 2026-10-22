@@ -1,0 +1,21 @@
+# Register one unique LiteLLM model_name per deployment. The application selects
+# one registered deployment per HTTP attempt; proxy-level retries/fallbacks stay off.
+model_list: []
+
+router_settings:
+  num_retries: 0
+  max_fallbacks: 0
+  allowed_fails: 1
+  cooldown_time: 30
+
+litellm_settings:
+  set_verbose: false
+  turn_off_message_logging: true
+
+# Example deployment (add one entry per deployment and map its secret into only
+# the LiteLLM service in infra/compose.yaml):
+# model_list:
+#   - model_name: harnessa-openai-coding
+#     litellm_params:
+#       model: openai/gpt-4.1
+#       api_key: os.environ/OPENAI_API_KEY

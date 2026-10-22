@@ -340,6 +340,7 @@ dependencies = [
     { name = "asyncpg" },
     { name = "fastapi" },
     { name = "fastapi-users", extra = ["sqlalchemy"] },
+    { name = "httpx" },
     { name = "pwdlib", extra = ["argon2"] },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
@@ -350,7 +351,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
@@ -362,6 +362,7 @@ requires-dist = [
     { name = "asyncpg", specifier = "==0.30.0" },
     { name = "fastapi", specifier = "==0.121.0" },
     { name = "fastapi-users", extras = ["sqlalchemy"], specifier = "==14.0.1" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "pwdlib", extras = ["argon2"], specifier = "==0.2.1" },
     { name = "pydantic-settings", specifier = "==2.11.0" },
     { name = "python-multipart", specifier = "==0.0.20" },
@@ -372,7 +373,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = "==0.28.1" },
     { name = "mypy", specifier = "==1.18.2" },
     { name = "pytest", specifier = "==8.4.2" },
     { name = "ruff", specifier = "==0.14.2" },

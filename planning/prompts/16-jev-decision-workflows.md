@@ -1,6 +1,10 @@
-# Prompt 15 — Structured decision workflows with Jev
+# Prompt 16 — Structured decision workflows with Jev
 
-Implement milestone 15 only after prompt 10 is complete, prompts 11–14 are complete, and prompt 3's model route/budget contracts are available. Read the revised specification, integration assessment, prompts 03, 06–09, 11–14, current architecture/compatibility docs, milestone reports, and the current TypeSafe documentation. Inspect the actual repository and configured LiteLLM gateway before choosing an integration path. Preserve unrelated work. Do not infer live Jev support, provider compatibility, pricing, or calibration from vendor claims or a sibling project's configuration.
+Implement milestone 16 only after milestones 1–15 have completion evidence. Read the revised specification, `planning/architecture-decisions.md`, the planning index, and reports `docs/milestones/01.md` through `15.md`. Inspect the current code, versions, and worktree before editing; preserve unrelated changes. Complete this milestone and stop before milestone 17.
+
+## Prerequisites and owned scope
+
+Milestone 13 release acceptance and all preceding milestone reports are complete. Extend the named subsystem through its existing ports, budgets and evidence records; use `planning/architecture-decisions.md` for shared failure/recovery and authority rules. Provider/agent access and spending remain explicitly configured, with offline fixtures for unavailable services.
 
 ## Goal
 
@@ -31,7 +35,7 @@ Treat prompt 3's route registry, capability checks, workload pools, budgets, res
 - A Jev outage, invalid output, unknown cost, or threshold/config mismatch leaves the task safe and visible and follows an explicit fallback/escalation path.
 - Shadow mode, bounded rollout, kill switch, and rollback are demonstrated. An offline fixture proves behavior without paid provider credentials; live evaluations remain within an explicitly configured spend cap.
 
-Write `docs/integrations/jev-decisions.md`, update routing/decision views and compatibility docs as needed, and write `docs/milestones/15.md` with exact dataset provenance, baseline definitions, thresholds, commands/results, cost evidence, served model versions, limitations, and rollout/rollback steps. Archive this prompt only after all acceptance criteria are met.
+Write `docs/integrations/jev-decisions.md`, update routing/decision views and compatibility docs as needed, and write `docs/milestones/16.md` with exact dataset provenance, baseline definitions, thresholds, commands/results, cost evidence, served model versions, limitations, and rollout/rollback steps. Archive this prompt only after all acceptance criteria are met.
 
 ## References to verify at implementation time
 
@@ -39,3 +43,9 @@ Write `docs/integrations/jev-decisions.md`, update routing/decision views and co
 - [System One Models & Jev announcement](https://typesafe.ai/blog/introducing-system-one-models-and-jev) states the product is early access and provides the vendor's own workflow-evaluation methodology and caveats.
 - [TypeSafe workflow evaluations](https://evals.typesafe.ai/) are useful for understanding workflow decomposition, not a substitute for a separately labeled Harnessa gold set.
 - Verify current API schemas, supported routes, pricing, and usage reporting using official docs and the exact pinned SDK/model version before integration. The Harnessa gateway's `jev-latest`/LiteLLM Auto Router baseline, if present in the target environment, must be revalidated and correlated rather than duplicated.
+
+## Delivery contract
+
+Own only the subsystem named by this prompt and its existing adapters/UI projections. Preserve the shared authority, contract-generation, cost, recovery, and retention rules in `planning/architecture-decisions.md`. Produce the implementation, focused acceptance evidence, updated compatibility/setup notes, and `docs/milestones/16.md`. Record offline versus live results separately, exact versions/configuration and source revisions, pending external setup, recovery/rollback commands, and the next milestone’s prerequisites. Missing required evidence keeps the milestone active.
+
+Apply the archive lifecycle in `planning/README.md` only after acceptance is evidenced; the future archive target is `planning/archive/completed/16-jev-decision-workflows.md`. Never run the next milestone as part of this request.

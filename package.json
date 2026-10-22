@@ -7,7 +7,7 @@
     "build:web": "pnpm --filter @harnessa/web build",
     "lint:web": "pnpm --filter @harnessa/web lint",
     "typecheck:web": "pnpm --filter @harnessa/web typecheck",
-    "typecheck:api": "uv run mypy --follow-imports=silent apps/api/harnessa/contracts.py apps/api/harnessa/services apps/api/harnessa/domain apps/api/harnessa/db/orchestration.py apps/api/harnessa/db/models.py apps/api/harnessa/db/session.py apps/api/harnessa/api/task_routes.py apps/api/harnessa/healthcheck.py apps/api/harnessa/worker.py",
+    "typecheck:api": "uv run mypy --follow-imports=silent apps/api/harnessa/contracts.py apps/api/harnessa/services apps/api/harnessa/domain apps/api/harnessa/adapters apps/api/harnessa/db/orchestration.py apps/api/harnessa/db/model_gateway.py apps/api/harnessa/db/models.py apps/api/harnessa/db/session.py apps/api/harnessa/api/task_routes.py apps/api/harnessa/api/model_routes.py apps/api/harnessa/healthcheck.py apps/api/harnessa/worker.py",
     "lint:api": "uv run ruff check apps/api tests",
     "test:api": "uv run pytest",
     "test:integration": "uv run pytest tests/integration -m integration",
