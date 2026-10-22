@@ -107,6 +107,7 @@ _TEMPLATE_HEADINGS = (
     "## Verification",
     "## ADDED Requirements",
     "## MODIFIED Requirements",
+    "## 1. Implementation",
 )
 
 
@@ -139,16 +140,30 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
         def restore_boundaries(part: str) -> str:
             for heading in headings:
                 part = re.sub(
-                    rf"(?<!^)(?<!\n){re.escape(heading)}",
+                    rf"^{re.escape(heading)}(?=\S)",
+                    f"{heading}\n\n",
+                    part,
+                )
+                part = re.sub(
+                    rf"(?<!^){re.escape(heading)}(?=\S)",
                     f"\n\n{heading}\n\n",
                     part,
                 )
+            part = re.sub(
+                r"(?<!^)(?<!\n)(## \d+\. [^\n]+?)(?=\S)",
+                r"\n\n\1\n\n",
+                part,
+            )
             part = re.sub(
                 r"(?<!^)(?<!\n)(#### Scenario:|### Requirement:|### Requirement mapping:)",
                 r"\n\n\1",
                 part,
             )
-            part = re.sub(r"(?<!\n)(- \*\*(?:WHEN|THEN)\*\*|- \[ \])", r"\n\1", part)
+            part = re.sub(
+                r"(?<!\n)(- \*\*(?:WHEN|THEN)\*\*|- \[ \]|- [A-Z])",
+                r"\n\1",
+                part,
+            )
             return part
 
         text = _map_markdown_prose(text, restore_boundaries)
@@ -161,7 +176,7 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
             flags=re.IGNORECASE,
         )
         part = re.sub(
-            r"(?m)^(### Requirement:[^\n]*?)\s+((?:The\s+)?"
+            r"(?m)^(### Requirement:[^\n]*?)\s*(The\s+"
             r"(?:system|utility|function|service|application)\s+"
             r"(?:SHALL|MUST|SHOULD|MAY)\b)",
             r"\1\n\n\2",
