@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import asyncio
 import random
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import func, or_, select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.execution import (
     ExecutionAdapter,
     ExecutionFailure,
@@ -20,18 +19,30 @@ from harnessa.adapters.execution import (
     StaleLease,
     TaskInput,
 )
+from harnessa.adapters.specification_workspace import (
+    SpecificationWorkspaceError,
+    SpecificationWorkspaceManager,
+)
 from harnessa.config import settings
 from harnessa.contracts import RetryClass, RunStatus, TaskStage
-from harnessa.db.models import Project, Task
+from harnessa.db.models import Project, Repository, Task
 from harnessa.db.orchestration import (
     DeadLetter,
     Run,
+    RunArtifact,
     RunCheckpoint,
     TaskLease,
     TaskTransition,
 )
 from harnessa.db.session import SessionLocal
-from harnessa.services.lifecycle import record_system_transition, _record_event
+from harnessa.db.specification import (
+    SpecificationInterview,
+    SpecificationQuestion,
+    SpecificationReadinessEvaluation,
+)
+from harnessa.services.lifecycle import _record_event, record_system_transition
+from sqlalchemy import func, or_, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 @dataclass(frozen=True)
@@ -71,6 +82,7 @@ class Scheduler:
         max_attempts: int | None = None,
         max_wall_seconds: int | None = None,
         rng: Callable[[], float] = random.random,
+        artifact_store: LocalArtifactStore | None = None,
     ) -> None:
         self.sessions = session_factory
         self.global_limit = global_limit or settings.max_concurrent_runs
@@ -79,10 +91,13 @@ class Scheduler:
         self.max_attempts = max_attempts or settings.run_max_attempts
         self.max_wall_seconds = max_wall_seconds or settings.run_max_wall_seconds
         self.rng = rng
+        self.artifact_store = artifact_store or LocalArtifactStore(
+            Path(settings.artifact_root)
+        )
 
     async def claim(self, owner_id: str, adapter_name: str) -> ClaimedRun | None:
         await self.recover_expired_leases()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self.sessions() as db:
             try:
                 await db.execute(text("SELECT pg_advisory_xact_lock(710203041)"))
@@ -113,7 +128,58 @@ class Scheduler:
                 )
                 candidates = (await db.execute(query.limit(100))).all()
                 selected: tuple[Task, Project] | None = None
+                readiness_invalidated = False
                 for task, project in candidates:
+                    interview = await db.scalar(
+                        select(SpecificationInterview)
+                        .where(SpecificationInterview.task_id == task.id)
+                        .with_for_update()
+                    )
+                    if interview is not None:
+                        evaluation = await db.scalar(
+                            select(SpecificationReadinessEvaluation)
+                            .where(
+                                SpecificationReadinessEvaluation.interview_id == interview.id
+                            )
+                            .order_by(SpecificationReadinessEvaluation.created_at.desc())
+                            .limit(1)
+                        )
+                        repository = await db.get(Repository, interview.repository_id)
+                        frozen_ready = bool(
+                            interview.readiness_state == "READY"
+                            and evaluation is not None
+                            and evaluation.state == "READY"
+                            and evaluation.interview_revision == interview.revision
+                            and evaluation.artifact_revision == interview.artifact_revision
+                            and evaluation.content_hash == interview.artifact_hash
+                            and evaluation.base_sha == interview.base_sha
+                            and evaluation.policy_revision == interview.policy_revision
+                        )
+                        try:
+                            current_base = (
+                                await SpecificationWorkspaceManager().current_base(repository)
+                                if repository is not None
+                                else None
+                            )
+                        except (OSError, SpecificationWorkspaceError):
+                            current_base = None
+                        if not frozen_ready or current_base != interview.base_sha:
+                            interview.readiness_state = "STALE"
+                            readiness_invalidated = True
+                            await record_system_transition(
+                                db,
+                                task=task,
+                                target=TaskStage.SPECIFYING,
+                                reason="Specification readiness or repository base is not current",
+                                event_type="specification.dispatch_blocked",
+                                payload={
+                                    "interview_id": str(interview.id),
+                                    "evaluation_id": str(evaluation.id) if evaluation else None,
+                                    "base_current": current_base == interview.base_sha,
+                                    "frozen_ready": frozen_ready,
+                                },
+                            )
+                            continue
                     project_active = await db.scalar(
                         select(func.count(TaskLease.id))
                         .join(Task, Task.id == TaskLease.task_id)
@@ -133,7 +199,10 @@ class Scheduler:
                     selected = (task, project)
                     break
                 if selected is None:
-                    await db.rollback()
+                    if readiness_invalidated:
+                        await db.commit()
+                    else:
+                        await db.rollback()
                     return None
 
                 task, project = selected
@@ -252,7 +321,7 @@ class Scheduler:
                 raise
 
     async def heartbeat(self, job: ClaimedRun) -> bool:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self.sessions() as db:
             result = await db.execute(
                 update(TaskLease)
@@ -278,7 +347,6 @@ class Scheduler:
             return True
 
     async def save_checkpoint(self, job: ClaimedRun, state: Mapping[str, Any]) -> UUID:
-        now = datetime.now(timezone.utc)
         async with self.sessions() as db:
             try:
                 lease = await db.scalar(
@@ -287,10 +355,28 @@ class Scheduler:
                         TaskLease.run_id == job.run_id,
                         TaskLease.owner_id == job.owner_id,
                         TaskLease.fencing_token == job.fencing_token,
-                        TaskLease.expires_at > now,
+                        TaskLease.expires_at > func.now(),
                     ).with_for_update()
                 )
-                if lease is None:
+                task = await db.scalar(
+                    select(Task).where(Task.id == job.task_id).with_for_update()
+                )
+                run = await db.scalar(
+                    select(Run).where(Run.id == job.run_id).with_for_update()
+                )
+                if (
+                    lease is None
+                    or task is None
+                    or run is None
+                    or run.task_id != task.id
+                    or run.project_id != job.project_id
+                    or run.fencing_token != job.fencing_token
+                    or run.status != RunStatus.RUNNING.value
+                    or run.cancel_requested_at is not None
+                    or task.run_status != RunStatus.RUNNING.value
+                    or task.cancel_requested_at is not None
+                    or task.stage != TaskStage.IN_PROGRESS.value
+                ):
                     raise StaleLease("Checkpoint rejected because the lease is no longer current")
                 sequence = await db.scalar(
                     select(func.coalesce(func.max(RunCheckpoint.sequence), 0)).where(
@@ -311,17 +397,172 @@ class Scheduler:
                     fencing_token=job.fencing_token,
                     state=data,
                     state_hash=digest,
+                    resumable=bool(state.get("resumable", True)),
                 )
                 db.add(checkpoint)
                 await db.flush()
-                await db.execute(
-                    update(Run).where(Run.id == job.run_id).values(checkpoint_id=checkpoint.id)
-                )
+                run.checkpoint_id = checkpoint.id
+                if state.get("phase") == "session_update":
+                    counts = state.get("update_counts", {})
+                    safe_counts = {
+                        str(key)[:80]: int(value)
+                        for key, value in counts.items()
+                        if isinstance(key, str) and isinstance(value, int) and value >= 0
+                    } if isinstance(counts, Mapping) else {}
+                    await _record_event(
+                        db,
+                        task=task,
+                        event_type="run.progress",
+                        actor_id=None,
+                        run_id=run.id,
+                        payload={"phase": "agent_updates", "update_counts": safe_counts},
+                    )
                 await db.commit()
                 return checkpoint.id
             except Exception:
                 await db.rollback()
                 raise
+
+    async def publish_artifact(
+        self,
+        job: ClaimedRun,
+        content: bytes,
+        media_type: str,
+    ) -> Mapping[str, Any]:
+        """Persist a CAS blob and scoped publication record under the current fence."""
+        if len(content) > settings.acp_artifact_limit_bytes:
+            raise ValueError("Run artifact exceeded its configured byte limit")
+        if not media_type or len(media_type) > 160:
+            raise ValueError("Run artifact media type is invalid")
+        async with self.sessions() as db:
+            try:
+                lease = await db.scalar(
+                    select(TaskLease).where(
+                        TaskLease.task_id == job.task_id,
+                        TaskLease.run_id == job.run_id,
+                        TaskLease.owner_id == job.owner_id,
+                        TaskLease.fencing_token == job.fencing_token,
+                        TaskLease.expires_at > func.now(),
+                    ).with_for_update()
+                )
+                task = await db.scalar(
+                    select(Task).where(Task.id == job.task_id).with_for_update()
+                )
+                run = await db.scalar(
+                    select(Run).where(Run.id == job.run_id).with_for_update()
+                )
+                project = await db.scalar(
+                    select(Project).where(Project.id == job.project_id).with_for_update()
+                )
+                if (
+                    lease is None
+                    or task is None
+                    or run is None
+                    or project is None
+                    or task.project_id != project.id
+                    or run.task_id != task.id
+                    or run.project_id != project.id
+                    or run.fencing_token != job.fencing_token
+                    or run.status != RunStatus.RUNNING.value
+                    or run.cancel_requested_at is not None
+                    or task.run_status != RunStatus.RUNNING.value
+                    or task.cancel_requested_at is not None
+                    or task.stage != TaskStage.IN_PROGRESS.value
+                ):
+                    raise StaleLease("Artifact rejected because the lease is no longer current")
+
+                stored = await asyncio.to_thread(
+                    self.artifact_store.put_bytes, content, media_type=media_type
+                )
+                # The write may take time. Recheck the expiry against database time before
+                # creating the durable reference; a crash here leaves only a GC-safe orphan.
+                current_lease = await db.scalar(
+                    select(TaskLease).where(
+                        TaskLease.task_id == job.task_id,
+                        TaskLease.run_id == job.run_id,
+                        TaskLease.owner_id == job.owner_id,
+                        TaskLease.fencing_token == job.fencing_token,
+                        TaskLease.expires_at > func.now(),
+                    )
+                )
+                if current_lease is None:
+                    raise StaleLease("Artifact rejected because the lease expired during storage")
+
+                previous = await db.scalar(
+                    select(RunArtifact).where(
+                        RunArtifact.run_id == job.run_id,
+                        RunArtifact.fencing_token == job.fencing_token,
+                        RunArtifact.digest == stored.digest,
+                    )
+                )
+                if previous is not None:
+                    if previous.media_type != stored.media_type:
+                        raise ValueError("Artifact digest was already published with another media type")
+                    await db.commit()
+                    return _artifact_summary(previous)
+
+                artifact = RunArtifact(
+                    organization_id=project.organization_id,
+                    project_id=project.id,
+                    task_id=task.id,
+                    run_id=run.id,
+                    fencing_token=job.fencing_token,
+                    digest=stored.digest,
+                    media_type=stored.media_type,
+                    size_bytes=stored.size_bytes,
+                    storage_key=stored.storage_key,
+                )
+                db.add(artifact)
+                await db.flush()
+                await _record_event(
+                    db,
+                    task=task,
+                    event_type="run.artifact_published",
+                    actor_id=None,
+                    run_id=run.id,
+                    payload={
+                        "artifact_id": str(artifact.id),
+                        "digest": artifact.digest,
+                        "media_type": artifact.media_type,
+                        "size_bytes": artifact.size_bytes,
+                    },
+                )
+                await db.commit()
+                return _artifact_summary(artifact)
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def is_current_fence(self, run_id: UUID, fencing_token: int) -> bool:
+        async with self.sessions() as db:
+            current = await db.scalar(
+                select(Run.id)
+                .join(TaskLease, TaskLease.run_id == Run.id)
+                .join(Task, Task.id == Run.task_id)
+                .where(
+                    Run.id == run_id,
+                    Run.fencing_token == fencing_token,
+                    Run.status == RunStatus.RUNNING.value,
+                    Run.cancel_requested_at.is_(None),
+                    Task.run_status == RunStatus.RUNNING.value,
+                    Task.stage == TaskStage.IN_PROGRESS.value,
+                    Task.cancel_requested_at.is_(None),
+                    TaskLease.owner_id.is_not(None),
+                    TaskLease.task_id == Run.task_id,
+                    TaskLease.expires_at > func.now(),
+                    TaskLease.fencing_token == fencing_token,
+                )
+            )
+            return current is not None
+
+    async def reconcile_orphan_artifacts(self, *, minimum_age_seconds: int = 3600) -> int:
+        async with self.sessions() as db:
+            keys = set((await db.scalars(select(RunArtifact.storage_key))).all())
+        return await asyncio.to_thread(
+            self.artifact_store.remove_unreferenced,
+            keys,
+            minimum_age_seconds=minimum_age_seconds,
+        )
 
     async def is_cancelled(self, job: ClaimedRun) -> bool:
         async with self.sessions() as db:
@@ -336,7 +577,7 @@ class Scheduler:
             )
 
     async def complete(self, job: ClaimedRun, result: Mapping[str, Any]) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self.sessions() as db:
             try:
                 lease = await db.scalar(
@@ -386,7 +627,7 @@ class Scheduler:
                 raise
 
     async def fail(self, job: ClaimedRun, failure: ExecutionFailure) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self.sessions() as db:
             try:
                 lease = await db.scalar(
@@ -505,7 +746,7 @@ class Scheduler:
         )
 
     async def recover_expired_leases(self) -> int:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         recovered = 0
         async with self.sessions() as db:
             try:
@@ -528,6 +769,58 @@ class Scheduler:
                     if task.run_status in {RunStatus.CANCELLED.value, RunStatus.PAUSED.value}:
                         run.status = task.run_status
                         run.finished_at = now
+                        recovered += 1
+                        continue
+                    if (
+                        task.stage == TaskStage.CLARIFYING.value
+                        and task.run_status == RunStatus.WAITING_FOR_INPUT.value
+                    ):
+                        question_id = await db.scalar(
+                            select(SpecificationQuestion.id)
+                            .where(
+                                SpecificationQuestion.run_id == run.id,
+                                SpecificationQuestion.status == "open",
+                                SpecificationQuestion.fencing_token == lease.fencing_token,
+                            )
+                            .order_by(SpecificationQuestion.created_at.desc())
+                            .limit(1)
+                        )
+                        run.status = RunStatus.FAILED.value
+                        run.error_code = "worker_lost_waiting_for_input"
+                        run.error_message = (
+                            "Worker lease expired while a durable clarification was awaiting input"
+                        )
+                        run.retry_class = RetryClass.TRANSIENT.value
+                        run.finished_at = now
+                        task.version += 1
+                        db.add(
+                            TaskTransition(
+                                task_id=task.id,
+                                project_id=task.project_id,
+                                actor_id=None,
+                                from_stage=TaskStage.CLARIFYING.value,
+                                to_stage=TaskStage.CLARIFYING.value,
+                                from_run_status=RunStatus.WAITING_FOR_INPUT.value,
+                                to_run_status=RunStatus.WAITING_FOR_INPUT.value,
+                                reason="Expired worker detached; durable clarification remains open",
+                                command="clarification_wait_recovered",
+                                version_before=task.version - 1,
+                                version_after=task.version,
+                            )
+                        )
+                        await _record_event(
+                            db,
+                            task=task,
+                            event_type="task.clarification_wait_recovered",
+                            actor_id=None,
+                            run_id=run.id,
+                            payload={
+                                "question_id": str(question_id) if question_id else None,
+                                "attempt": run.attempt,
+                                "fencing_token": run.fencing_token,
+                                "version": task.version,
+                            },
+                        )
                         recovered += 1
                         continue
                     checkpoint = await db.scalar(
@@ -623,6 +916,10 @@ class Scheduler:
                 checkpoint=job.checkpoint,
                 save_checkpoint=save_checkpoint,
                 is_cancelled=cancelled,
+                is_current_fence=self.is_current_fence,
+                publish_artifact=lambda content, media_type: self.publish_artifact(
+                    job, content, media_type
+                ),
             )
             if await self.is_cancelled(job):
                 await self.complete(job, result)
@@ -636,7 +933,7 @@ class Scheduler:
         except StaleLease:
             # The new lease owner is authoritative; stale worker output is discarded.
             return True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - adapters are isolated behind this failure boundary.
             await self.fail(
                 job,
                 ExecutionFailure(RetryClass.TRANSIENT.value, "adapter_error", str(exc)),
@@ -658,3 +955,15 @@ class Scheduler:
             if await self.is_cancelled(job):
                 await adapter.cancel(job.run_id)
                 return
+
+
+def _artifact_summary(artifact: RunArtifact) -> dict[str, Any]:
+    return {
+        "id": str(artifact.id),
+        "digest": artifact.digest,
+        "media_type": artifact.media_type,
+        "size_bytes": artifact.size_bytes,
+        "storage_key": artifact.storage_key,
+        "run_id": str(artifact.run_id),
+        "fencing_token": artifact.fencing_token,
+    }

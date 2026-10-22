@@ -1,6 +1,6 @@
 # Harnessa: specification and implementation prompts
 
-This index tracks the Harnessa implementation prompts and completed milestone evidence. Milestones 1–4 have completion reports and archived prompts; later work may be in progress but is not complete until its evidence is recorded.
+This index tracks the Harnessa implementation prompts and completed milestone evidence. Milestones 1–5 have completion reports and archived prompts; later work may be in progress but is not complete until its evidence is recorded.
 
 Start with [the revised specification](revised-specification.md), then execute the prompts below in order in the same repository. Each prompt names its prerequisites and includes implementation scope and acceptance criteria. They are separate implementation requests, not concurrent agent assignments.
 
@@ -14,9 +14,9 @@ Read [shared planning decisions](architecture-decisions.md) for runtime ownershi
 | 2 | [Durable orchestration and task lifecycle](archive/completed/02-orchestration.md) — **archived complete** | Crash-safe tasks, events, leases, bounded retries, cancellation |
 | 3 | [LiteLLM routing and spend controls](archive/completed/03-model-gateway.md) — **archived complete** | Interactive/primary and probe/batch pools, explicit fallbacks, budget reservations, request ledger |
 | 4 | [Run orchestration decision](archive/completed/04-runtime-decision.md) — **archived complete (NO-GO)** | LangGraph parity spike; retain the current Harnessa scheduler |
-| 5 | [Isolated workspaces and ACP execution](prompts/05-acp-execution.md) | ACP SDK, trusted runner and safe execution |
-| 6 | [OpenSpec discovery and clarification](prompts/06-openspec.md) | Merged design baseline, dependency/Python audit, 85% tests, AGENTS.md, local CI/review/merge, OpenSpec READY APIs |
-| 7 | [Governed retrieval and MCP](prompts/07-retrieval-mcp.md) | LlamaIndex/Qdrant pilot, lexical fallback and scoped tools |
+| 5 | [Isolated workspaces and ACP execution](archive/completed/05-acp-execution.md) — **archived complete** | ACP SDK, trusted runner and safe execution |
+| 6 | [OpenSpec discovery and clarification](prompts/06-openspec.md) | Open PR audit/repair/merge/branch cleanup, merged design baseline, dependency/Python audit, 85% tests, AGENTS.md, local CI/review/merge, OpenSpec READY APIs |
+| 7 | [Governed retrieval and MCP](prompts/07-retrieval-mcp.md) | Reconcile every pending PR/branch from M6, establish clean `main`, add the root command helper and grounded LLM-ready `AGENTS.md`, then deliver LlamaIndex/Qdrant retrieval and scoped tools |
 | 8 | [Web control plane and AG-UI](prompts/08-web-ag-ui.md) | Real API-backed UI, typed events and replay |
 | 9 | [Implementation, verification and review](prompts/09-verification-review.md) | Revision-bound implementation and independent verification |
 | 10 | [GitHub synchronization and completion](prompts/10-github.md) | Authorized issue/PR workflow and reconciled effects |
@@ -40,15 +40,17 @@ These tracks are separate from the numbered dependency order. They must not be r
 
 Give the implementation agent one prompt at a time, with the revised specification, shared decisions and current evidence. Preserve existing domain and adapter contracts. Required external blockers remain explicit; optional live checks are recorded separately. Follow-on milestones 14–17 require the completed milestone 13 release.
 
+For milestone 7, first reconcile every open PR and non-main branch, starting with milestone 6, then begin implementation from a clean `main` whose HEAD matches the refreshed `origin/main`; do not begin while any extra open PR or branch remains. For milestones 7–17, each run puts all deliverables—including implementation, documentation, migrations, and its milestone report—in one PR, obtains an independent code review, resolves accepted findings, and merges through required checks and repository protections during that same run. The review agent posts progress and proposals in the PR; the maintainer reviews each proposal, discusses it for no more than three PR comment/reply messages total, and records the final decision and rationale. Obtain a fresh review of the final head, resolve all review threads, and do not self-approve or bypass protections. Record the PR URL, reviewed head SHA, review disposition, check results, and merge SHA in the milestone report; include the merge commit SHA in the final run summary. If a required review, check, merge, or M7 inventory gate is blocked, document the blocker and keep the milestone active and unarchived.
+
 ## Renumbering map
 
 Previous prompt → current prompt: 4→5, 5→8, 6→6, 7→9, 8→10, 9→12, 10→13, 11→11, 12→7, 13→14, 14→15, 15→16, 16→17. Prompt 4 is new. Use current numbers for execution and future reports. Completed reports and archived prompt contents remain historical records.
 
 ## Per-step archive lifecycle
 
-A planning prompt is archived only after its implementation milestone meets its acceptance criteria and its `docs/milestones/NN.md` report records actual evidence, limitations, and follow-up prerequisites. At that point, move the prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents, update the matching index row here to link to the archived prompt and mark it **archived complete**, and leave later prompts active. Do not archive a milestone that is blocked, partially complete, or merely started; record that state in its milestone report and keep the prompt active. Keep `planning/revised-specification.md` and this index as the active planning references.
+A planning prompt is archived only after its implementation milestone meets its acceptance criteria and its `docs/milestones/NN.md` report records actual evidence, limitations, and follow-up prerequisites. For milestones 7–17, the milestone PR must also be reviewed and merged in that run before archiving. At that point, move the prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents, update the matching index row here to link to the archived prompt and mark it **archived complete**, and leave later prompts active. Do not archive a milestone that is blocked, partially complete, or merely started; record that state in its milestone report and keep the prompt active. Keep `planning/revised-specification.md` and this index as the active planning references.
 
-Milestones 1–3 retain their currently recorded archive status and report paths. Milestones 5–17 remain active until their own acceptance evidence is recorded. Recheck current reports rather than inferring completion from file presence or from this index.
+Milestones 1–3 retain their currently recorded archive status and report paths. Milestones 6–17 remain active until their own acceptance evidence is recorded. Recheck current reports rather than inferring completion from file presence or from this index.
 
 
 The revised specification supersedes conflicting technical details in the source attachment. It preserves the product's seven pillars, ten board columns, six main views, and autonomous execution intent. The original attachment remains unchanged at `/home/menes/Downloads/acp_orchestrator_harness2_self_learning_platform_specification.md`.

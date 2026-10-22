@@ -1,8 +1,22 @@
-from uuid import UUID
 from datetime import datetime
 from typing import Any
-from sqlalchemy import CheckConstraint, ForeignKey, String, Boolean, Integer, UniqueConstraint, JSON, Text, DateTime, BigInteger, Index
+from uuid import UUID
+
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
+
 from harnessa.db.base import Base, Scoped
 
 
@@ -89,6 +103,7 @@ class Task(Scoped, Base):
     blocked_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     return_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    event_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

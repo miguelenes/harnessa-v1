@@ -6,9 +6,6 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from harnessa.auth.users import current_active_user
 from harnessa.config import settings
 from harnessa.contracts import (
@@ -23,33 +20,35 @@ from harnessa.contracts import (
     ModelInvocationRead,
     ModelLiveCheckRead,
     ModelLiveCheckRequest,
+    ModelMessage,
+    ModelPoolKind,
     ModelPoolRead,
     ModelPoolRouteCreate,
+    ModelProtocol,
     ModelProviderAccountCreate,
     ModelProviderAccountRead,
-    ModelProtocol,
-    ModelRouteRequest,
     ModelRequestLedgerRead,
+    ModelRouteRequest,
     ModelUsageRead,
-    ModelPoolKind,
-    ModelMessage,
     RouteRequirements,
 )
 from harnessa.db.model_gateway import (
     AliasDeployment,
     ModelAlias,
     ModelBudgetPolicy,
+    ModelDeployment,
     ModelPool,
-    PoolAlias,
     ModelRequestLedger,
     ModelReservation,
-    ModelDeployment,
+    PoolAlias,
     ProviderAccount,
 )
 from harnessa.db.models import Membership, Project, User
 from harnessa.db.session import get_db
 from harnessa.services.authorization import require_membership
 from harnessa.services.model_gateway import LiteLLMModelRouter, ModelGatewayError
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(tags=["model gateway"])
 model_router = LiteLLMModelRouter()

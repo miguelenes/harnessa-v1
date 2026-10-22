@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +30,33 @@ class Settings(BaseSettings):
     model_interactive_concurrency: int = 4
     model_interactive_reserve: int = 2
     model_probe_overflow_limit: int = 0
+    artifact_root: str = "/var/lib/harnessa/artifacts"
+    acp_execution_enabled: bool = False
+    acp_repository_sources_json: str = "{}"
+    acp_workspace_root: str = "/var/lib/harnessa/workspaces"
+    acp_runner_state_root: str = "/var/lib/harnessa/runner"
+    acp_agent_image: str = (
+        "ghcr.io/anomalyco/opencode:1.19.4@sha256:"
+        "bf8e2b5f785166a12a26cbb34ef1a2d35403368438efe036fd16c795a975c505"
+    )
+    acp_cpu_limit: float = 2.0
+    acp_memory_limit_bytes: int = 2147483648
+    acp_pids_limit: int = 256
+    acp_tmpfs_limit_bytes: int = 536870912
+    acp_workspace_limit_bytes: int = 4294967296
+    acp_frame_limit_bytes: int = 1048576
+    acp_update_limit: int = 10000
+    acp_artifact_limit_bytes: int = 10485760
+    acp_model_broker_enabled: bool = False
+    acp_model_alias: str | None = None
+    acp_model_max_output_tokens: int = 8192
+    openspec_repository_sources_json: str = "{}"
+    openspec_workspace_root: str = "/var/lib/harnessa/specifications"
+    openspec_node_path: str = ""
+    openspec_cli_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    openspec_model_alias: str | None = None
+    openspec_model_max_output_tokens: int = Field(default=4096, ge=256, le=16_384)
+    openspec_require_signoff: bool = False
 
 
 settings = Settings()

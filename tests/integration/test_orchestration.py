@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+import os
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import httpx
 import pytest
-from pwdlib import PasswordHash
-from redis.asyncio import Redis
-from sqlalchemy import func, select, text
-
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.execution import ExecutionFailure, StaleLease
 from harnessa.config import settings
 from harnessa.contracts import RunStatus, TaskCommand, TaskStage
@@ -21,12 +19,13 @@ from harnessa.db.orchestration import (
     EffectIntent,
     OutboxMessage,
     Run,
+    RunArtifact,
     TaskTransition,
 )
 from harnessa.db.session import SessionLocal
 from harnessa.main import app
-from harnessa.services.lifecycle import command_task, create_task, transition_task
 from harnessa.services.effects import reconcile_effect_intents
+from harnessa.services.lifecycle import command_task, create_task, transition_task
 from harnessa.services.recovery import replay_dead_letter
 from harnessa.services.scheduler import Scheduler, retry_delay_seconds
 from harnessa.services.streams import (
@@ -36,6 +35,10 @@ from harnessa.services.streams import (
     StreamConsumer,
     rebuild_dispatch_stream,
 )
+from pwdlib import PasswordHash
+from redis.asyncio import Redis
+from sqlalchemy import func, select, text
+
 from tests.adapters.fake_execution import FakeExecutionAdapter
 
 pytestmark = pytest.mark.integration
@@ -109,7 +112,7 @@ async def test_concurrent_claim_and_expired_worker_fencing_with_checkpoint():
     async with SessionLocal() as db:
         await db.execute(
             text("UPDATE task_leases SET expires_at = :expired WHERE task_id = :task_id"),
-            {"expired": datetime.now(timezone.utc) - timedelta(seconds=1), "task_id": task_id},
+            {"expired": datetime.now(UTC) - timedelta(seconds=1), "task_id": task_id},
         )
         await db.commit()
     assert await scheduler_a.recover_expired_leases() == 1
@@ -123,6 +126,64 @@ async def test_concurrent_claim_and_expired_worker_fencing_with_checkpoint():
 
 
 @pytest.mark.anyio
+async def test_artifact_and_progress_publication_are_fenced_and_orphans_reconcile(tmp_path):
+    _, project_id, actor_id = await seed_project()
+    task_id = await ready_task(project_id, actor_id)
+    artifact_root = tmp_path / "artifacts"
+    scheduler = Scheduler(
+        global_limit=1,
+        artifact_store=LocalArtifactStore(artifact_root),
+    )
+    job = await scheduler.claim("artifact-worker", "test-fake-execution")
+    assert job is not None
+
+    await scheduler.save_checkpoint(
+        job,
+        {"phase": "session_update", "update_counts": {"agent_message_chunk": 100}},
+    )
+    accepted = await scheduler.publish_artifact(
+        job, b"accepted artifact", "application/octet-stream"
+    )
+    assert accepted["fencing_token"] == job.fencing_token
+    assert accepted["run_id"] == str(job.run_id)
+
+    async with SessionLocal() as db:
+        stored = await db.scalar(select(RunArtifact).where(RunArtifact.run_id == job.run_id))
+        events = (
+            await db.execute(
+                select(DomainEvent).where(DomainEvent.run_id == job.run_id)
+            )
+        ).scalars().all()
+        assert stored is not None
+        progress = next(event for event in events if event.event_type == "run.progress")
+        publication = next(
+            event for event in events if event.event_type == "run.artifact_published"
+        )
+        assert progress.payload == {
+            "phase": "agent_updates",
+            "update_counts": {"agent_message_chunk": 100},
+        }
+        assert "fixture private thought" not in str(progress.payload)
+        assert publication.payload["digest"] == accepted["digest"]
+
+    async with SessionLocal() as db:
+        await db.execute(
+            text("UPDATE task_leases SET expires_at = :expired WHERE task_id = :task_id"),
+            {"expired": datetime.now(UTC) - timedelta(seconds=1), "task_id": task_id},
+        )
+        await db.commit()
+    with pytest.raises(StaleLease):
+        await scheduler.publish_artifact(job, b"stale artifact", "application/octet-stream")
+
+    orphan = scheduler.artifact_store.put_bytes(
+        b"unreferenced blob", media_type="application/octet-stream"
+    )
+    os.utime(artifact_root / orphan.storage_key, (0, 0))
+    assert await scheduler.reconcile_orphan_artifacts(minimum_age_seconds=0) == 1
+    assert await scheduler.is_current_fence(job.run_id, job.fencing_token) is False
+
+
+@pytest.mark.anyio
 async def test_expired_worker_without_checkpoint_fails_visibly_without_relaunch():
     _, project_id, actor_id = await seed_project()
     task_id = await ready_task(project_id, actor_id)
@@ -132,7 +193,7 @@ async def test_expired_worker_without_checkpoint_fails_visibly_without_relaunch(
     async with SessionLocal() as db:
         await db.execute(
             text("UPDATE task_leases SET expires_at = :expired WHERE task_id = :task_id"),
-            {"expired": datetime.now(timezone.utc) - timedelta(seconds=1), "task_id": task_id},
+            {"expired": datetime.now(UTC) - timedelta(seconds=1), "task_id": task_id},
         )
         await db.commit()
     assert await scheduler.recover_expired_leases() == 1
@@ -178,7 +239,7 @@ async def test_wall_time_limit_stops_retry_and_creates_dead_letter():
     async with SessionLocal() as db:
         await db.execute(
             text("UPDATE runs SET started_at = :started WHERE id = :run_id"),
-            {"started": datetime.now(timezone.utc) - timedelta(seconds=5), "run_id": job.run_id},
+            {"started": datetime.now(UTC) - timedelta(seconds=5), "run_id": job.run_id},
         )
         await db.commit()
     await scheduler.fail(
@@ -301,7 +362,7 @@ async def test_duplicate_commands_outbox_crash_ack_dedup_and_redis_rebuild(monke
     async with SessionLocal() as db:
         await db.execute(
             text("UPDATE outbox_messages SET lease_until = :expired, next_attempt_at = NULL"),
-            {"expired": datetime.now(timezone.utc) - timedelta(seconds=1)},
+            {"expired": datetime.now(UTC) - timedelta(seconds=1)},
         )
         await db.commit()
 
@@ -319,7 +380,7 @@ async def test_duplicate_commands_outbox_crash_ack_dedup_and_redis_rebuild(monke
     async with SessionLocal() as db:
         await db.execute(
             text("UPDATE outbox_messages SET lease_until = :expired, next_attempt_at = NULL"),
-            {"expired": datetime.now(timezone.utc) - timedelta(seconds=1)},
+            {"expired": datetime.now(UTC) - timedelta(seconds=1)},
         )
         await db.commit()
     monkeypatch.setattr(redis, "xadd", original_xadd)
@@ -367,17 +428,18 @@ async def test_external_effect_reconciliation_is_idempotent_and_retryable():
             payload={"path": "docs.md"},
             status="reconciling",
             attempts=1,
-            updated_at=datetime.now(timezone.utc) - timedelta(seconds=61),
+            updated_at=datetime.now(UTC) - timedelta(seconds=61),
         )
         db.add(abandoned)
         await db.commit()
         abandoned_id = abandoned.id
 
     class FakeReconciler:
-        outcomes = {
-            "task:effect:test": ["not_applied", "applied"],
-            "task:effect:abandoned": ["not_applied"],
-        }
+        def __init__(self) -> None:
+            self.outcomes = {
+                "task:effect:test": ["not_applied", "applied"],
+                "task:effect:abandoned": ["not_applied"],
+            }
 
         async def reconcile(self, *, kind, stable_key, payload):
             assert kind == "repository_write"
@@ -389,7 +451,7 @@ async def test_external_effect_reconciliation_is_idempotent_and_retryable():
     async with SessionLocal() as db:
         intent = await db.get(EffectIntent, intent_id)
         assert intent.status == "pending"
-        intent.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        intent.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
         await db.commit()
     assert await reconcile_effect_intents(adapter) == 1
     async with SessionLocal() as db:
@@ -403,7 +465,7 @@ async def test_external_effect_reconciliation_is_idempotent_and_retryable():
 
 @pytest.mark.anyio
 async def test_api_task_contracts_authorization_and_project_cursor_replay():
-    organization_id, project_id, actor_id = await seed_project()
+    organization_id, project_id, _actor_id = await seed_project()
     # Add a same-organization operator who has no project grant.
     async with SessionLocal() as db:
         outsider = User(

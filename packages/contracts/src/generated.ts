@@ -519,6 +519,194 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/specification-interviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Interview */
+        post: operations["start_interview_projects__project_id__specification_interviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/specification-interviews/{interview_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Interview */
+        get: operations["get_interview_projects__project_id__specification_interviews__interview_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/specification-interviews/{interview_id}/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Questions */
+        get: operations["list_questions_projects__project_id__specification_interviews__interview_id__questions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/specification-interviews/{interview_id}/questions/{question_id}/answers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit Answer */
+        post: operations["submit_answer_projects__project_id__specification_interviews__interview_id__questions__question_id__answers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/specification-interviews/{interview_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Artifacts */
+        get: operations["get_artifacts_projects__project_id__specification_interviews__interview_id__artifacts_get"];
+        /** Put Artifacts */
+        put: operations["put_artifacts_projects__project_id__specification_interviews__interview_id__artifacts_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/specification-interviews/{interview_id}/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Readiness */
+        get: operations["read_readiness_projects__project_id__specification_interviews__interview_id__readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/specification-interviews/{interview_id}/readiness/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Evaluate Interview Readiness */
+        post: operations["evaluate_interview_readiness_projects__project_id__specification_interviews__interview_id__readiness_evaluate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/specification-interviews/{interview_id}/readiness/sign-off": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign Off Interview Readiness */
+        post: operations["sign_off_interview_readiness_projects__project_id__specification_interviews__interview_id__readiness_sign_off_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/specification-interviews/{interview_id}/architect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Architect */
+        post: operations["run_architect_projects__project_id__specification_interviews__interview_id__architect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/repositories/{repository_id}/specification-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Repository Search */
+        post: operations["repository_search_projects__project_id__repositories__repository_id__specification_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/repositories/{repository_id}/specification-explorer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Specification Explorer */
+        get: operations["specification_explorer_projects__project_id__repositories__repository_id__specification_explorer_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -1125,6 +1313,13 @@ export interface components {
              * @default null
              */
             tool_call_id: string | null;
+            /**
+             * Tool Calls
+             * @default null
+             */
+            tool_calls: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /**
          * ModelPoolKind
@@ -1399,6 +1594,24 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** RepositoryCitation */
+        RepositoryCitation: {
+            /** Revision */
+            revision: string;
+            /** Path */
+            path: string;
+            /** Line */
+            line: number;
+            /** Snippet */
+            snippet: string;
+            /** Matched Terms */
+            matched_terms: string[];
+            /**
+             * Untrusted Source Content
+             * @default true
+             */
+            untrusted_source_content: boolean;
+        };
         /** RepositoryCreate */
         RepositoryCreate: {
             /** Target Id */
@@ -1432,6 +1645,23 @@ export interface components {
              * Format: uuid
              */
             project_id: string;
+        };
+        /** RepositorySearchRequest */
+        RepositorySearchRequest: {
+            /** Query */
+            query: string;
+            /**
+             * Limit
+             * @default 20
+             */
+            limit: number;
+        };
+        /** RepositorySearchResponse */
+        RepositorySearchResponse: {
+            /** Revision */
+            revision: string;
+            /** Results */
+            results: components["schemas"]["RepositoryCitation"][];
         };
         /**
          * RetryClass
@@ -1522,6 +1752,287 @@ export interface components {
          * @enum {string}
          */
         RunStatus: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "FAILED" | "CANCELLED" | "SUCCEEDED";
+        /** SpecificationAnswerCreate */
+        SpecificationAnswerCreate: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Answer */
+            answer: string;
+            /**
+             * Changes Scope
+             * @default false
+             */
+            changes_scope: boolean;
+        };
+        /** SpecificationAnswerRead */
+        SpecificationAnswerRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Question Id
+             * Format: uuid
+             */
+            question_id: string;
+            /**
+             * Actor Id
+             * @default null
+             */
+            actor_id: string | null;
+            /** Answer Revision */
+            answer_revision: number;
+            /** Answer */
+            answer: string;
+            /** Provenance */
+            provenance: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** SpecificationAnswerResult */
+        SpecificationAnswerResult: {
+            answer: components["schemas"]["SpecificationAnswerRead"];
+            interview: components["schemas"]["SpecificationInterviewRead"];
+        };
+        /** SpecificationArchitectRead */
+        SpecificationArchitectRead: {
+            /**
+             * Interview Id
+             * Format: uuid
+             */
+            interview_id: string;
+            /** Revision */
+            revision: number;
+            /** Artifact Revision */
+            artifact_revision: number;
+            /** Questions */
+            questions: components["schemas"]["SpecificationQuestionRead"][];
+        };
+        /** SpecificationArchitectRequest */
+        SpecificationArchitectRequest: {
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * Authorize Model Generation
+             * @default false
+             */
+            authorize_model_generation: boolean;
+        };
+        /** SpecificationArtifactRead */
+        SpecificationArtifactRead: {
+            /**
+             * Interview Id
+             * Format: uuid
+             */
+            interview_id: string;
+            /** Revision */
+            revision: number;
+            /** Base Sha */
+            base_sha: string;
+            /** Commit Sha */
+            commit_sha: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Paths */
+            paths: string[];
+            /** Change Summary */
+            change_summary: string;
+            /** Diff */
+            diff: string;
+            /** Proposal Md */
+            proposal_md: string;
+            /** Spec Md */
+            spec_md: string;
+            /** Design Md */
+            design_md: string;
+            /** Tasks Md */
+            tasks_md: string;
+        };
+        /** SpecificationArtifactUpdate */
+        SpecificationArtifactUpdate: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Proposal Md */
+            proposal_md: string;
+            /** Spec Md */
+            spec_md: string;
+            /** Design Md */
+            design_md: string;
+            /** Tasks Md */
+            tasks_md: string;
+        };
+        /** SpecificationExplorerEntry */
+        SpecificationExplorerEntry: {
+            /** Revision */
+            revision: string;
+            /** Path */
+            path: string;
+            /** Section */
+            section: string;
+            /**
+             * Archived
+             * @default false
+             */
+            archived: boolean;
+        };
+        /** SpecificationExplorerRead */
+        SpecificationExplorerRead: {
+            /** Revision */
+            revision: string;
+            /** Entries */
+            entries: components["schemas"]["SpecificationExplorerEntry"][];
+        };
+        /** SpecificationInterviewCreate */
+        SpecificationInterviewCreate: {
+            /** Topic */
+            topic: string;
+            /**
+             * Repository Id
+             * Format: uuid
+             */
+            repository_id: string;
+        };
+        /** SpecificationInterviewRead */
+        SpecificationInterviewRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Repository Id
+             * Format: uuid
+             */
+            repository_id: string;
+            /** Topic */
+            topic: string;
+            /** Revision */
+            revision: number;
+            /** Artifact Revision */
+            artifact_revision: number;
+            /** Base Sha */
+            base_sha: string;
+            /** Head Sha */
+            head_sha: string;
+            /** Artifact Hash */
+            artifact_hash: string;
+            /** Readiness State */
+            readiness_state: string;
+            /** Policy Revision */
+            policy_revision: string;
+        };
+        /** SpecificationQuestionRead */
+        SpecificationQuestionRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Interview Id
+             * Format: uuid
+             */
+            interview_id: string;
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /**
+             * Run Id
+             * @default null
+             */
+            run_id: string | null;
+            /**
+             * Attempt
+             * @default null
+             */
+            attempt: number | null;
+            /**
+             * Fencing Token
+             * @default null
+             */
+            fencing_token: number | null;
+            /** Source Revision */
+            source_revision: number;
+            /** Source */
+            source: string;
+            /** Classification */
+            classification: string;
+            /** Status */
+            status: string;
+            /** Question */
+            question: string;
+            /**
+             * Proposed Assumption
+             * @default null
+             */
+            proposed_assumption: string | null;
+            /** Recommended Options */
+            recommended_options?: {
+                [key: string]: unknown;
+            }[];
+            /** Affected Artifacts */
+            affected_artifacts?: string[];
+            /** Evidence */
+            evidence?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** SpecificationReadinessRead */
+        SpecificationReadinessRead: {
+            /**
+             * Interview Id
+             * Format: uuid
+             */
+            interview_id: string;
+            /** Interview Revision */
+            interview_revision: number;
+            /** Artifact Revision */
+            artifact_revision: number;
+            /** Content Hash */
+            content_hash: string;
+            /** Base Sha */
+            base_sha: string;
+            /** Policy Revision */
+            policy_revision: string;
+            /** Score */
+            score: number;
+            /** State */
+            state: string;
+            /** Gates */
+            gates: {
+                [key: string]: unknown;
+            };
+            /**
+             * Signed Off By
+             * @default null
+             */
+            signed_off_by: string | null;
+        };
+        /** SpecificationReadinessSignoff */
+        SpecificationReadinessSignoff: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Artifact Revision */
+            expected_artifact_revision: number;
+        };
         /**
          * TaskCommand
          * @enum {string}
@@ -1647,6 +2158,10 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
         /** ArtifactMetadata */
         ArtifactMetadata: {
@@ -2108,7 +2623,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -2155,7 +2672,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
         };
@@ -3147,6 +3666,424 @@ export interface operations {
             };
         };
     };
+    start_interview_projects__project_id__specification_interviews_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpecificationInterviewCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationInterviewRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_interview_projects__project_id__specification_interviews__interview_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                interview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationInterviewRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_questions_projects__project_id__specification_interviews__interview_id__questions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                interview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationQuestionRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_answer_projects__project_id__specification_interviews__interview_id__questions__question_id__answers_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                project_id: string;
+                interview_id: string;
+                question_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpecificationAnswerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationAnswerResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_artifacts_projects__project_id__specification_interviews__interview_id__artifacts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                interview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationArtifactRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_artifacts_projects__project_id__specification_interviews__interview_id__artifacts_put: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                project_id: string;
+                interview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpecificationArtifactUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationInterviewRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_readiness_projects__project_id__specification_interviews__interview_id__readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                interview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationReadinessRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluate_interview_readiness_projects__project_id__specification_interviews__interview_id__readiness_evaluate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                interview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationReadinessRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sign_off_interview_readiness_projects__project_id__specification_interviews__interview_id__readiness_sign_off_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                interview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpecificationReadinessSignoff"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationReadinessRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_architect_projects__project_id__specification_interviews__interview_id__architect_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                project_id: string;
+                interview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpecificationArchitectRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationArchitectRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    repository_search_projects__project_id__repositories__repository_id__specification_search_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                repository_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositorySearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositorySearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    specification_explorer_projects__project_id__repositories__repository_id__specification_explorer_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                repository_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationExplorerRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     live_health_live_get: {
         parameters: {
             query?: never;
@@ -3162,7 +4099,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
         };

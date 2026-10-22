@@ -5,6 +5,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -12,7 +13,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -92,6 +92,32 @@ class RunCheckpoint(Scoped, Base):
     state: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
     state_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     resumable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class RunArtifact(Scoped, Base):
+    """A locally stored artifact published under the current run fencing token."""
+
+    __tablename__ = "run_artifacts"
+    __table_args__ = (
+        UniqueConstraint("run_id", "fencing_token", "digest", name="uq_run_artifact_fence_digest"),
+        Index("ix_run_artifacts_scope", "project_id", "task_id", "run_id"),
+        CheckConstraint("fencing_token > 0", name="ck_run_artifacts_fence_positive"),
+        CheckConstraint("size_bytes >= 0", name="ck_run_artifacts_size_nonnegative"),
+    )
+
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    task_id: Mapped[UUID] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(300), nullable=False)
 
 
 class TaskLease(Scoped, Base):

@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from harnessa.contracts import RunStatus, TaskStage
 from harnessa.db.models import Task, User
 from harnessa.db.orchestration import DeadLetter, TaskTransition
 from harnessa.domain.lifecycle import assert_transition
 from harnessa.services.authorization import require_membership
 from harnessa.services.lifecycle import _deduplicated_command, _lock_command_key, _record_event
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def replay_dead_letter(
@@ -75,7 +74,7 @@ async def replay_dead_letter(
         task.stage = TaskStage.READY.value
         task.run_status = RunStatus.QUEUED.value
         task.blocked_reason = "operator_replay"
-        task.available_at = datetime.now(timezone.utc)
+        task.available_at = datetime.now(UTC)
         task.cancel_requested_at = None
         task.version += 1
         dead.status = "replayed"

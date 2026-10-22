@@ -2,6 +2,9 @@
   "name": "harnessa",
   "private": true,
   "packageManager": "pnpm@10.34.7",
+  "engines": {
+    "node": ">=24.0.0 <25 || >=26.0.0 <27"
+  },
   "scripts": {
     "build:design-system": "pnpm --filter @harnessa/ui-react build && pnpm --filter @harnessa/ui-svelte build",
     "typecheck:design-system": "pnpm --filter @harnessa/ui-react typecheck && pnpm --filter @harnessa/ui-svelte typecheck",
@@ -14,16 +17,29 @@
     "build:web": "pnpm --filter @harnessa/web build",
     "lint:web": "pnpm --filter @harnessa/web lint",
     "typecheck:web": "pnpm --filter @harnessa/web typecheck",
+    "typecheck:contracts": "pnpm --filter @harnessa/contracts typecheck",
     "typecheck:api": "uv run mypy --follow-imports=silent apps/api/harnessa/contracts.py apps/api/harnessa/services apps/api/harnessa/domain apps/api/harnessa/adapters apps/api/harnessa/db/orchestration.py apps/api/harnessa/db/model_gateway.py apps/api/harnessa/db/models.py apps/api/harnessa/db/session.py apps/api/harnessa/api/task_routes.py apps/api/harnessa/api/model_routes.py apps/api/harnessa/healthcheck.py apps/api/harnessa/worker.py",
-    "lint:api": "uv run ruff check apps/api tests",
-    "test:api": "uv run pytest",
-    "test:integration": "uv run pytest tests/integration -m integration",
+    "lint:api": "uv run ruff check apps/api tests scripts",
+    "test:api": "COVERAGE_FILE=coverage/python/.coverage uv run coverage erase && COVERAGE_FILE=coverage/python/.coverage uv run pytest -n 4 -m 'not integration' --cov=harnessa --cov-report=",
+    "test:integration": "HARNESSA_REQUIRE_INTEGRATION=1 COVERAGE_FILE=coverage/python/.coverage uv run pytest tests/integration -m integration --cov=harnessa --cov-append --cov-report=",
+    "test:coverage:python": "COVERAGE_FILE=coverage/python/.coverage uv run coverage json --pretty-print -o coverage/python/coverage.json",
+    "test:web": "pnpm exec vitest run --config vitest.config.mts --coverage && pnpm exec vitest run --config apps/cloud-portal/vitest.config.ts --coverage && pnpm --filter @harnessa/marketing build && uv run python scripts/check_marketing_build.py",
+    "test:coverage:check": "uv run python scripts/check_project_coverage.py --python coverage/python/coverage.json --javascript coverage/javascript/coverage-final.json coverage/svelte/coverage-final.json --minimum 85",
     "lint": "pnpm lint:web && pnpm lint:api",
-    "typecheck": "pnpm typecheck:web && pnpm typecheck:api",
-    "test": "pnpm test:api",
+    "typecheck": "pnpm typecheck:web && pnpm typecheck:api && pnpm typecheck:contracts && pnpm typecheck:design-system",
+    "test": "pnpm test:api && pnpm test:integration && pnpm test:coverage:python && pnpm test:web && pnpm test:coverage:check",
     "contracts:generate": "pnpm --filter @harnessa/contracts generate"
   },
   "devDependencies": {
-    "wrangler": "4.151.3"
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/svelte": "5.4.2",
+    "@vitest/coverage-v8": "5.0.5",
+    "jsdom": "30.1.3",
+    "vitest": "5.0.5",
+    "wrangler": "4.152.0"
+  },
+  "dependencies": {
+    "@fission-ai/openspec": "1.14.3"
   }
 }
