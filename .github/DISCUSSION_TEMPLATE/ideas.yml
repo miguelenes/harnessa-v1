@@ -1,0 +1,19 @@
+title: ""
+body:
+  - type: markdown
+    attributes:
+      value: Share product ideas or design questions here. For a confirmed bug, use the issue form. For security issues, use private reporting.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What problem or opportunity are you exploring?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: What would you like Harnessa to do?
+    validations:
+      required: true
