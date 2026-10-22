@@ -18,7 +18,7 @@ An open-source foundation for scoped, observable, reviewable repository work.
   <img src="docs/assets/readme-hero.png" alt="Illustration of repository work moving through verification to human review" width="100%" />
 </p>
 
-Harnessa is a self-hosted control plane for repository change workflows. It is being built around explicit project scope, durable orchestration, visible evidence, and human review. The hosted portal is a static preview; account provisioning is not available yet.
+Harnessa is a self-hosted control plane for repository change workflows. It brings project-scoped access, durable orchestration, evidence, and human review together. The cloud portal is a static preview; account provisioning is not available yet.
 
 ## Explore
 
@@ -29,7 +29,7 @@ Harnessa is a self-hosted control plane for repository change workflows. It is b
 
 ## Contribute
 
-Issues, discussions, and pull requests are welcome. Start with [the contribution guide](CONTRIBUTING.md), review [the security policy](SECURITY.md), and install the [pre-commit secret scanner](https://docs.harnessa.cloud/contributing/#secret-scanning) before your first commit.
+Issues, discussions, and pull requests are welcome. Start with [the contribution guide](CONTRIBUTING.md), review [the security policy](SECURITY.md), and install the [pre-commit checks](https://docs.harnessa.cloud/contributing/#secret-scanning) before your first commit.
 
 ## License
 

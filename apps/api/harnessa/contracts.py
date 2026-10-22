@@ -115,6 +115,7 @@ class ModelMessage(BaseModel):
     content: str | list[dict[str, Any]] | None = None
     name: str | None = Field(default=None, max_length=128)
     tool_call_id: str | None = Field(default=None, max_length=200)
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 class ModelRouteRequest(BaseModel):

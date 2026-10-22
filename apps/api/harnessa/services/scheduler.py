@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import asyncio
 import random
+from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
@@ -20,12 +21,14 @@ from harnessa.adapters.execution import (
     StaleLease,
     TaskInput,
 )
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.config import settings
 from harnessa.contracts import RetryClass, RunStatus, TaskStage
 from harnessa.db.models import Project, Task
 from harnessa.db.orchestration import (
     DeadLetter,
     Run,
+    RunArtifact,
     RunCheckpoint,
     TaskLease,
     TaskTransition,
@@ -71,6 +74,7 @@ class Scheduler:
         max_attempts: int | None = None,
         max_wall_seconds: int | None = None,
         rng: Callable[[], float] = random.random,
+        artifact_store: LocalArtifactStore | None = None,
     ) -> None:
         self.sessions = session_factory
         self.global_limit = global_limit or settings.max_concurrent_runs
@@ -79,6 +83,9 @@ class Scheduler:
         self.max_attempts = max_attempts or settings.run_max_attempts
         self.max_wall_seconds = max_wall_seconds or settings.run_max_wall_seconds
         self.rng = rng
+        self.artifact_store = artifact_store or LocalArtifactStore(
+            Path(settings.artifact_root)
+        )
 
     async def claim(self, owner_id: str, adapter_name: str) -> ClaimedRun | None:
         await self.recover_expired_leases()
@@ -278,7 +285,6 @@ class Scheduler:
             return True
 
     async def save_checkpoint(self, job: ClaimedRun, state: Mapping[str, Any]) -> UUID:
-        now = datetime.now(timezone.utc)
         async with self.sessions() as db:
             try:
                 lease = await db.scalar(
@@ -287,10 +293,28 @@ class Scheduler:
                         TaskLease.run_id == job.run_id,
                         TaskLease.owner_id == job.owner_id,
                         TaskLease.fencing_token == job.fencing_token,
-                        TaskLease.expires_at > now,
+                        TaskLease.expires_at > func.now(),
                     ).with_for_update()
                 )
-                if lease is None:
+                task = await db.scalar(
+                    select(Task).where(Task.id == job.task_id).with_for_update()
+                )
+                run = await db.scalar(
+                    select(Run).where(Run.id == job.run_id).with_for_update()
+                )
+                if (
+                    lease is None
+                    or task is None
+                    or run is None
+                    or run.task_id != task.id
+                    or run.project_id != job.project_id
+                    or run.fencing_token != job.fencing_token
+                    or run.status != RunStatus.RUNNING.value
+                    or run.cancel_requested_at is not None
+                    or task.run_status != RunStatus.RUNNING.value
+                    or task.cancel_requested_at is not None
+                    or task.stage != TaskStage.IN_PROGRESS.value
+                ):
                     raise StaleLease("Checkpoint rejected because the lease is no longer current")
                 sequence = await db.scalar(
                     select(func.coalesce(func.max(RunCheckpoint.sequence), 0)).where(
@@ -311,17 +335,172 @@ class Scheduler:
                     fencing_token=job.fencing_token,
                     state=data,
                     state_hash=digest,
+                    resumable=bool(state.get("resumable", True)),
                 )
                 db.add(checkpoint)
                 await db.flush()
-                await db.execute(
-                    update(Run).where(Run.id == job.run_id).values(checkpoint_id=checkpoint.id)
-                )
+                run.checkpoint_id = checkpoint.id
+                if state.get("phase") == "session_update":
+                    counts = state.get("update_counts", {})
+                    safe_counts = {
+                        str(key)[:80]: int(value)
+                        for key, value in counts.items()
+                        if isinstance(key, str) and isinstance(value, int) and value >= 0
+                    } if isinstance(counts, Mapping) else {}
+                    await _record_event(
+                        db,
+                        task=task,
+                        event_type="run.progress",
+                        actor_id=None,
+                        run_id=run.id,
+                        payload={"phase": "agent_updates", "update_counts": safe_counts},
+                    )
                 await db.commit()
                 return checkpoint.id
             except Exception:
                 await db.rollback()
                 raise
+
+    async def publish_artifact(
+        self,
+        job: ClaimedRun,
+        content: bytes,
+        media_type: str,
+    ) -> Mapping[str, Any]:
+        """Persist a CAS blob and scoped publication record under the current fence."""
+        if len(content) > settings.acp_artifact_limit_bytes:
+            raise ValueError("Run artifact exceeded its configured byte limit")
+        if not media_type or len(media_type) > 160:
+            raise ValueError("Run artifact media type is invalid")
+        async with self.sessions() as db:
+            try:
+                lease = await db.scalar(
+                    select(TaskLease).where(
+                        TaskLease.task_id == job.task_id,
+                        TaskLease.run_id == job.run_id,
+                        TaskLease.owner_id == job.owner_id,
+                        TaskLease.fencing_token == job.fencing_token,
+                        TaskLease.expires_at > func.now(),
+                    ).with_for_update()
+                )
+                task = await db.scalar(
+                    select(Task).where(Task.id == job.task_id).with_for_update()
+                )
+                run = await db.scalar(
+                    select(Run).where(Run.id == job.run_id).with_for_update()
+                )
+                project = await db.scalar(
+                    select(Project).where(Project.id == job.project_id).with_for_update()
+                )
+                if (
+                    lease is None
+                    or task is None
+                    or run is None
+                    or project is None
+                    or task.project_id != project.id
+                    or run.task_id != task.id
+                    or run.project_id != project.id
+                    or run.fencing_token != job.fencing_token
+                    or run.status != RunStatus.RUNNING.value
+                    or run.cancel_requested_at is not None
+                    or task.run_status != RunStatus.RUNNING.value
+                    or task.cancel_requested_at is not None
+                    or task.stage != TaskStage.IN_PROGRESS.value
+                ):
+                    raise StaleLease("Artifact rejected because the lease is no longer current")
+
+                stored = await asyncio.to_thread(
+                    self.artifact_store.put_bytes, content, media_type=media_type
+                )
+                # The write may take time. Recheck the expiry against database time before
+                # creating the durable reference; a crash here leaves only a GC-safe orphan.
+                current_lease = await db.scalar(
+                    select(TaskLease).where(
+                        TaskLease.task_id == job.task_id,
+                        TaskLease.run_id == job.run_id,
+                        TaskLease.owner_id == job.owner_id,
+                        TaskLease.fencing_token == job.fencing_token,
+                        TaskLease.expires_at > func.now(),
+                    )
+                )
+                if current_lease is None:
+                    raise StaleLease("Artifact rejected because the lease expired during storage")
+
+                previous = await db.scalar(
+                    select(RunArtifact).where(
+                        RunArtifact.run_id == job.run_id,
+                        RunArtifact.fencing_token == job.fencing_token,
+                        RunArtifact.digest == stored.digest,
+                    )
+                )
+                if previous is not None:
+                    if previous.media_type != stored.media_type:
+                        raise ValueError("Artifact digest was already published with another media type")
+                    await db.commit()
+                    return _artifact_summary(previous)
+
+                artifact = RunArtifact(
+                    organization_id=project.organization_id,
+                    project_id=project.id,
+                    task_id=task.id,
+                    run_id=run.id,
+                    fencing_token=job.fencing_token,
+                    digest=stored.digest,
+                    media_type=stored.media_type,
+                    size_bytes=stored.size_bytes,
+                    storage_key=stored.storage_key,
+                )
+                db.add(artifact)
+                await db.flush()
+                await _record_event(
+                    db,
+                    task=task,
+                    event_type="run.artifact_published",
+                    actor_id=None,
+                    run_id=run.id,
+                    payload={
+                        "artifact_id": str(artifact.id),
+                        "digest": artifact.digest,
+                        "media_type": artifact.media_type,
+                        "size_bytes": artifact.size_bytes,
+                    },
+                )
+                await db.commit()
+                return _artifact_summary(artifact)
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def is_current_fence(self, run_id: UUID, fencing_token: int) -> bool:
+        async with self.sessions() as db:
+            current = await db.scalar(
+                select(Run.id)
+                .join(TaskLease, TaskLease.run_id == Run.id)
+                .join(Task, Task.id == Run.task_id)
+                .where(
+                    Run.id == run_id,
+                    Run.fencing_token == fencing_token,
+                    Run.status == RunStatus.RUNNING.value,
+                    Run.cancel_requested_at.is_(None),
+                    Task.run_status == RunStatus.RUNNING.value,
+                    Task.stage == TaskStage.IN_PROGRESS.value,
+                    Task.cancel_requested_at.is_(None),
+                    TaskLease.owner_id.is_not(None),
+                    TaskLease.task_id == Run.task_id,
+                    TaskLease.expires_at > func.now(),
+                    TaskLease.fencing_token == fencing_token,
+                )
+            )
+            return current is not None
+
+    async def reconcile_orphan_artifacts(self, *, minimum_age_seconds: int = 3600) -> int:
+        async with self.sessions() as db:
+            keys = set((await db.scalars(select(RunArtifact.storage_key))).all())
+        return await asyncio.to_thread(
+            self.artifact_store.remove_unreferenced,
+            keys,
+            minimum_age_seconds=minimum_age_seconds,
+        )
 
     async def is_cancelled(self, job: ClaimedRun) -> bool:
         async with self.sessions() as db:
@@ -623,6 +802,10 @@ class Scheduler:
                 checkpoint=job.checkpoint,
                 save_checkpoint=save_checkpoint,
                 is_cancelled=cancelled,
+                is_current_fence=self.is_current_fence,
+                publish_artifact=lambda content, media_type: self.publish_artifact(
+                    job, content, media_type
+                ),
             )
             if await self.is_cancelled(job):
                 await self.complete(job, result)
@@ -658,3 +841,15 @@ class Scheduler:
             if await self.is_cancelled(job):
                 await adapter.cancel(job.run_id)
                 return
+
+
+def _artifact_summary(artifact: RunArtifact) -> dict[str, Any]:
+    return {
+        "id": str(artifact.id),
+        "digest": artifact.digest,
+        "media_type": artifact.media_type,
+        "size_bytes": artifact.size_bytes,
+        "storage_key": artifact.storage_key,
+        "run_id": str(artifact.run_id),
+        "fencing_token": artifact.fencing_token,
+    }

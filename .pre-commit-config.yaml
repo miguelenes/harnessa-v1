@@ -21,7 +21,7 @@ repos:
         always_run: true
       - id: project-tests
         name: Run the full test suite
-        entry: pnpm test
+        entry: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE pnpm test
         language: system
         pass_filenames: false
         always_run: true
