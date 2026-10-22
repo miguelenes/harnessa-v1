@@ -146,6 +146,7 @@ async def sync_repository_index(
 
     omitted: dict[str, int] = dict(snapshot_omitted)
     snapshot_complete = not snapshot_omitted
+    considered_count = len(files) + len(deleted_paths) + sum(snapshot_omitted.values())
     candidates: list[tuple[SourceDocument, tuple[IndexedChunk, ...]]] = []
     for item in files:
         source_type = source_type_for(item.path)
@@ -182,7 +183,7 @@ async def sync_repository_index(
             "incremental": False,
             "snapshot_complete": snapshot_complete,
             "revision": current_revision,
-            "considered": len(files) + sum(snapshot_omitted.values()),
+            "considered": considered_count,
             "source_count": len(candidates),
             "chunk_count": sum(len(chunks) for _, chunks in candidates),
             "omitted": omitted,
@@ -200,7 +201,7 @@ async def sync_repository_index(
         revision=current_revision,
         state="running",
         started_at=now,
-        considered_count=len(files) + sum(snapshot_omitted.values()),
+        considered_count=considered_count,
         indexed_count=len(candidates),
         omitted_counts=omitted,
     )
@@ -300,7 +301,7 @@ async def sync_repository_index(
         "incremental": incremental,
         "snapshot_complete": snapshot_complete,
         "revision": current_revision,
-        "considered": len(files) + sum(snapshot_omitted.values()),
+        "considered": considered_count,
         "source_count": len(candidates),
         "chunk_count": sum(len(chunk_set) for _, chunk_set in candidates),
         "omitted": omitted,

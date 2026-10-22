@@ -117,13 +117,13 @@ async def retrieval_status(
             .order_by(RetrievalSync.started_at.desc())
             .limit(1)
         )
-        indexed_revision = await db.scalar(
-            select(RetrievalSource.revision)
+        latest_successful_sync = await db.scalar(
+            select(RetrievalSync)
             .where(
-                RetrievalSource.repository_id == repository.id,
-                RetrievalSource.state == "current",
+                RetrievalSync.repository_id == repository.id,
+                RetrievalSync.state == "succeeded",
             )
-            .order_by(RetrievalSource.synced_at.desc())
+            .order_by(RetrievalSync.finished_at.desc())
             .limit(1)
         )
         indexed_sources = await db.scalar(
@@ -145,7 +145,7 @@ async def retrieval_status(
             RetrievalSourceStatusRead(
                 repository_id=repository.id,
                 source_uri=f"repo://{repository.id}",
-                indexed_revision=indexed_revision,
+                indexed_revision=(latest_successful_sync.revision if latest_successful_sync else None),
                 freshness="last_sync_only" if sync else "not_indexed",
                 coverage=coverage,
                 last_sync_at=sync.finished_at if sync else None,

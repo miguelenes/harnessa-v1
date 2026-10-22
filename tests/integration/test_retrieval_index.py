@@ -197,9 +197,11 @@ async def test_repository_sync_preview_duplicate_update_and_deletion_tombstone(
         (root / "docs/guide.md").unlink()
         _git(root, "add", "--all")
         await asyncio.to_thread(_commit, root, "delete source")
-        await sync_repository_index(
+        deleted = await sync_repository_index(
             db, project_id=project_id, repository_id=repository_id, actor=actor, manager=manager, dry_run=False
         )
+        assert deleted["incremental"] is True
+        assert deleted["considered"] == 1
         assert await db.scalar(
             select(RetrievalChunk.id).where(
                 RetrievalChunk.path == "docs/guide.md", RetrievalChunk.state == "tombstoned"
@@ -210,6 +212,9 @@ async def test_repository_sync_preview_duplicate_update_and_deletion_tombstone(
                 RetrievalSource.source_uri.endswith("/docs/guide.md"), RetrievalSource.state == "tombstoned"
             )
         ) is not None
+        status = await retrieval_routes.retrieval_status(project_id, actor, db)
+        repository_status = next(item for item in status.sources if item.repository_id == repository_id)
+        assert repository_status.indexed_revision == deleted["revision"]
 
 
 async def test_incomplete_bounded_snapshot_marks_unseen_sources_stale_not_deleted(
