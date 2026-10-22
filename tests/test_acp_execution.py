@@ -278,6 +278,9 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
         async def build_model_relay(self, path: Path) -> Path:
             return path
 
+        async def build_orchestrator_tool(self, path: Path) -> Path:
+            return path
+
         async def launch(self, **_: object) -> Process:
             return Process()
 
