@@ -1,4 +1,7 @@
 <script lang="ts">
+  const repositoryUrl = "https://github.com/miguelenes/harnessa-v1";
+  const docsUrl = "https://docs.harnessa.cloud";
+
   import {
     Alert,
     Badge,
@@ -151,17 +154,25 @@
             <CardDescription>Learn about the product direction and the principles shaping the workbench.</CardDescription>
           </CardHeader>
           <CardContent>
-            <LinkButton href="https://harnessa.cloud" variant="outline" size="sm">Visit harnessa.cloud <span aria-hidden="true">↗</span></LinkButton>
+            <div class="project-links">
+              <LinkButton href="https://harnessa.cloud" variant="outline" size="sm">Visit harnessa.cloud <span aria-hidden="true">↗</span></LinkButton>
+              <LinkButton href={repositoryUrl} variant="ghost" size="sm">GitHub <span aria-hidden="true">↗</span></LinkButton>
+              <LinkButton href={docsUrl} variant="ghost" size="sm">Documentation <span aria-hidden="true">↗</span></LinkButton>
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      <footer class="portal-footer"><span>Harnessa Cloud · Static preview</span><a href="https://harnessa.cloud">About the project <span aria-hidden="true">↗</span></a></footer>
+      <footer class="portal-footer"><span>Harnessa Cloud · Static preview</span><span class="portal-footer-links"><a href="https://harnessa.cloud">About Harnessa</a><a href={repositoryUrl}>GitHub</a><a href={docsUrl}>Docs</a></span></footer>
     </main>
   </div>
 </div>
 
 <style>
+  .project-links { display: flex; flex-wrap: wrap; gap: 8px; }
+  .portal-footer-links { display: flex; gap: 14px; }
+  .portal-footer-links a { color: inherit; text-decoration: none; }
+  .portal-footer-links a:hover { text-decoration: underline; }
   :global(.heading-badge .badge-dot) { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
   :global(.portal-alert) { display: flex; align-items: flex-start; gap: 10px; }
   .alert-icon { display: grid; width: 18px; height: 18px; flex: 0 0 18px; place-items: center; border: 1px solid #c8c5f2; border-radius: 50%; color: #5146c5; font-family: var(--font-mono); font-size: 10px; font-weight: 650; }

@@ -2,6 +2,8 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 
 const portalUrl = "https://app.harnessa.cloud";
+const repositoryUrl = "https://github.com/miguelenes/harnessa-v1";
+const docsUrl = "https://docs.harnessa.cloud";
 const flow = [
   { number: "01", title: "Make the scope explicit", body: "Start from a clear request, a repository, and the boundaries the work must respect." },
   { number: "02", title: "Keep execution legible", body: "Design every run to leave a useful trail of decisions, changes, and evidence." },
@@ -24,6 +26,7 @@ const flow = [
       <nav class="main-nav" aria-label="Main navigation">
         <a href="#approach">Approach</a>
         <a href="#workflow">Workflow</a>
+        <a href={repositoryUrl}>Open source <span aria-hidden="true">↗</span></a>
         <a class="nav-portal" href={portalUrl}>Cloud preview <span aria-hidden="true">↗</span></a>
       </nav>
       <a class="header-cta" href={portalUrl}>Open preview <span aria-hidden="true">↗</span></a>
@@ -141,7 +144,7 @@ const flow = [
     <div class="footer-inner">
       <a class="brand footer-brand" href="/" aria-label="Harnessa home"><svg class="brand-mark" viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M13 8H8v20h5M23 8h5v20h-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" /><path d="m14 21 4-6 4 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /><circle cx="18" cy="25" r="1.5" fill="currentColor" /></svg><span>harnessa</span></a>
       <p>Agentic engineering, with the work in view.</p>
-      <nav aria-label="Footer navigation"><a href="#approach">Design principles</a><a href={portalUrl}>Cloud preview <span aria-hidden="true">↗</span></a></nav>
+      <nav aria-label="Footer navigation"><a href="#approach">Design principles</a><a href={repositoryUrl}>GitHub <span aria-hidden="true">↗</span></a><a href={docsUrl}>Documentation <span aria-hidden="true">↗</span></a><a href={portalUrl}>Cloud preview <span aria-hidden="true">↗</span></a></nav>
       <small>© {new Date().getFullYear()} Harnessa · Product in development</small>
     </div>
   </footer>

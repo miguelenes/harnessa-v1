@@ -1,0 +1,33 @@
+repos:
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]
+        exclude: '^(pnpm-lock\.yaml|\.secrets\.baseline)$'
+  - repo: local
+    hooks:
+      - id: project-lint
+        name: Lint Python and JavaScript
+        entry: pnpm lint
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: project-typecheck
+        name: Type-check project packages
+        entry: pnpm typecheck
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: project-tests
+        name: Run the full test suite
+        entry: pnpm test
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: docs-build
+        name: Build documentation in strict mode
+        entry: uvx --python 3.12 --from mkdocs-material==9.7.7 --with mkdocs==1.6.1 mkdocs build --strict --site-dir /tmp/harnessa-docs-site
+        language: system
+        pass_filenames: false
+        always_run: true
