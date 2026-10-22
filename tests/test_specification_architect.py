@@ -90,6 +90,14 @@ def test_architect_restores_markdown_structure_from_flattened_tool_arguments() -
     assert "### Requirement: Accept typed name\n\nThe system SHALL accept a string name input." in inline_normative
     assert "#### Scenario: valid name\n- **WHEN**" in inline_normative
 
+    content_integrity = (
+        "## ADDED Requirements\n\n### Requirement: preserve examples\n\n"
+        "The system SHALL preserve literal examples.\n\n"
+        "Example `## Impact` and `&lt;tag&gt;`.\n\n"
+        "```html\n## Impact\n&amp; stays encoded\n```\n"
+    )
+    assert _normalize_architect_markdown(content_integrity, "greeting") == content_integrity
+
 
 @pytest.mark.anyio
 async def test_architect_uses_bounded_harnessa_route_and_validates_structured_output(
@@ -106,6 +114,12 @@ async def test_architect_uses_bounded_harnessa_route_and_validates_structured_ou
             assert request.requirements.minimum_context > 512
             assert request.requirements.tools is True
             assert request.tools[0]["function"]["name"] == "submit_architect_draft"
+            tool_bytes = len(json.dumps(request.tools, separators=(",", ":")).encode())
+            message_bytes = sum(len(message.content.encode()) for message in request.messages)
+            assert request.estimated_input_tokens >= tool_bytes + message_bytes
+            assert request.requirements.minimum_context == (
+                request.estimated_input_tokens + request.max_output_tokens
+            )
             assert kwargs["tool_choice"] == "required"
             assert kwargs["idempotency_key"].startswith("openspec-architect:")
             system_message = request.messages[0].content

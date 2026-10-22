@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-from html import unescape
 from typing import Any
 from uuid import UUID
 
@@ -111,25 +110,73 @@ _TEMPLATE_HEADINGS = (
 )
 
 
+def _map_markdown_prose(value: str, transform: Any) -> str:
+    """Apply a transformation outside inline and fenced code spans only."""
+    code_pattern = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`+[^`\n]*`+)")
+    parts: list[str] = []
+    cursor = 0
+    for match in code_pattern.finditer(value):
+        parts.append(transform(value[cursor : match.start()]))
+        parts.append(match.group())
+        cursor = match.end()
+    parts.append(transform(value[cursor:]))
+    return "".join(parts)
+
+
 def _normalize_architect_markdown(value: str, change_id: str) -> str:
-    """Restore template line boundaries lost by some tool-call providers."""
-    text = unescape(value).replace("\r\n", "\n").replace("\r", "\n")
-    headings = (*_TEMPLATE_HEADINGS, f"### {change_id}")
-    for heading in headings:
-        text = text.replace(heading, f"\n\n{heading}\n\n")
-    text = re.sub(
-        r"(?<!\n)(#### Scenario:|### Requirement:|### Requirement mapping:)",
-        r"\n\n\1",
+    """Repair known flattened Markdown separators without rewriting examples."""
+    text = value.replace("\r\n", "\n").replace("\r", "\n")
+    text = _map_markdown_prose(
         text,
+        lambda part: re.sub(r"(?i)<br\s*/?>|&#(?:10|x0*a);|&NewLine;", "\n", part),
     )
-    text = re.sub(
-        r"(?<!\n)(?=(?:The\s+(?:system|utility|function|service|application)\s+"
-        r"(?:SHALL|MUST|SHOULD|MAY)\b))",
-        "\n",
-        text,
-        flags=re.IGNORECASE,
+    flattened = "\n" not in text and any(
+        text.startswith(heading) for heading in _TEMPLATE_HEADINGS
     )
-    text = re.sub(r"(?<!\n)(- \*\*(?:WHEN|THEN)\*\*|- \[ \])", r"\n\1", text)
+    if flattened:
+        headings = (*_TEMPLATE_HEADINGS, f"### {change_id}")
+
+        def restore_boundaries(part: str) -> str:
+            for heading in headings:
+                part = re.sub(
+                    rf"(?<!^)(?<!\n){re.escape(heading)}",
+                    f"\n\n{heading}\n\n",
+                    part,
+                )
+            part = re.sub(
+                r"(?<!^)(?<!\n)(#### Scenario:|### Requirement:|### Requirement mapping:)",
+                r"\n\n\1",
+                part,
+            )
+            part = re.sub(r"(?<!\n)(- \*\*(?:WHEN|THEN)\*\*|- \[ \])", r"\n\1", part)
+            return part
+
+        text = _map_markdown_prose(text, restore_boundaries)
+
+    def split_inline_normative(part: str) -> str:
+        part = re.sub(
+            r"(?m)^(### Requirement:[^\n]*?)\s+\*\*(SHALL|MUST|SHOULD|MAY)\*\*\s*(.+)$",
+            r"\1\n\nThe system \2 \3",
+            part,
+            flags=re.IGNORECASE,
+        )
+        part = re.sub(
+            r"(?m)^(### Requirement:[^\n]*?)\s+((?:The\s+)?"
+            r"(?:system|utility|function|service|application)\s+"
+            r"(?:SHALL|MUST|SHOULD|MAY)\b)",
+            r"\1\n\n\2",
+            part,
+            flags=re.IGNORECASE,
+        )
+        return re.sub(
+            r"(?m)^(### Requirement:[^\n]+)\n((?:The\s+)?"
+            r"(?:SHALL|MUST|SHOULD|MAY)\b)",
+            r"\1\n\nThe system \2",
+            part,
+            flags=re.IGNORECASE,
+        )
+
+    text = _map_markdown_prose(text, split_inline_normative)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip() + "\n"
 
@@ -267,7 +314,12 @@ class SpecificationArchitect:
             "preserve all distinct requirements when the topic is broader. Ask one concise, "
             "material clarification question and include at most two useful options."
         )
-        serialized = len(system.encode()) + len(user_context.encode())
+        tools = [_draft_tool()]
+        serialized = (
+            len(system.encode())
+            + len(user_context.encode())
+            + len(json.dumps(tools, separators=(",", ":")).encode())
+        )
         estimated_input_tokens = max(1, serialized)
         max_output_tokens = settings.openspec_model_max_output_tokens
         request = ModelRouteRequest(
@@ -286,7 +338,7 @@ class SpecificationArchitect:
                 ModelMessage(role="system", content=system),
                 ModelMessage(role="user", content=user_context),
             ],
-            tools=[_draft_tool()],
+            tools=tools,
         )
         result = await self.router.complete(
             db,
