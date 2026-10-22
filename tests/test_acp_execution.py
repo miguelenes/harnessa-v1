@@ -12,7 +12,7 @@ from harnessa.adapters.acp_execution import ACPExecutionAdapter, _load_owner_id
 from harnessa.adapters.execution import ExecutionFailure, RunInput, TaskInput
 from harnessa.adapters.podman_sandbox import SandboxIdentity
 
-IMAGE = "ghcr.io/anomalyco/opencode:2.0.32@sha256:" + "a" * 64
+IMAGE = "ghcr.io/anomalyco/opencode:1.19.4@sha256:" + "a" * 64
 
 
 def _adapter(tmp_path: Path, *, enabled: bool = True) -> ACPExecutionAdapter:
@@ -181,7 +181,7 @@ def test_checkpoint_summaries_retain_harnessa_fencing_and_policy(tmp_path: Path)
         datetime.now(UTC),
         2_000_000_000,
         capabilities={"fs": True},
-        agent_info={"version": "2.0.32", "private_key": "redact"},
+        agent_info={"version": "1.19.4", "private_key": "redact"},
         progress_counts={"tool_call": 2},
     )
     summary = adapter._workspace_summary(workspace, identity, 2_000_000_000)  # type: ignore[arg-type]
@@ -312,7 +312,7 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
         async def initialize(self) -> object:
             return SimpleNamespace(
                 agent_capabilities=None,
-                agent_info=SimpleNamespace(model_dump=lambda **__: {"version": "2.0.32"}),
+        agent_info=SimpleNamespace(model_dump=lambda **__: {"version": "1.19.4"}),
                 protocol_version="1",
             )
 
@@ -395,7 +395,7 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
     assert '"artifact_revision": 3' in prompt_texts[0]
     assert '"content_hash": "' + "f" * 64 + '"' in prompt_texts[0]
     assert "Exact approved task artifact content" in prompt_texts[0]
-    assert result["agent_version"] == "2.0.32"
+    assert result["agent_version"] == "1.19.4"
     assert result["patch_artifact"] == {"artifact_id": "fixture"}
     assert checkpoints[0]["fencing_token"] == run.fencing_token
     assert [event for event in completed if event.endswith("removed")] == [

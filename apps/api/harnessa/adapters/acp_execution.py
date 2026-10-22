@@ -73,7 +73,7 @@ class ACPExecutionAdapter:
         image: str,
         owner_id: str | None = None,
         limits: SandboxLimits | None = None,
-        expected_agent_version: str | None = "2.0.32",
+        expected_agent_version: str | None = "1.19.4",
         model_route_ready: bool = False,
         model_router: ModelRouter | None = None,
         sessions_factory: async_sessionmaker[AsyncSession] = SessionLocal,
