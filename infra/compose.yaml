@@ -1,7 +1,7 @@
 name: harnessa
 services:
   db:
-    image: postgres:16.13-bookworm@sha256:472efd9a66f2b2f1a5aeb18b28de74332e6ef88c2b93a1a5d812fb6db67a5f60
+    image: postgres:18.4-bookworm@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-harnessa}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-harnessa}
