@@ -3,6 +3,13 @@
   "private": true,
   "packageManager": "pnpm@10.34.7",
   "scripts": {
+    "build:design-system": "pnpm --filter @harnessa/ui-react build && pnpm --filter @harnessa/ui-svelte build",
+    "typecheck:design-system": "pnpm --filter @harnessa/ui-react typecheck && pnpm --filter @harnessa/ui-svelte typecheck",
+    "build:marketing": "pnpm --filter @harnessa/ui-svelte build && pnpm --filter @harnessa/marketing build",
+    "build:cloud-portal": "pnpm --filter @harnessa/ui-svelte build && pnpm --filter @harnessa/cloud-portal build",
+    "build:sites": "pnpm build:design-system && pnpm --filter @harnessa/marketing build && pnpm --filter @harnessa/cloud-portal build",
+    "deploy:marketing": "pnpm build:marketing && wrangler pages deploy apps/marketing/dist --project-name=harnessa-site --branch=main",
+    "deploy:cloud-portal": "pnpm build:cloud-portal && wrangler pages deploy apps/cloud-portal/build --project-name=harnessa-cloud --branch=main",
     "dev:web": "pnpm --filter @harnessa/web dev",
     "build:web": "pnpm --filter @harnessa/web build",
     "lint:web": "pnpm --filter @harnessa/web lint",
@@ -15,5 +22,8 @@
     "typecheck": "pnpm typecheck:web && pnpm typecheck:api",
     "test": "pnpm test:api",
     "contracts:generate": "pnpm --filter @harnessa/contracts generate"
+  },
+  "devDependencies": {
+    "wrangler": "4.151.3"
   }
 }

@@ -28,6 +28,14 @@ Read [shared planning decisions](architecture-decisions.md) for runtime ownershi
 | 16 | [Structured decisions with Jev](prompts/16-jev-decision-workflows.md) | Evaluated routing and workflow decisions |
 | 17 | [End-to-end LiteLLM optimization](prompts/17-litellm-end-to-end.md) | Model inventory, cache, compression, evals and operations |
 
+## Parallel workstreams
+
+These tracks are separate from the numbered dependency order. They must not be renamed or reported as numbered milestones.
+
+| Track | Prompt | Outcome |
+| --- | --- | --- |
+| Web foundation | [Shared design system, marketing site, and static cloud portal](prompts/parallel-design-system-cloud-sites.md) | Shared React/Svelte components, Astro marketing site, static SvelteKit portal shell, and separate Cloudflare Pages deployments |
+
 ## How to use
 
 Give the implementation agent one prompt at a time, with the revised specification, shared decisions and current evidence. Preserve existing domain and adapter contracts. Required external blockers remain explicit; optional live checks are recorded separately. Follow-on milestones 14–17 require the completed milestone 13 release.
