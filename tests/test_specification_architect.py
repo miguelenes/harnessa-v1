@@ -76,6 +76,16 @@ def test_architect_restores_markdown_structure_from_flattened_tool_arguments() -
     assert "The rationale references ## Impact, which is a literal heading label." in prose_heading
     assert "## ImpactActual impact follows." in prose_heading
 
+    spaced_template = _normalize_architect_markdown(
+        "## WhyThe change reason. ## What Changesa scoped change. "
+        "## Capabilities### greeting## Impactsmall footprint.",
+        "greeting",
+    )
+    assert "## Why\n\nThe change reason." in spaced_template
+    assert "## What Changes\n\na scoped change." in spaced_template
+    assert "## Capabilities\n\n### greeting\n\n" in spaced_template
+    assert "## Impact\n\nsmall footprint." in spaced_template
+
     prose_hyphen = _normalize_architect_markdown(
         "## WhyA scope check is required - Harnessa retains authority."
         "## ImpactRuntime stays bounded.",

@@ -181,14 +181,12 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
             cursor = 0
             for index, heading in enumerate(ordered_headings):
                 match = re.search(
-                    rf"{re.escape(heading)}(?=[A-Z#-])",
+                    rf"{re.escape(heading)}(?=[A-Za-z#-])",
                     part[cursor:],
                 )
                 if match is None:
                     break
                 start = cursor + match.start()
-                if index and (start == 0 or part[start - 1].isspace()):
-                    break
                 boundaries.append((start, cursor + match.end(), heading))
                 cursor += match.end()
             for start, end, heading in reversed(boundaries):
@@ -202,23 +200,23 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
                     part,
                 )
                 part = re.sub(
-                    r"(?<=\S)(### Requirement:|#### Scenario:)(?=\s*[A-Za-z])",
+                    r"(?<!^)(### Requirement:|#### Scenario:)(?=\s*[A-Za-z])",
                     r"\n\n\1",
                     part,
                 )
             if part.startswith("## 1. Implementation"):
                 part = re.sub(
-                    r"(?<=\S)(## \d+\. )(?=[A-Z])",
+                    r"(?<!^)(## \d+\. )(?=[A-Za-z])",
                     r"\n\n\1",
                     part,
                 )
                 part = re.sub(
-                    r"(?<=\S)(## Verification)(?=-)",
+                    r"(?<!^)(## Verification)(?=-)",
                     r"\n\n\1\n\n",
                     part,
                 )
                 part = re.sub(
-                    r"(?<=\S)(### Requirement mapping:)(?=[A-Z])",
+                    r"(?<!^)(### Requirement mapping:)(?=\s*[A-Za-z])",
                     r"\n\n\1",
                     part,
                 )
