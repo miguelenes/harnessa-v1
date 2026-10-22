@@ -29,7 +29,11 @@ class FakeExecutionAdapter:
         checkpoint: Mapping[str, Any] | None,
         save_checkpoint: Callable[[Mapping[str, Any]], Awaitable[None]],
         is_cancelled: Callable[[], Awaitable[bool]],
+        is_current_fence: Callable[..., Awaitable[bool]],
+        publish_artifact: Callable[[bytes, str], Awaitable[Mapping[str, Any]]],
     ) -> Mapping[str, Any]:
+        del is_current_fence
+        del publish_artifact
         self.calls.append((str(task.id), run.attempt, checkpoint))
         if await is_cancelled():
             return {"cancelled": True}

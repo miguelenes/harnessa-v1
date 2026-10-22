@@ -5,7 +5,7 @@
 - **Decision scope:** milestone 4 only; no production runtime or run-state migration
 - **Baseline:** `main` at `8ddc86e77520288e2bfc9699d3ad7b67fe2e6b03`
 - **Evidence report:** [milestone 4](../milestones/04.md)
-- **Workload and thresholds:** [declared before candidate trials](../../spikes/orchestration/WORKLOAD.md)
+- **Workload and thresholds:** [declared before candidate trials](https://github.com/miguelenes/harnessa-v1/blob/main/spikes/orchestration/WORKLOAD.md)
 
 ## Decision
 

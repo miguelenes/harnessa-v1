@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and design discussion
+    url: https://github.com/miguelenes/harnessa-v1/discussions
+    about: Ask questions or propose a design before opening an issue.
+  - name: Report a security vulnerability
+    url: https://github.com/miguelenes/harnessa-v1/security/advisories/new
+    about: Use private vulnerability reporting. Do not post security details publicly.

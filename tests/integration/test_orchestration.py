@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from redis.asyncio import Redis
 from sqlalchemy import func, select, text
 
 from harnessa.adapters.execution import ExecutionFailure, StaleLease
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.config import settings
 from harnessa.contracts import RunStatus, TaskCommand, TaskStage
 from harnessa.db.models import Membership, Organization, Project, ProjectMembership, Task, User
@@ -21,6 +23,7 @@ from harnessa.db.orchestration import (
     EffectIntent,
     OutboxMessage,
     Run,
+    RunArtifact,
     TaskTransition,
 )
 from harnessa.db.session import SessionLocal
@@ -120,6 +123,64 @@ async def test_concurrent_claim_and_expired_worker_fencing_with_checkpoint():
     with pytest.raises(StaleLease):
         await scheduler_a.complete(old_job, {"stale": True})
     assert await scheduler_b.heartbeat(new_job)
+
+
+@pytest.mark.anyio
+async def test_artifact_and_progress_publication_are_fenced_and_orphans_reconcile(tmp_path):
+    _, project_id, actor_id = await seed_project()
+    task_id = await ready_task(project_id, actor_id)
+    artifact_root = tmp_path / "artifacts"
+    scheduler = Scheduler(
+        global_limit=1,
+        artifact_store=LocalArtifactStore(artifact_root),
+    )
+    job = await scheduler.claim("artifact-worker", "test-fake-execution")
+    assert job is not None
+
+    await scheduler.save_checkpoint(
+        job,
+        {"phase": "session_update", "update_counts": {"agent_message_chunk": 100}},
+    )
+    accepted = await scheduler.publish_artifact(
+        job, b"accepted artifact", "application/octet-stream"
+    )
+    assert accepted["fencing_token"] == job.fencing_token
+    assert accepted["run_id"] == str(job.run_id)
+
+    async with SessionLocal() as db:
+        stored = await db.scalar(select(RunArtifact).where(RunArtifact.run_id == job.run_id))
+        events = (
+            await db.execute(
+                select(DomainEvent).where(DomainEvent.run_id == job.run_id)
+            )
+        ).scalars().all()
+        assert stored is not None
+        progress = next(event for event in events if event.event_type == "run.progress")
+        publication = next(
+            event for event in events if event.event_type == "run.artifact_published"
+        )
+        assert progress.payload == {
+            "phase": "agent_updates",
+            "update_counts": {"agent_message_chunk": 100},
+        }
+        assert "fixture private thought" not in str(progress.payload)
+        assert publication.payload["digest"] == accepted["digest"]
+
+    async with SessionLocal() as db:
+        await db.execute(
+            text("UPDATE task_leases SET expires_at = :expired WHERE task_id = :task_id"),
+            {"expired": datetime.now(timezone.utc) - timedelta(seconds=1), "task_id": task_id},
+        )
+        await db.commit()
+    with pytest.raises(StaleLease):
+        await scheduler.publish_artifact(job, b"stale artifact", "application/octet-stream")
+
+    orphan = scheduler.artifact_store.put_bytes(
+        b"unreferenced blob", media_type="application/octet-stream"
+    )
+    os.utime(artifact_root / orphan.storage_key, (0, 0))
+    assert await scheduler.reconcile_orphan_artifacts(minimum_age_seconds=0) == 1
+    assert await scheduler.is_current_fence(job.run_id, job.fencing_token) is False
 
 
 @pytest.mark.anyio

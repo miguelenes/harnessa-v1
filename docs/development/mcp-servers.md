@@ -1,10 +1,10 @@
 # Development MCP servers
 
-This setup is for coding agents working on the Harnessa repository. It does not configure MCP access for Harnessa product agents; that belongs to the future governed integration in [Prompt 7](../../planning/prompts/07-retrieval-mcp.md).
+This setup is for coding agents working on the Harnessa repository. It does not configure MCP access for Harnessa product agents; that belongs to the future governed integration in [Prompt 7](https://github.com/miguelenes/harnessa-v1/blob/main/planning/prompts/07-retrieval-mcp.md).
 
 ## Configured for this project
 
-The project-scoped Codex config in [`.codex/config.toml`](../../.codex/config.toml) declares two remote, read-only services:
+The project-scoped Codex config in [`.codex/config.toml`](https://github.com/miguelenes/harnessa-v1/blob/main/.codex/config.toml) declares two remote, read-only services:
 
 | Server | Development use | Access |
 | --- | --- | --- |
@@ -31,4 +31,4 @@ The [official MCP Registry](https://modelcontextprotocol.io/registry/about) is u
 - [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp) documents project-scoped `.codex/config.toml` for trusted projects and supported remote HTTP MCP connections.
 - [GitHub MCP remote server](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md) documents the hosted endpoint and read-only endpoint.
 - [Context7's MCP plugin setup](https://github.com/upstash/context7/blob/master/plugins/agent-plugins/context7/README.md) documents its OAuth-enabled documentation server.
-- The local development stack and dependency boundaries are described in [the project README](../../README.md), [`pyproject.toml`](../../pyproject.toml), [`package.json`](../../package.json), and [the architecture](../architecture.md).
+- The local development stack and dependency boundaries are described in [the project README](https://github.com/miguelenes/harnessa-v1/blob/main/README.md), [`pyproject.toml`](https://github.com/miguelenes/harnessa-v1/blob/main/pyproject.toml), [`package.json`](https://github.com/miguelenes/harnessa-v1/blob/main/package.json), and [the architecture](../architecture.md).
