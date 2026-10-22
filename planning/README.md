@@ -15,7 +15,7 @@ Read [shared planning decisions](architecture-decisions.md) for runtime ownershi
 | 3 | [LiteLLM routing and spend controls](archive/completed/03-model-gateway.md) — **archived complete** | Interactive/primary and probe/batch pools, explicit fallbacks, budget reservations, request ledger |
 | 4 | [Run orchestration decision](archive/completed/04-runtime-decision.md) — **archived complete (NO-GO)** | LangGraph parity spike; retain the current Harnessa scheduler |
 | 5 | [Isolated workspaces and ACP execution](prompts/05-acp-execution.md) | ACP SDK, trusted runner and safe execution |
-| 6 | [OpenSpec discovery and clarification](prompts/06-openspec.md) | Topic to validated READY through APIs |
+| 6 | [OpenSpec discovery and clarification](prompts/06-openspec.md) | Merged design baseline, dependency/Python audit, 85% tests, AGENTS.md, local CI/review/merge, OpenSpec READY APIs |
 | 7 | [Governed retrieval and MCP](prompts/07-retrieval-mcp.md) | LlamaIndex/Qdrant pilot, lexical fallback and scoped tools |
 | 8 | [Web control plane and AG-UI](prompts/08-web-ag-ui.md) | Real API-backed UI, typed events and replay |
 | 9 | [Implementation, verification and review](prompts/09-verification-review.md) | Revision-bound implementation and independent verification |
