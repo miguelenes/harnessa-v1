@@ -150,11 +150,6 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
                     part,
                 )
             part = re.sub(
-                r"(?<!^)(?<!\n)(## \d+\. [^\n]+?)(?=\S)",
-                r"\n\n\1\n\n",
-                part,
-            )
-            part = re.sub(
                 r"(?<!^)(?<!\n)(#### Scenario:|### Requirement:|### Requirement mapping:)",
                 r"\n\n\1",
                 part,
@@ -162,6 +157,11 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
             part = re.sub(
                 r"(?<!\n)(- \*\*(?:WHEN|THEN)\*\*|- \[ \]|- [A-Z])",
                 r"\n\1",
+                part,
+            )
+            part = re.sub(
+                r"(?<!^)(?<!\n)(## \d+\. )",
+                r"\n\n\1",
                 part,
             )
             return part

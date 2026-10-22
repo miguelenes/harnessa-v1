@@ -68,6 +68,14 @@ def test_architect_restores_markdown_structure_from_flattened_tool_arguments() -
     )
     assert "- **THEN** a greeting is returned\n" in spec
 
+    numbered_tasks = _normalize_architect_markdown(
+        "## 1. Implementation- [ ] Preserve the complete first task."
+        "## 2. Verification- [ ] Preserve the complete second task.",
+        "greeting",
+    )
+    assert "## 1. Implementation\n\n- [ ] Preserve the complete first task." in numbered_tasks
+    assert "## 2. Verification\n- [ ] Preserve the complete second task." in numbered_tasks
+
     html_breaks = _normalize_architect_markdown(
         "## ADDED Requirements<br><br>### Requirement: greeting user<br>"
         "SHALL return a greeting.<br><br>#### Scenario: named<br>"
