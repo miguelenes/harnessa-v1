@@ -1,35 +1,34 @@
 """Project-scoped task, run, recovery, and durable event APIs."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from harnessa.auth.users import current_active_user
 from harnessa.config import settings
 from harnessa.contracts import (
     DeadLetterRead,
+    DispatchRebuildResult,
     EventEnvelope,
     EventReplayItem,
     EventReplayPage,
-    DispatchRebuildResult,
     RecoveryRequest,
     RunRead,
     TaskCommandRequest,
     TaskCreate,
     TaskRead,
-    TaskTransitionRequest,
     TaskTransitionRead,
+    TaskTransitionRequest,
 )
 from harnessa.db.models import Task, User
 from harnessa.db.orchestration import DeadLetter, DomainEvent, Run, TaskTransition
 from harnessa.db.session import get_db
-from harnessa.auth.users import current_active_user
 from harnessa.services.authorization import require_membership
 from harnessa.services.lifecycle import command_task, create_task, transition_task
 from harnessa.services.recovery import replay_dead_letter
 from harnessa.services.streams import rebuild_dispatch_stream
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 
@@ -195,7 +194,7 @@ async def replay_events(
     await require_membership(db, actor, project_id)
     if limit > settings.event_replay_limit:
         raise HTTPException(422, f"Replay limit is {settings.event_replay_limit}")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     oldest = await db.scalar(
         select(DomainEvent.project_sequence)
         .where(DomainEvent.project_id == project_id, DomainEvent.retention_until > now)

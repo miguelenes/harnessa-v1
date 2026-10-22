@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import asyncio
 import random
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import func, or_, select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.execution import (
     ExecutionAdapter,
     ExecutionFailure,
@@ -21,10 +19,13 @@ from harnessa.adapters.execution import (
     StaleLease,
     TaskInput,
 )
-from harnessa.adapters.artifacts import LocalArtifactStore
+from harnessa.adapters.specification_workspace import (
+    SpecificationWorkspaceError,
+    SpecificationWorkspaceManager,
+)
 from harnessa.config import settings
 from harnessa.contracts import RetryClass, RunStatus, TaskStage
-from harnessa.db.models import Project, Task
+from harnessa.db.models import Project, Repository, Task
 from harnessa.db.orchestration import (
     DeadLetter,
     Run,
@@ -34,7 +35,14 @@ from harnessa.db.orchestration import (
     TaskTransition,
 )
 from harnessa.db.session import SessionLocal
-from harnessa.services.lifecycle import record_system_transition, _record_event
+from harnessa.db.specification import (
+    SpecificationInterview,
+    SpecificationQuestion,
+    SpecificationReadinessEvaluation,
+)
+from harnessa.services.lifecycle import _record_event, record_system_transition
+from sqlalchemy import func, or_, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 @dataclass(frozen=True)
@@ -89,7 +97,7 @@ class Scheduler:
 
     async def claim(self, owner_id: str, adapter_name: str) -> ClaimedRun | None:
         await self.recover_expired_leases()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self.sessions() as db:
             try:
                 await db.execute(text("SELECT pg_advisory_xact_lock(710203041)"))
@@ -120,7 +128,58 @@ class Scheduler:
                 )
                 candidates = (await db.execute(query.limit(100))).all()
                 selected: tuple[Task, Project] | None = None
+                readiness_invalidated = False
                 for task, project in candidates:
+                    interview = await db.scalar(
+                        select(SpecificationInterview)
+                        .where(SpecificationInterview.task_id == task.id)
+                        .with_for_update()
+                    )
+                    if interview is not None:
+                        evaluation = await db.scalar(
+                            select(SpecificationReadinessEvaluation)
+                            .where(
+                                SpecificationReadinessEvaluation.interview_id == interview.id
+                            )
+                            .order_by(SpecificationReadinessEvaluation.created_at.desc())
+                            .limit(1)
+                        )
+                        repository = await db.get(Repository, interview.repository_id)
+                        frozen_ready = bool(
+                            interview.readiness_state == "READY"
+                            and evaluation is not None
+                            and evaluation.state == "READY"
+                            and evaluation.interview_revision == interview.revision
+                            and evaluation.artifact_revision == interview.artifact_revision
+                            and evaluation.content_hash == interview.artifact_hash
+                            and evaluation.base_sha == interview.base_sha
+                            and evaluation.policy_revision == interview.policy_revision
+                        )
+                        try:
+                            current_base = (
+                                await SpecificationWorkspaceManager().current_base(repository)
+                                if repository is not None
+                                else None
+                            )
+                        except (OSError, SpecificationWorkspaceError):
+                            current_base = None
+                        if not frozen_ready or current_base != interview.base_sha:
+                            interview.readiness_state = "STALE"
+                            readiness_invalidated = True
+                            await record_system_transition(
+                                db,
+                                task=task,
+                                target=TaskStage.SPECIFYING,
+                                reason="Specification readiness or repository base is not current",
+                                event_type="specification.dispatch_blocked",
+                                payload={
+                                    "interview_id": str(interview.id),
+                                    "evaluation_id": str(evaluation.id) if evaluation else None,
+                                    "base_current": current_base == interview.base_sha,
+                                    "frozen_ready": frozen_ready,
+                                },
+                            )
+                            continue
                     project_active = await db.scalar(
                         select(func.count(TaskLease.id))
                         .join(Task, Task.id == TaskLease.task_id)
@@ -140,7 +199,10 @@ class Scheduler:
                     selected = (task, project)
                     break
                 if selected is None:
-                    await db.rollback()
+                    if readiness_invalidated:
+                        await db.commit()
+                    else:
+                        await db.rollback()
                     return None
 
                 task, project = selected
@@ -259,7 +321,7 @@ class Scheduler:
                 raise
 
     async def heartbeat(self, job: ClaimedRun) -> bool:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self.sessions() as db:
             result = await db.execute(
                 update(TaskLease)
@@ -515,7 +577,7 @@ class Scheduler:
             )
 
     async def complete(self, job: ClaimedRun, result: Mapping[str, Any]) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self.sessions() as db:
             try:
                 lease = await db.scalar(
@@ -565,7 +627,7 @@ class Scheduler:
                 raise
 
     async def fail(self, job: ClaimedRun, failure: ExecutionFailure) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self.sessions() as db:
             try:
                 lease = await db.scalar(
@@ -684,7 +746,7 @@ class Scheduler:
         )
 
     async def recover_expired_leases(self) -> int:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         recovered = 0
         async with self.sessions() as db:
             try:
@@ -707,6 +769,58 @@ class Scheduler:
                     if task.run_status in {RunStatus.CANCELLED.value, RunStatus.PAUSED.value}:
                         run.status = task.run_status
                         run.finished_at = now
+                        recovered += 1
+                        continue
+                    if (
+                        task.stage == TaskStage.CLARIFYING.value
+                        and task.run_status == RunStatus.WAITING_FOR_INPUT.value
+                    ):
+                        question_id = await db.scalar(
+                            select(SpecificationQuestion.id)
+                            .where(
+                                SpecificationQuestion.run_id == run.id,
+                                SpecificationQuestion.status == "open",
+                                SpecificationQuestion.fencing_token == lease.fencing_token,
+                            )
+                            .order_by(SpecificationQuestion.created_at.desc())
+                            .limit(1)
+                        )
+                        run.status = RunStatus.FAILED.value
+                        run.error_code = "worker_lost_waiting_for_input"
+                        run.error_message = (
+                            "Worker lease expired while a durable clarification was awaiting input"
+                        )
+                        run.retry_class = RetryClass.TRANSIENT.value
+                        run.finished_at = now
+                        task.version += 1
+                        db.add(
+                            TaskTransition(
+                                task_id=task.id,
+                                project_id=task.project_id,
+                                actor_id=None,
+                                from_stage=TaskStage.CLARIFYING.value,
+                                to_stage=TaskStage.CLARIFYING.value,
+                                from_run_status=RunStatus.WAITING_FOR_INPUT.value,
+                                to_run_status=RunStatus.WAITING_FOR_INPUT.value,
+                                reason="Expired worker detached; durable clarification remains open",
+                                command="clarification_wait_recovered",
+                                version_before=task.version - 1,
+                                version_after=task.version,
+                            )
+                        )
+                        await _record_event(
+                            db,
+                            task=task,
+                            event_type="task.clarification_wait_recovered",
+                            actor_id=None,
+                            run_id=run.id,
+                            payload={
+                                "question_id": str(question_id) if question_id else None,
+                                "attempt": run.attempt,
+                                "fencing_token": run.fencing_token,
+                                "version": task.version,
+                            },
+                        )
                         recovered += 1
                         continue
                     checkpoint = await db.scalar(
@@ -819,7 +933,7 @@ class Scheduler:
         except StaleLease:
             # The new lease owner is authoritative; stale worker output is discarded.
             return True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - adapters are isolated behind this failure boundary.
             await self.fail(
                 job,
                 ExecutionFailure(RetryClass.TRANSIENT.value, "adapter_error", str(exc)),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -12,17 +13,24 @@ from typing import Any, cast
 from acp import PROTOCOL_VERSION, connect_to_agent, text_block
 from acp.interfaces import Client
 from acp.schema import (
+    AcpMcpServer,
     AllowedOutcome,
     ClientCapabilities,
     DeniedOutcome,
     FileSystemCapabilities,
+    HttpMcpServer,
     Implementation,
     InitializeResponse,
+    McpServerStdio,
     PermissionOption,
     RequestPermissionResponse,
+    SseMcpServer,
     ToolCallUpdate,
 )
+
 from harnessa.adapters.sandbox_policy import permission_allowed
+
+logger = logging.getLogger("harnessa.acp_session")
 
 
 class ACPProtocolError(RuntimeError):
@@ -161,7 +169,7 @@ class _SandboxACPClient:
         elif self.on_progress is not None and count % 100 == 0:
             try:
                 await self.on_progress(dict(self.update_counts))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - callback failures must stop this run.
                 self.progress_error = exc
                 self.limit_exceeded.set()
         # Message text, thought content, tool input, and tool output are not retained.
@@ -201,21 +209,33 @@ class ACPAgentSession:
         self.stderr_bytes = 0
 
     async def initialize(self) -> InitializeResponse:
-        response = await self.connection.initialize(
-            protocol_version=PROTOCOL_VERSION,
-            client_capabilities=ClientCapabilities(
-                fs=FileSystemCapabilities(read_text_file=False, write_text_file=False),
-                terminal=False,
-            ),
-            client_info=Implementation(name="harnessa", version="0.1.0"),
-        )
+        try:
+            response = await self.connection.initialize(
+                protocol_version=PROTOCOL_VERSION,
+                client_capabilities=ClientCapabilities(
+                    fs=FileSystemCapabilities(read_text_file=False, write_text_file=False),
+                    terminal=False,
+                ),
+                client_info=Implementation(name="harnessa", version="0.1.0"),
+            )
+        except Exception as exc:
+            raise ACPProtocolError("ACP agent failed during initialization") from exc
         if response.protocol_version != PROTOCOL_VERSION:
             raise ACPProtocolError("ACP agent negotiated an unsupported protocol version")
         self.initialize_response = response
         return response
 
-    async def new_session(self) -> str:
-        created = await self.connection.new_session(cwd="/workspace", mcp_servers=[])
+    async def new_session(self, *, mcp_servers: list[McpServerStdio] | None = None) -> str:
+        configured_servers = cast(
+            list[HttpMcpServer | SseMcpServer | AcpMcpServer | McpServerStdio],
+            mcp_servers or [],
+        )
+        try:
+            created = await self.connection.new_session(
+                cwd="/workspace", mcp_servers=configured_servers
+            )
+        except Exception as exc:
+            raise ACPProtocolError("ACP agent failed to create a session") from exc
         session_id = created.session_id
         self.session_id = session_id
         return session_id
@@ -239,7 +259,10 @@ class ACPAgentSession:
                 if self.client.progress_error is not None:
                     raise self.client.progress_error
                 raise ProtocolLimitExceeded("ACP agent exceeded the session update limit")
-            response = await prompt_task
+            try:
+                response = await prompt_task
+            except Exception as exc:
+                raise ACPProtocolError("ACP agent failed while handling a prompt") from exc
             return str(response.stop_reason)
         finally:
             for task in (prompt_task, limit_task):
@@ -251,8 +274,8 @@ class ACPAgentSession:
         if self.session_id is not None and self.process.returncode is None:
             try:
                 await asyncio.wait_for(self.connection.cancel(self.session_id), timeout=2)
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 - process shutdown remains the cancellation fallback.
+                logger.warning("ACP protocol cancellation failed; terminating the agent process")
 
     async def close(self, *, grace_seconds: float = 2) -> None:
         try:

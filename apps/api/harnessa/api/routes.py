@@ -1,27 +1,15 @@
-import hmac
-import secrets
-from uuid import UUID
 import hashlib
+import hmac
 import json
+import secrets
+from typing import Any
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi_users import schemas
+from harnessa.auth.users import auth_backend, current_active_user, fastapi_users
 from harnessa.config import settings
-from harnessa.db.models import (
-    User,
-    Organization,
-    Membership,
-    ProjectMembership,
-    Project,
-    Repository,
-    IdempotencyRecord,
-)
-from harnessa.db.session import get_db
-from harnessa.db.model_gateway import ModelPool
-from harnessa.auth.users import current_active_user, fastapi_users, auth_backend
-from harnessa.services.authorization import require_membership
 from harnessa.contracts import (
     ErrorResponse,
     Identity,
@@ -29,7 +17,22 @@ from harnessa.contracts import (
     ProjectRead,
     RepositoryCreate,
     RepositoryRead,
+    Role,
 )
+from harnessa.db.model_gateway import ModelPool
+from harnessa.db.models import (
+    IdempotencyRecord,
+    Membership,
+    Organization,
+    Project,
+    ProjectMembership,
+    Repository,
+    User,
+)
+from harnessa.db.session import get_db
+from harnessa.services.authorization import require_membership
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 router.include_router(
@@ -43,7 +46,9 @@ class BootstrapUser(schemas.BaseUserCreate):
 
 
 @router.post("/auth/bootstrap", status_code=201)
-async def bootstrap(body: BootstrapUser, request: Request, db: AsyncSession = Depends(get_db)):
+async def bootstrap(
+    body: BootstrapUser, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
     key = request.headers.get("x-bootstrap-token", "")
     if not settings.bootstrap_token or not hmac.compare_digest(key, settings.bootstrap_token):
         raise HTTPException(404, "Not found")
@@ -87,13 +92,13 @@ async def bootstrap(body: BootstrapUser, request: Request, db: AsyncSession = De
 
 
 @router.post("/auth/logout", status_code=204)
-async def logout(response: Response):
+async def logout(response: Response) -> None:
     response.delete_cookie("harnessa_auth", path="/")
     response.delete_cookie("harnessa_csrf", path="/")
 
 
 @router.get("/auth/csrf")
-async def csrf(response: Response):
+async def csrf(response: Response) -> dict[str, str]:
     token = secrets.token_urlsafe(32)
     response.set_cookie(
         "harnessa_csrf",
@@ -107,15 +112,24 @@ async def csrf(response: Response):
 
 
 @router.get("/auth/me", response_model=Identity, responses={401: {"model": ErrorResponse}})
-async def identity(user: User = Depends(current_active_user), db: AsyncSession = Depends(get_db)):
+async def identity(
+    user: User = Depends(current_active_user), db: AsyncSession = Depends(get_db)
+) -> Identity:
     member = await require_membership(db, user)
+    if not isinstance(member, Membership):
+        raise HTTPException(409, "Organization membership is unavailable")
     return Identity(
-        id=user.id, email=user.email, organization_id=member.organization_id, role=member.role
+        id=user.id,
+        email=user.email,
+        organization_id=member.organization_id,
+        role=Role(member.role),
     )
 
 
 @router.get("/projects", response_model=list[ProjectRead])
-async def projects(user: User = Depends(current_active_user), db: AsyncSession = Depends(get_db)):
+async def projects(
+    user: User = Depends(current_active_user), db: AsyncSession = Depends(get_db)
+) -> list[Project]:
     memberships = (
         (await db.execute(select(Membership).where(Membership.user_id == user.id))).scalars().all()
     )
@@ -132,10 +146,14 @@ async def projects(user: User = Depends(current_active_user), db: AsyncSession =
     project_ids = (await db.execute(org_projects.union(member_projects))).scalars().all()
     if not project_ids:
         return []
-    return (await db.execute(select(Project).where(Project.id.in_(project_ids)))).scalars().all()
+    return list(
+        (await db.execute(select(Project).where(Project.id.in_(project_ids)))).scalars().all()
+    )
 
 
-async def replay_or_conflict(db: AsyncSession, user: User, key: str, payload: dict):
+async def replay_or_conflict(
+    db: AsyncSession, user: User, key: str, payload: dict[str, Any]
+) -> tuple[str, JSONResponse | None]:
     if not key or len(key) > 200:
         raise HTTPException(400, "A valid Idempotency-Key is required")
     digest = hashlib.sha256(
@@ -170,8 +188,13 @@ async def replay_or_conflict(db: AsyncSession, user: User, key: str, payload: di
 
 
 async def save_idempotency(
-    db: AsyncSession, user: User, key: str, digest: str, status: int, response: dict
-):
+    db: AsyncSession,
+    user: User,
+    key: str,
+    digest: str,
+    status: int,
+    response: dict[str, Any],
+) -> None:
     db.add(
         IdempotencyRecord(
             user_id=user.id,
@@ -194,8 +217,10 @@ async def create_project(
     idempotency_key: str = Header(alias="Idempotency-Key"),
     user: User = Depends(current_active_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> Project | JSONResponse:
     m = await require_membership(db, user)
+    if not isinstance(m, Membership):
+        raise HTTPException(409, "Organization membership is unavailable")
     if m.role not in ("administrator", "operator"):
         raise HTTPException(403, "Insufficient role")
     digest, replay = await replay_or_conflict(
@@ -233,9 +258,9 @@ async def create_project(
 @router.get("/projects/{project_id}/repositories", response_model=list[RepositoryRead])
 async def repositories(
     project_id: UUID, user: User = Depends(current_active_user), db: AsyncSession = Depends(get_db)
-):
+) -> list[Repository]:
     await require_membership(db, user, project_id)
-    return (
+    return list(
         (await db.execute(select(Repository).where(Repository.project_id == project_id)))
         .scalars()
         .all()
@@ -258,7 +283,7 @@ async def add_repository(
     idempotency_key: str = Header(alias="Idempotency-Key"),
     user: User = Depends(current_active_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> Repository | JSONResponse:
     m = await require_membership(db, user, project_id)
     if m.role not in ("administrator", "operator"):
         raise HTTPException(403, "Insufficient role")

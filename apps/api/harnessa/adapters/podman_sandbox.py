@@ -10,8 +10,8 @@ import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
 from subprocess import CompletedProcess
+from typing import Any, Protocol
 
 from harnessa.adapters.sandbox_policy import SandboxLimits, SandboxPolicyError
 
@@ -42,9 +42,13 @@ class SandboxBackend(Protocol):
         broker_socket: Path | None = None,
         opencode_config: Path | None = None,
         relay_binary: Path | None = None,
+        orchestrator_socket: Path | None = None,
+        orchestrator_binary: Path | None = None,
     ) -> asyncio.subprocess.Process: ...
 
     async def build_model_relay(self, destination: Path) -> Path: ...
+
+    async def build_orchestrator_tool(self, destination: Path) -> Path: ...
 
     async def stop_and_remove(self, identity: SandboxIdentity, *, timeout: int = 2) -> None: ...
 
@@ -121,6 +125,8 @@ class PodmanSandboxBackend:
         broker_socket: Path | None = None,
         opencode_config: Path | None = None,
         relay_binary: Path | None = None,
+        orchestrator_socket: Path | None = None,
+        orchestrator_binary: Path | None = None,
     ) -> list[str]:
         workspace = workspace.resolve(strict=True)
         state_root = state_root.resolve(strict=True)
@@ -131,6 +137,8 @@ class PodmanSandboxBackend:
             path is not None for path in broker_mounts
         ):
             raise SandboxPolicyError("The model broker requires its socket, config, and relay")
+        if (orchestrator_socket is None) != (orchestrator_binary is None):
+            raise SandboxPolicyError("The orchestrator tool requires its socket and binary")
         cidfile = state_root / f"{identity.container_name}.cid"
         labels = [
             argument
@@ -195,6 +203,23 @@ class PodmanSandboxBackend:
                     "OPENCODE_CONFIG=/run/harnessa/opencode.json",
                 ]
             )
+        if orchestrator_socket is not None and orchestrator_binary is not None:
+            socket_path = orchestrator_socket.resolve(strict=True)
+            tool_path = orchestrator_binary.resolve(strict=True)
+            if not stat.S_ISSOCK(socket_path.stat().st_mode):
+                raise SandboxPolicyError("The orchestrator path is not a Unix socket")
+            if not tool_path.is_file() or not os.access(tool_path, os.X_OK):
+                raise SandboxPolicyError("The orchestrator MCP bridge is not executable")
+            if any(character in str(path) for path in (socket_path, tool_path) for character in ",:"):
+                raise SandboxPolicyError("Orchestrator bridge paths may not contain ':' or ','")
+            command.extend(
+                [
+                    "--volume",
+                    f"{socket_path}:/run/harnessa/orchestrator.sock:ro,rprivate,Z",
+                    "--volume",
+                    f"{tool_path}:/harnessa/orchestrator-mcp:ro,rprivate,Z",
+                ]
+            )
         if broker_socket is not None:
             command.extend(["--entrypoint", "/bin/sh"])
         command.extend(
@@ -251,6 +276,36 @@ class PodmanSandboxBackend:
         temporary.replace(destination)
         return destination
 
+    async def build_orchestrator_tool(self, destination: Path) -> Path:
+        compiler = shutil.which("cc")
+        if compiler is None:
+            raise SandboxUnavailable("A C compiler is required to build the isolated orchestrator tool")
+        source = Path(__file__).with_name("acp_orchestrator_mcp.c")
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = destination.with_suffix(".tmp")
+        process = await asyncio.create_subprocess_exec(
+            compiler,
+            "-static",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-std=c11",
+            str(source),
+            "-o",
+            str(temporary),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            temporary.unlink(missing_ok=True)
+            detail = (stderr or stdout).decode("utf-8", errors="replace")[:300]
+            raise SandboxUnavailable(f"Could not build the orchestrator MCP tool: {detail}")
+        temporary.chmod(0o700)
+        temporary.replace(destination)
+        return destination
+
     async def launch(
         self,
         *,
@@ -262,6 +317,8 @@ class PodmanSandboxBackend:
         broker_socket: Path | None = None,
         opencode_config: Path | None = None,
         relay_binary: Path | None = None,
+        orchestrator_socket: Path | None = None,
+        orchestrator_binary: Path | None = None,
     ) -> asyncio.subprocess.Process:
         command = self.command(
             identity=identity,
@@ -271,6 +328,8 @@ class PodmanSandboxBackend:
             broker_socket=broker_socket,
             opencode_config=opencode_config,
             relay_binary=relay_binary,
+            orchestrator_socket=orchestrator_socket,
+            orchestrator_binary=orchestrator_binary,
         )
         try:
             return await asyncio.create_subprocess_exec(

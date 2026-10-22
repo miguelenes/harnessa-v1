@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,8 +36,8 @@ class Settings(BaseSettings):
     acp_workspace_root: str = "/var/lib/harnessa/workspaces"
     acp_runner_state_root: str = "/var/lib/harnessa/runner"
     acp_agent_image: str = (
-        "ghcr.io/anomalyco/opencode@sha256:"
-        "85986f556e985e377bd24cd68a5ccfbc647bb49e591194edda8a0e4542303319"
+        "ghcr.io/anomalyco/opencode:1.19.4@sha256:"
+        "bf8e2b5f785166a12a26cbb34ef1a2d35403368438efe036fd16c795a975c505"
     )
     acp_cpu_limit: float = 2.0
     acp_memory_limit_bytes: int = 2147483648
@@ -49,6 +50,13 @@ class Settings(BaseSettings):
     acp_model_broker_enabled: bool = False
     acp_model_alias: str | None = None
     acp_model_max_output_tokens: int = 8192
+    openspec_repository_sources_json: str = "{}"
+    openspec_workspace_root: str = "/var/lib/harnessa/specifications"
+    openspec_node_path: str = ""
+    openspec_cli_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    openspec_model_alias: str | None = None
+    openspec_model_max_output_tokens: int = Field(default=4096, ge=256, le=16_384)
+    openspec_require_signoff: bool = False
 
 
 settings = Settings()

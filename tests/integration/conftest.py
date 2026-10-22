@@ -3,11 +3,10 @@ from __future__ import annotations
 import os
 
 import pytest
-from redis.asyncio import Redis
-from sqlalchemy import text
-
 from harnessa.config import settings
 from harnessa.db.session import SessionLocal
+from redis.asyncio import Redis
+from sqlalchemy import text
 
 
 @pytest.fixture(scope="session")
@@ -18,6 +17,10 @@ def anyio_backend():
 @pytest.fixture(autouse=True)
 async def isolated_real_services(anyio_backend):
     if not os.getenv("TEST_DATABASE_URL") or not os.getenv("TEST_REDIS_URL"):
+        if os.getenv("HARNESSA_REQUIRE_INTEGRATION") == "1":
+            pytest.fail(
+                "The project test command requires isolated TEST_DATABASE_URL and TEST_REDIS_URL services"
+            )
         pytest.skip("Set TEST_DATABASE_URL and TEST_REDIS_URL to disposable PostgreSQL/Redis services")
     async with SessionLocal() as db:
         await db.execute(text("TRUNCATE TABLE organizations, users CASCADE"))

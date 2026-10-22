@@ -7,7 +7,6 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-
 from harnessa.adapters.acp_model_broker import ACPModelBroker, BrokerScope
 from harnessa.contracts import ModelRouteRequest
 

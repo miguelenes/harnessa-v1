@@ -1,7 +1,7 @@
 """Foundation identity, organization, project, repository, and task tables."""
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0001_foundation"
 down_revision = None

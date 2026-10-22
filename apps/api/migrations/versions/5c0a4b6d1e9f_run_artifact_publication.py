@@ -1,7 +1,7 @@
 """fencing-bound local run artifacts"""
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "5c0a4b6d1e9f"
 down_revision = "b11f10974e82"

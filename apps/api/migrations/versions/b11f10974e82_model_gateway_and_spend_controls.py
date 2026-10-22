@@ -1,7 +1,8 @@
 """model gateway and spend controls"""
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
+
 revision = 'b11f10974e82'
 down_revision = 'ffac3c1be398'
 branch_labels = None
