@@ -40,13 +40,15 @@ These tracks are separate from the numbered dependency order. They must not be r
 
 Give the implementation agent one prompt at a time, with the revised specification, shared decisions and current evidence. Preserve existing domain and adapter contracts. Required external blockers remain explicit; optional live checks are recorded separately. Follow-on milestones 14–17 require the completed milestone 13 release.
 
+For milestones 7–17, each run must put all milestone deliverables—including implementation, documentation, migrations, and its milestone report—in one PR. Obtain an independent code review, resolve its findings, and merge the PR during that same run after required checks and repository protections pass. Do not self-approve or bypass protections. Record the PR URL, reviewed head SHA, review outcome, and check results in the milestone report; include the merge commit SHA in the final run summary. If review or merge is blocked, record the blocker and keep the milestone active and unarchived.
+
 ## Renumbering map
 
 Previous prompt → current prompt: 4→5, 5→8, 6→6, 7→9, 8→10, 9→12, 10→13, 11→11, 12→7, 13→14, 14→15, 15→16, 16→17. Prompt 4 is new. Use current numbers for execution and future reports. Completed reports and archived prompt contents remain historical records.
 
 ## Per-step archive lifecycle
 
-A planning prompt is archived only after its implementation milestone meets its acceptance criteria and its `docs/milestones/NN.md` report records actual evidence, limitations, and follow-up prerequisites. At that point, move the prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents, update the matching index row here to link to the archived prompt and mark it **archived complete**, and leave later prompts active. Do not archive a milestone that is blocked, partially complete, or merely started; record that state in its milestone report and keep the prompt active. Keep `planning/revised-specification.md` and this index as the active planning references.
+A planning prompt is archived only after its implementation milestone meets its acceptance criteria and its `docs/milestones/NN.md` report records actual evidence, limitations, and follow-up prerequisites. For milestones 7–17, the milestone PR must also be reviewed and merged in that run before archiving. At that point, move the prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents, update the matching index row here to link to the archived prompt and mark it **archived complete**, and leave later prompts active. Do not archive a milestone that is blocked, partially complete, or merely started; record that state in its milestone report and keep the prompt active. Keep `planning/revised-specification.md` and this index as the active planning references.
 
 Milestones 1–3 retain their currently recorded archive status and report paths. Milestones 6–17 remain active until their own acceptance evidence is recorded. Recheck current reports rather than inferring completion from file presence or from this index.
 

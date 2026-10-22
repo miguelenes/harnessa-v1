@@ -43,6 +43,8 @@ Enforce project/repository grants before subscriptions, retrieval and effects, i
 
 Each prompt owns the subsystem named in its title and the minimum adapter/API/UI changes that connect it. Its report must name implemented outputs, exact pinned versions, commands/results, offline versus live evidence, migration/recovery/rollback behavior, configured resource/cost limits, unresolved external blockers and the next milestone’s prerequisite checks. An acceptance criterion is passed only by evidence; file presence and checked boxes do not establish completion. Optional live evidence remains explicitly pending where a prompt permits it; required external acceptance blocks completion.
 
+For milestones 7–17, every run must put all milestone deliverables—including implementation, documentation, migrations, and the milestone report—in one PR. Obtain an independent code review, resolve findings, and merge the PR in that same run after required checks and repository protections pass. Do not self-approve or bypass protections. Record the PR URL, reviewed head SHA, review outcome, and check results in the milestone report, and include the merge commit SHA in the final run summary. If review or merge is blocked, document the blocker and keep the milestone active and unarchived.
+
 The numbered sequence is the dependency order. Milestone 4 requires completed evidence for 1–3; every later milestone requires all preceding milestones. Earlier phases may define ports/fixtures for later systems but cannot require later implementations. Prompts 4–13 form the initial release; 14–17 extend that release. Archive only under the index lifecycle after acceptance; never modify archived historical prompts to match new numbering.
 
 ## Research references

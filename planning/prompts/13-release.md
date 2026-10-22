@@ -25,10 +25,12 @@ Milestones 1–12 are integrated with their completion evidence. Identify and re
 - Restore a backup into a fresh instance and prove task/artifact/provenance continuity.
 - Every required scenario has evidence or is explicitly listed as an external release blocker. No unsupported integration is advertised as verified.
 
-Write `docs/acceptance-report.md`, operator/setup/recovery guides, the final compatibility matrix, and `docs/milestones/13.md`. Return what ships, exact verification results, remaining blockers, and user-run setup steps. Prepare a reviewable release; do not publish or deploy to an external environment without existing authorization.
+Write `docs/acceptance-report.md`, operator/setup/recovery guides, the final compatibility matrix, and `docs/milestones/13.md`. Return what ships, exact verification results, remaining blockers, and user-run setup steps. Prepare a reviewable release and merge the milestone PR as required below; do not publish packages or deploy to an external environment without existing authorization.
 
 ## Delivery contract
 
 Own only the subsystem named by this prompt and its existing adapters/UI projections. Preserve the shared authority, contract-generation, cost, recovery, and retention rules in `planning/architecture-decisions.md`. Produce the implementation, focused acceptance evidence, updated compatibility/setup notes, and `docs/milestones/13.md`. Record offline versus live results separately, exact versions/configuration and source revisions, pending external setup, recovery/rollback commands, and the next milestone’s prerequisites. Missing required evidence keeps the milestone active.
+
+During this run, put all milestone deliverables—including implementation, documentation, migrations, and `docs/milestones/13.md`—in one PR. Obtain an independent code review, resolve findings, and merge the reviewed head in this run after required checks and repository protections pass. Do not self-approve or bypass protections. Include the PR URL, reviewed head SHA, review outcome, check results, and merge commit SHA in the final run summary. A blocked review or merge leaves milestone 13 incomplete and active; do not archive its prompt.
 
 Apply the archive lifecycle in `planning/README.md` only after acceptance is evidenced; the future archive target is `planning/archive/completed/13-release.md`. Never run the next milestone as part of this request.
