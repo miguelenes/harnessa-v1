@@ -16,6 +16,17 @@ def test_provider_protocol_payloads_use_their_server_owned_shapes():
     assert "metadata" not in payload
     assert _protocol_path(ModelProtocol.CHAT_COMPLETIONS) == "/v1/chat/completions"
 
+    tool_request = ModelRouteRequest(
+        requirements=RouteRequirements(protocol=ModelProtocol.CHAT_COMPLETIONS, tools=True),
+        max_output_tokens=20,
+        estimated_input_tokens=10,
+        messages=[ModelMessage(role="user", content="return a typed result")],
+        tools=[{"type": "function", "function": {"name": "submit", "parameters": {}}}],
+    )
+    tool_payload = tool_request.to_provider_payload("gateway-model", tool_choice="required")
+    assert tool_payload["tool_choice"] == "required"
+    assert tool_payload["tools"] == tool_request.tools
+
     responses = ModelRouteRequest(
         requirements=RouteRequirements(protocol=ModelProtocol.RESPONSES),
         max_output_tokens=20,

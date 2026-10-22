@@ -146,6 +146,17 @@ async def test_broker_rejects_missing_credentials_stale_fences_and_unbounded_out
         )
         assert oversized.status_code == 400
         assert router.requests == []
+
+        oversized_request = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={
+                "max_tokens": 128,
+                "messages": [{"role": "user", "content": "x" * (512 * 1024)}],
+            },
+        )
+        assert oversized_request.status_code == 400
+        assert router.requests == []
     finally:
         await client.aclose()
         await broker.close()

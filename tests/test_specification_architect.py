@@ -9,6 +9,8 @@ from harnessa.adapters.specification_architect import (
     ArchitectDraft,
     SpecificationArchitect,
     SpecificationArchitectError,
+    _draft_tool,
+    _normalize_architect_markdown,
 )
 from harnessa.config import settings
 from harnessa.services.model_gateway import ModelGatewayError
@@ -32,6 +34,63 @@ def _draft_payload() -> dict[str, Any]:
     }
 
 
+def test_architect_tool_schema_is_self_contained_and_matches_the_draft_fields() -> None:
+    schema = _draft_tool()["function"]["parameters"]
+
+    def has_reference(value: Any) -> bool:
+        if isinstance(value, dict):
+            return "$ref" in value or any(has_reference(item) for item in value.values())
+        if isinstance(value, list):
+            return any(has_reference(item) for item in value)
+        return False
+
+    assert schema["type"] == "object"
+    assert set(schema["properties"]) == {
+        "proposal_md",
+        "spec_md",
+        "design_md",
+        "tasks_md",
+        "questions",
+    }
+    assert not has_reference(schema)
+
+
+def test_architect_restores_markdown_structure_from_flattened_tool_arguments() -> None:
+    spec = _normalize_architect_markdown(
+        "## ADDED Requirements### Requirement: greeting#### Scenario: named-"
+        " **WHEN** a name is provided- **THEN** a greeting is returned",
+        "greeting",
+    )
+
+    assert spec.startswith(
+        "## ADDED Requirements\n\n### Requirement: greeting\n\n"
+        "#### Scenario: named\n- **WHEN**"
+    )
+    assert "- **THEN** a greeting is returned\n" in spec
+
+    html_breaks = _normalize_architect_markdown(
+        "## ADDED Requirements<br><br>### Requirement: greeting user<br>"
+        "SHALL return a greeting.<br><br>#### Scenario: named<br>"
+        "- **WHEN** a name is provided<br>- **THEN** a greeting is returned",
+        "greeting",
+    )
+    assert "<br>" not in html_breaks
+    assert (
+        "### Requirement: greeting user\n\nThe system SHALL return a greeting."
+        in html_breaks
+    )
+    assert "#### Scenario: named\n- **WHEN**" in html_breaks
+
+    inline_normative = _normalize_architect_markdown(
+        "## ADDED Requirements<br>### Requirement: Accept typed name **SHALL** "
+        "accept a string name input.<br>#### Scenario: valid name<br>"
+        "- **WHEN** a caller provides a name<br>- **THEN** the name is accepted",
+        "greeting",
+    )
+    assert "### Requirement: Accept typed name\n\nThe system SHALL accept a string name input." in inline_normative
+    assert "#### Scenario: valid name\n- **WHEN**" in inline_normative
+
+
 @pytest.mark.anyio
 async def test_architect_uses_bounded_harnessa_route_and_validates_structured_output(
     monkeypatch: pytest.MonkeyPatch,
@@ -45,8 +104,48 @@ async def test_architect_uses_bounded_harnessa_route_and_validates_structured_ou
             assert request.model_alias == "fixture-budgeted"
             assert request.max_output_tokens == 512
             assert request.requirements.minimum_context > 512
+            assert request.requirements.tools is True
+            assert request.tools[0]["function"]["name"] == "submit_architect_draft"
+            assert kwargs["tool_choice"] == "required"
             assert kwargs["idempotency_key"].startswith("openspec-architect:")
-            return {"response": {"choices": [{"message": {"content": json.dumps(_draft_payload())}}]}}
+            system_message = request.messages[0].content
+            assert "## ADDED Requirements" in system_message
+            assert "#### Scenario: <name>" in system_message
+            assert "### Requirement mapping: <requirement>" in system_message
+            assert "Markdown line breaks are mandatory" in system_message
+            assert "Never join two headings or sections on one line" in system_message
+            assert "the requirement heading alone is invalid" in system_message
+            assert "Keep each file concise" in system_message
+            return {
+                "response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "tool_calls": [
+                                    {
+                                        "type": "function",
+                                        "function": {
+                                            "name": "submit_architect_draft",
+                                            "arguments": json.dumps(
+                                                {
+                                                    **_draft_payload(),
+                                                    "spec_md": (
+                                                        "## ADDED Requirements&#x0A;&#x0A;"
+                                                        "### Requirement: scoped-access&#x0A;&#x0A;"
+                                                        "#### Scenario: authorized-read&#x0A;"
+                                                        "- **WHEN** access is granted&#x0A;"
+                                                        "- **THEN** content is returned"
+                                                    ),
+                                                }
+                                            ),
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
 
     draft = await SpecificationArchitect(Router()).generate(
         object(),  # type: ignore[arg-type]
@@ -61,6 +160,8 @@ async def test_architect_uses_bounded_harnessa_route_and_validates_structured_ou
     )
     assert isinstance(draft, ArchitectDraft)
     assert draft.questions[0].classification == "blocking"
+    assert draft.spec_md.startswith("## ADDED Requirements\n\n### Requirement:")
+    assert "#### Scenario: authorized-read\n" in draft.spec_md
 
 
 @pytest.mark.anyio
@@ -173,3 +274,90 @@ async def test_architect_reports_bounded_content_shape_without_echoing_provider_
             citations=[],
         )
     assert "not accepted as a string" not in str(error.value)
+
+
+@pytest.mark.anyio
+async def test_architect_diagnoses_empty_text_without_echoing_provider_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "openspec_model_alias", "fixture-budgeted")
+
+    class Router:
+        async def complete(self, *_: object, **__: Any) -> dict[str, Any]:
+            return {
+                "response": {
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {
+                                "content": None,
+                                "reasoning_content": "private provider text",
+                                "refusal": "private refusal text",
+                            },
+                        }
+                    ]
+                }
+            }
+
+    with pytest.raises(SpecificationArchitectError) as error:
+        await SpecificationArchitect(Router()).generate(
+            object(),  # type: ignore[arg-type]
+            organization_id=uuid4(),
+            project_id=uuid4(),
+            task_id=uuid4(),
+            interview_id=uuid4(),
+            revision=1,
+            topic="Bounded task",
+            change_id="bounded-task",
+            citations=[],
+        )
+
+    message = str(error.value)
+    assert message == (
+        "The Architect response contained no text content "
+        "(finish_reason=length; assistant_fields=content,reasoning_content,refusal)"
+    )
+    assert "private provider text" not in message
+    assert "private refusal text" not in message
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("content", "expected_diagnostic"),
+    [
+        ("private malformed response", "json_error=expected_value; position=0; content_chars=26"),
+        (
+            json.dumps({"proposal_md": "private draft text", "private_key": "private field"}),
+            "validation_errors=5; fields=design_md,questions,spec_md,tasks_md",
+        ),
+    ],
+)
+async def test_architect_reports_safe_json_and_schema_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    content: str,
+    expected_diagnostic: str,
+) -> None:
+    monkeypatch.setattr(settings, "openspec_model_alias", "fixture-budgeted")
+
+    class Router:
+        async def complete(self, *_: object, **__: Any) -> dict[str, Any]:
+            return {"response": {"choices": [{"message": {"content": content}}]}}
+
+    with pytest.raises(SpecificationArchitectError) as error:
+        await SpecificationArchitect(Router()).generate(
+            object(),  # type: ignore[arg-type]
+            organization_id=uuid4(),
+            project_id=uuid4(),
+            task_id=uuid4(),
+            interview_id=uuid4(),
+            revision=1,
+            topic="Bounded task",
+            change_id="bounded-task",
+            citations=[],
+        )
+
+    message = str(error.value)
+    assert expected_diagnostic in message
+    assert "private malformed response" not in message
+    assert "private draft text" not in message
+    assert "private field" not in message

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from harnessa.adapters.specification_architect import _normalize_architect_markdown
 from harnessa.adapters.specification_workspace import (
     OpenSpecValidation,
     SpecificationWorkspaceError,
@@ -182,6 +183,158 @@ async def test_one_sentence_topic_creates_validated_private_openspec_bundle(
             allow_one_pending_commit=True,
         )
         assert pending.base_sha == workspace.base_sha
+    finally:
+        await manager.remove(workspace)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("separator", ["", "<br>"])
+async def test_flattened_architect_markdown_reflows_to_valid_openspec_bundle(
+    specification_repository, separator: str
+):
+    manager, repository, _source = specification_repository
+    interview_id = uuid4()
+    change_id = "flattened-architect-markdown-01234567"
+    flattened = _initial_bundle("A short example task topic.", change_id)
+    recovered = {
+        path: _normalize_architect_markdown(content.replace("\n", separator), change_id)
+        for path, content in flattened.items()
+    }
+    workspace, head, _ = await manager.create(
+        interview_id, repository, change_id, recovered
+    )
+    try:
+        validation = await manager.validate(workspace)
+        assert validation.version == "1.14.3"
+        assert validation.valid is True
+        read_back = await manager.read_bundle(workspace, head)
+        score, gates = _readiness_gates(
+            {Path(path).name: content for path, content in read_back.items()},
+            validation,
+            blocking_questions=0,
+            base_current=True,
+            signoff_required=False,
+            signoff_received=False,
+        )
+        assert score == 1.0
+        assert gates["rubric"]["scenarios"]["when_then_present"] is True
+        assert gates["rubric"]["tasks"]["requirement_mapping"] is True
+    finally:
+        await manager.remove(workspace)
+
+
+@pytest.mark.anyio
+async def test_inline_requirement_verb_reflows_to_valid_openspec_bundle(
+    specification_repository,
+):
+    manager, repository, _source = specification_repository
+    interview_id = uuid4()
+    change_id = "inline-requirement-verb-01234567"
+    files = _initial_bundle("A typed greeting helper.", change_id)
+    spec_path = next(path for path in files if path.endswith("/spec.md"))
+    task_path = next(path for path in files if path.endswith("/tasks.md"))
+    files[spec_path] = (
+        "## ADDED Requirements<br>"
+        "### Requirement: Accept typed name **SHALL** accept a string name input.<br>"
+        "#### Scenario: valid string name<br>"
+        "- **WHEN** a caller provides a name<br>"
+        "- **THEN** the accepted name can be used in the greeting"
+    )
+    files[task_path] = files[task_path].replace(
+        "Inline Requirement Verb 01234567", "Accept typed name"
+    )
+    recovered = {
+        path: _normalize_architect_markdown(content, change_id)
+        for path, content in files.items()
+    }
+    workspace, head, _ = await manager.create(
+        interview_id, repository, change_id, recovered
+    )
+    try:
+        validation = await manager.validate(workspace)
+        assert validation.version == "1.14.3"
+        assert validation.valid is True
+        read_back = await manager.read_bundle(workspace, head)
+        score, gates = _readiness_gates(
+            {Path(path).name: content for path, content in read_back.items()},
+            validation,
+            blocking_questions=0,
+            base_current=True,
+            signoff_required=False,
+            signoff_received=False,
+        )
+        assert score == 1.0
+        assert gates["rubric"]["scenarios"]["when_then_present"] is True
+    finally:
+        await manager.remove(workspace)
+
+
+@pytest.mark.anyio
+async def test_cli_runner_returns_structured_validation_output_on_nonzero_exit(
+    specification_repository, monkeypatch: pytest.MonkeyPatch
+):
+    manager, _, _ = specification_repository
+    process_output = '{"items":[{"id":"safe-change","valid":false,"issues":[]}]}'
+    stdout = asyncio.StreamReader()
+    stdout.feed_data(process_output.encode())
+    stdout.feed_eof()
+    stderr = asyncio.StreamReader()
+    stderr.feed_eof()
+
+    class FailedValidationProcess:
+        returncode = 1
+
+        def __init__(self):
+            self.stdout = stdout
+            self.stderr = stderr
+
+        async def wait(self) -> int:
+            return 1
+
+        def kill(self) -> None:
+            return None
+
+    async def create_validation_process(*_args, **_kwargs):
+        return FailedValidationProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_validation_process)
+    actual = await manager._run_cli(
+        Path("/tmp"), ["validate", "safe-change", "--json"]
+    )
+    assert actual == process_output
+
+
+@pytest.mark.anyio
+async def test_cli_validation_preserves_invalid_json_result_on_nonzero_exit(
+    specification_repository,
+):
+    manager, repository, _source = specification_repository
+    interview_id = uuid4()
+    change_id = "invalid-json-result-01234567"
+    workspace, _, _ = await manager.create(
+        interview_id,
+        repository,
+        change_id,
+        _initial_bundle("A short example task topic.", change_id),
+    )
+    try:
+        spec_file = (
+            workspace.workspace_path
+            / "openspec"
+            / "changes"
+            / change_id
+            / "specs"
+            / change_id
+            / "spec.md"
+        )
+        spec_file.write_text("# Incomplete specification\n", encoding="utf-8")
+        validation = await manager.validate(workspace)
+        assert validation.version == "1.14.3"
+        assert validation.valid is False
+        item = validation.result["items"][0]
+        assert isinstance(item, dict)
+        assert item["valid"] is False
+        assert isinstance(item["issues"], list)
     finally:
         await manager.remove(workspace)
 

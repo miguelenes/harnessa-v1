@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     acp_update_limit: int = 10000
     acp_artifact_limit_bytes: int = 10485760
     acp_model_broker_enabled: bool = False
+    acp_model_max_request_bytes: int = Field(default=524288, ge=1024, le=1048576)
     acp_model_alias: str | None = None
     acp_model_max_output_tokens: int = 8192
     openspec_repository_sources_json: str = "{}"

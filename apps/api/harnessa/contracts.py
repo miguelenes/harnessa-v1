@@ -145,7 +145,16 @@ class ModelRouteRequest(BaseModel):
             raise ValueError("Tool requests must require tool capability")
         return self
 
-    def to_provider_payload(self, model: str) -> dict[str, Any]:
+    def to_provider_payload(
+        self,
+        model: str,
+        *,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if tool_choice is not None and (
+            not self.tools or self.requirements.protocol != ModelProtocol.CHAT_COMPLETIONS
+        ):
+            raise ValueError("Tool choice requires chat-completions tools")
         if self.requirements.protocol == ModelProtocol.CHAT_COMPLETIONS:
             if not self.messages:
                 raise ValueError("Chat Completions requires at least one message")
@@ -181,6 +190,8 @@ class ModelRouteRequest(BaseModel):
                 payload["system"] = self.system
         if self.tools:
             payload["tools"] = self.tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
         return payload
 
 
