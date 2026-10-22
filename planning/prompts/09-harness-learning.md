@@ -4,7 +4,7 @@ Implement milestone 9 of Harnessa. Read `planning/revised-specification.md` and 
 
 ## Prerequisites
 
-Exact-revision sandbox execution, primary/probe routing, budget reservations, verification, immutable artifacts, and delivery outcomes work. Check upstream APIs/layout/licensing and executor compatibility before choosing the integration seam.
+Exact-revision sandbox execution, interactive/primary and probe/batch routing, budget reservations, verification, immutable artifacts, and delivery outcomes work. Check upstream APIs/layout/licensing and executor compatibility before choosing the integration seam.
 
 ## Implement
 
