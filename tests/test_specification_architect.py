@@ -234,6 +234,22 @@ def test_architect_restores_markdown_structure_from_flattened_tool_arguments() -
     assert _normalize_architect_markdown(content_integrity, "greeting") == content_integrity
 
 
+def test_architect_recovers_flattened_spec_around_multiline_fenced_example() -> None:
+    fenced = "```text\nhello\n```"
+    source = (
+        "## ADDED Requirements### Requirement: Show exampleThe helper SHALL return "
+        "an example. #### Scenario: fenced example- **WHEN** a request is made- "
+        f"**THEN** it returns:\n{fenced}"
+    )
+
+    normalized = _normalize_architect_markdown(source, "example")
+
+    assert "### Requirement: Show example\n\nThe helper SHALL return an example." in normalized
+    assert "#### Scenario: fenced example\n- **WHEN** a request is made" in normalized
+    assert "- **THEN** it returns:\n" + fenced in normalized
+    assert normalized.count(fenced) == 1
+
+
 @pytest.mark.anyio
 async def test_architect_uses_bounded_harnessa_route_and_validates_structured_output(
     monkeypatch: pytest.MonkeyPatch,

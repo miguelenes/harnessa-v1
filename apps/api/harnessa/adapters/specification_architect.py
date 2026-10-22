@@ -139,7 +139,12 @@ def _map_markdown_prose(value: str, transform: Callable[[str], str]) -> str:
     return "".join(parts)
 
 
-def _transform_markdown_structure(value: str, transform: Callable[[str], str]) -> str:
+def _transform_markdown_structure(
+    value: str,
+    transform: Callable[[str], str],
+    *,
+    restore_code: bool = True,
+) -> str:
     """Transform document structure while temporarily hiding code spans."""
     code_pattern = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`+[^`\n]*`+)")
     code_spans = list(code_pattern.finditer(value))
@@ -152,6 +157,8 @@ def _transform_markdown_structure(value: str, transform: Callable[[str], str]) -
     parts.append(value[cursor:])
     masked = "".join(parts)
     transformed = transform(masked)
+    if not restore_code:
+        return transformed
     for index, match in enumerate(code_spans):
         transformed = transformed.replace(f"\x00HARNESSA_CODE_{index}\x00", match.group())
     return transformed
@@ -164,10 +171,12 @@ def _normalize_architect_markdown(value: str, change_id: str) -> str:
         text,
         lambda part: re.sub(r"(?i)<br\s*/?>|&#(?:10|x0*a);|&NewLine;", "\n", part),
     )
-    flattened = "\n" not in text and any(
+    structure = _transform_markdown_structure(text, lambda part: part, restore_code=False)
+    structure = re.sub(r"\n+(?=\x00HARNESSA_CODE_\d+\x00)", "", structure)
+    flattened = "\n" not in structure and any(
         text.startswith(heading) for heading in _TEMPLATE_HEADINGS
     ) or (
-        "\n" not in text
+        "\n" not in structure
         and re.match(r"^\d+\.\s+\*\*", text) is not None
         and "## Verification" in text
     )
