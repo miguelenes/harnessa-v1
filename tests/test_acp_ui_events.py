@@ -95,8 +95,11 @@ class FakeEventDatabase:
     def __init__(self, rows: list[object]) -> None:
         self.rows = rows
         self.commits = 0
+        self.locked_entities: list[str] = []
 
-    async def scalar(self, _statement: object) -> object:
+    async def scalar(self, statement: object) -> object:
+        entity = statement.column_descriptions[0]["entity"]
+        self.locked_entities.append(entity.__name__)
         return self.rows.pop(0)
 
     async def commit(self) -> None:
@@ -141,7 +144,7 @@ def current_run_rows() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespac
 @pytest.mark.anyio
 async def test_normalized_acp_events_append_only_allowlisted_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
     task, run, lease = current_run_rows()
-    database = FakeEventDatabase([task, run, lease])
+    database = FakeEventDatabase([lease, task, run])
     saved: list[dict[str, object]] = []
 
     async def save_event(_db: object, **kwargs: object) -> None:
@@ -165,6 +168,7 @@ async def test_normalized_acp_events_append_only_allowlisted_payloads(monkeypatc
         }
     ]
     assert database.commits == 1
+    assert database.locked_entities == ["TaskLease", "Task", "Run"]
 
 
 @pytest.mark.anyio
@@ -206,7 +210,7 @@ async def test_unrecognized_or_malformed_acp_events_are_not_persisted() -> None:
 async def test_acp_event_write_rejects_stale_worker_fence(monkeypatch: pytest.MonkeyPatch) -> None:
     task, run, lease = current_run_rows()
     lease.fencing_token += 1
-    database = FakeEventDatabase([task, run, lease])
+    database = FakeEventDatabase([lease, task, run])
 
     async def unexpected_save(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("stale events must not be appended")
@@ -220,3 +224,77 @@ async def test_acp_event_write_rejects_stale_worker_fence(monkeypatch: pytest.Mo
             event={"kind": "step_started"},
         )
     assert database.commits == 0
+
+
+@pytest.mark.anyio
+async def test_cancelled_run_allows_only_terminal_event_closure(monkeypatch: pytest.MonkeyPatch) -> None:
+    task, run, lease = current_run_rows()
+    task.run_status = "CANCELLED"
+    task.cancel_requested_at = datetime.now(UTC)
+    database = FakeEventDatabase([lease, task, run])
+    saved: list[dict[str, object]] = []
+
+    async def save_event(_db: object, **kwargs: object) -> None:
+        saved.append(kwargs)
+
+    monkeypatch.setattr(execution, "record_domain_event", save_event)
+    await execution.persist_acp_ui_event(
+        FakeEventSessionFactory(database), task=task, run=run,
+        event={"kind": "step_finished", "outcome": "cancelled"},
+    )
+    assert len(saved) == 1
+    assert saved[0]["event_type"] == "run.step_finished"
+    assert database.locked_entities == ["TaskLease", "Task", "Run"]
+    assert database.commits == 1
+
+    # A cancelled run may close an existing AG-UI envelope, but cannot append
+    # new assistant or tool activity after cancellation was requested.
+    database = FakeEventDatabase([lease, task, run])
+    with pytest.raises(StaleLease):
+        await execution.persist_acp_ui_event(
+            FakeEventSessionFactory(database), task=task, run=run,
+            event={"kind": "message_started", "message_id": "opaque"},
+        )
+    assert database.commits == 0
+
+
+@pytest.mark.anyio
+async def test_cancelled_step_closes_open_message_without_publishing_partial_text() -> None:
+    events: list[dict[str, object]] = []
+
+    async def capture(event: dict[str, object]) -> None:
+        events.append(event)
+
+    client = _SandboxACPClient(max_updates=20, on_ui_event=capture)
+    await client.session_update(
+        "session",
+        AgentMessageChunk(
+            session_update="agent_message_chunk",
+            message_id="provider-message",
+            content={"type": "text", "text": "partial secret-like response"},
+        ),
+    )
+    await client.finish_step("cancelled")
+
+    assert [event["kind"] for event in events] == [
+        "message_started", "message_ended", "step_finished"
+    ]
+    assert "partial secret-like response" not in repr(events)
+
+
+@pytest.mark.anyio
+async def test_prompt_propagates_final_event_persistence_failure() -> None:
+    async def reject_event(_event: object) -> None:
+        raise RuntimeError("durable event write failed")
+
+    class FakeConnection:
+        async def prompt(self, *_args: object) -> SimpleNamespace:
+            return SimpleNamespace(stop_reason="completed")
+
+    session = object.__new__(execution.ACPAgentSession)
+    session.session_id = "opaque-session"
+    session.client = _SandboxACPClient(max_updates=20, on_ui_event=reject_event)
+    session.connection = FakeConnection()
+
+    with pytest.raises(RuntimeError, match="durable event write failed"):
+        await session.prompt("work", timeout_seconds=1)

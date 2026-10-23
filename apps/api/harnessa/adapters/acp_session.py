@@ -175,25 +175,28 @@ class _SandboxACPClient:
         await self._emit_ui_event({"kind": "step_started", "step_name": "agent_execution"})
 
     async def finish_step(self, outcome: str) -> None:
-        await self.finish_message()
+        # Cancellation closes the message envelope without publishing a partial
+        # assistant response after the user asked the run to stop.
+        await self.finish_message(include_content=outcome != "cancelled")
         await self._emit_ui_event(
             {"kind": "step_finished", "step_name": "agent_execution", "outcome": outcome}
         )
 
-    async def finish_message(self) -> None:
+    async def finish_message(self, *, include_content: bool = True) -> None:
         if self._message_id is None:
             return
         message_id = self._message_id
         self._message_count += 1
-        if self._message_overflow:
-            text = "Agent message omitted because it exceeded the safe display limit."
-        else:
-            text = "".join(self._message_chunks)
-            if not safe_content_for_ui(text):
-                text = "Agent message omitted by Harnessa's credential safety policy."
-        await self._emit_ui_event(
-            {"kind": "message_content", "message_id": message_id, "text": text}
-        )
+        if include_content:
+            if self._message_overflow:
+                text = "Agent message omitted because it exceeded the safe display limit."
+            else:
+                text = "".join(self._message_chunks)
+                if not safe_content_for_ui(text):
+                    text = "Agent message omitted by Harnessa's credential safety policy."
+            await self._emit_ui_event(
+                {"kind": "message_content", "message_id": message_id, "text": text}
+            )
         await self._emit_ui_event({"kind": "message_ended", "message_id": message_id})
         self._message_source_id = None
         self._message_id = None
@@ -382,6 +385,8 @@ class ACPAgentSession:
                     task.cancel()
             await asyncio.gather(prompt_task, limit_task, return_exceptions=True)
             await self.client.finish_step(outcome)
+            if self.client.progress_error is not None:
+                raise self.client.progress_error
 
     async def cancel(self) -> None:
         if self.session_id is not None and self.process.returncode is None:

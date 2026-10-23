@@ -46,13 +46,16 @@ def project_domain_event(row: DomainEvent) -> Event:
             timestamp=int(row.created_at.timestamp() * 1000),
             metadata=metadata,
         )
-    if event_type in {"run.succeeded", "run.finished"} and row.task_id:
+    if event_type in {"run.succeeded", "run.finished", "run.cancelled"} and row.task_id:
         return RunFinishedEvent(
             type=EventType.RUN_FINISHED,
             thread_id=str(row.task_id),
             run_id=run_id,
             timestamp=int(row.created_at.timestamp() * 1000),
-            metadata=metadata,
+            metadata={
+                **metadata,
+                **({"outcome": "cancelled"} if event_type == "run.cancelled" else {}),
+            },
         )
     if event_type == "run.failed" and row.task_id:
         error_code = payload.get("code")

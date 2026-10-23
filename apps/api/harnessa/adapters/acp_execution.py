@@ -118,15 +118,25 @@ async def persist_acp_ui_event(
             payload["outcome"] = event["outcome"]
 
     async with sessions_factory() as event_db:
+        # Match scheduler transactions: lease -> task -> run.  This prevents the
+        # event writer from inverting the locks used for completion/recovery.
+        current_lease = await event_db.scalar(
+            select(TaskLease).where(TaskLease.task_id == task.id).with_for_update()
+        )
         current_task = await event_db.scalar(
             select(Task).where(Task.id == task.id).with_for_update()
         )
         current_run = await event_db.scalar(
             select(Run).where(Run.id == run.id).with_for_update()
         )
-        current_lease = await event_db.scalar(
-            select(TaskLease).where(TaskLease.task_id == task.id).with_for_update()
+        is_cancelling = bool(
+            current_task is not None
+            and (
+                current_task.run_status == "CANCELLED"
+                or getattr(current_task, "cancel_requested_at", None)
+            )
         )
+        terminal_closure = kind in {"message_ended", "tool_ended", "tool_result_redacted", "step_finished"}
         if (
             current_task is None
             or current_run is None
@@ -140,7 +150,10 @@ async def persist_acp_ui_event(
             or current_lease.expires_at is None
             or current_lease.expires_at <= datetime.now(UTC)
             or current_run.status != "RUNNING"
-            or current_task.run_status != "RUNNING"
+            or (
+                current_task.run_status != "RUNNING"
+                and not (is_cancelling and terminal_closure)
+            )
         ):
             raise StaleLease("Agent event rejected because the run lease is no longer current")
         await record_domain_event(

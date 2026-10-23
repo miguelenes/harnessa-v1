@@ -48,6 +48,10 @@ def test_run_lifecycle_projects_to_standard_ag_ui_events() -> None:
     assert '"type":"RUN_STARTED"' in encoded
     assert '"threadId"' in encoded
 
+    cancelled = project_domain_event(domain_event("run.cancelled"))
+    assert isinstance(cancelled, RunFinishedEvent)
+    assert cancelled.metadata["outcome"] == "cancelled"
+
 
 def test_task_changes_project_to_state_snapshot_with_durable_cursor() -> None:
     projected = project_domain_event(
