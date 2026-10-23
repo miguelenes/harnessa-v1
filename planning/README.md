@@ -20,7 +20,7 @@ Read [shared planning decisions](architecture-decisions.md) for runtime ownershi
 | 8 | [Web control plane and AG-UI](archive/completed/08-web-ag-ui.md) — **archived complete** | Real API-backed UI, typed events and replay |
 | 9 | [Implementation, verification and review](archive/completed/09-verification-review.md) — **archived complete** | Revision-bound implementation and independent verification |
 | 10 | [GitHub synchronization and completion](archive/completed/10-github.md) — **archived complete** | Authorized issue/PR workflow and reconciled effects |
-| 11 | [Cross-system evidence and provenance](prompts/11-evidence-plane.md) | Core delivery joins and future-source contracts |
+| 11 | [Cross-system evidence and provenance](archive/completed/11-evidence-plane.md) — **archived complete** | Core delivery joins and future-source contracts |
 | 12 | [Harness² adaptation and learning](prompts/12-harness-learning.md) | Matched baseline/candidate/composed evaluation |
 | 13 | [Complete control plane and release](prompts/13-release.md) | All views, operations, restore and clean-install acceptance |
 | 14 | [Measured skill and harness evolution](prompts/14-skill-evolution.md) | Scoped candidates, evaluation, promotion and rollback |
@@ -50,7 +50,7 @@ Previous prompt → current prompt: 4→5, 5→8, 6→6, 7→9, 8→10, 9→12, 
 
 A planning prompt is archived only after its implementation milestone meets its acceptance criteria and its `docs/milestones/NN.md` report records actual evidence, limitations, and follow-up prerequisites. For milestones 7–17, the milestone PR must also be reviewed and merged in that run before archiving. At that point, move the prompt from `planning/prompts/` to `planning/archive/completed/` without changing its contents, update the matching index row here to link to the archived prompt and mark it **archived complete**, and leave later prompts active. Do not archive a milestone that is blocked, partially complete, or merely started; record that state in its milestone report and keep the prompt active. Keep `planning/revised-specification.md` and this index as the active planning references.
 
-Milestones 1–3 retain their currently recorded archive status and report paths. Milestones 11–17 remain active until their own acceptance evidence is recorded. Milestone 6's acceptance and protected merge evidence are recorded in `docs/milestones/06.md`; recheck current reports rather than inferring completion from file presence or from this index.
+Milestones 1–3 retain their currently recorded archive status and report paths. Milestones 12–17 remain active until their own acceptance evidence is recorded. Milestone 6's acceptance and protected merge evidence are recorded in `docs/milestones/06.md`; recheck current reports rather than inferring completion from file presence or from this index.
 
 
 The revised specification supersedes conflicting technical details in the source attachment. It preserves the product's seven pillars, ten board columns, six main views, and autonomous execution intent. The original attachment remains unchanged at `/home/menes/Downloads/acp_orchestrator_harness2_self_learning_platform_specification.md`.
