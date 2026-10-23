@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
-RUN corepack enable && corepack prepare pnpm@10.34.7 --activate && pnpm install --frozen-lockfile
+RUN npm install --global pnpm@10.34.7 && pnpm install --frozen-lockfile
 COPY apps/web ./apps/web
 COPY packages/contracts ./packages/contracts
 WORKDIR /app/apps/web

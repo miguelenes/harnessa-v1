@@ -1,6 +1,6 @@
 FROM node:26.12.0-bookworm-slim@sha256:742a0fe7320e09e0321222b68165e6ac731d30470e7ea7f98f9bfc3a6e1034fe AS openspec-runtime
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@10.34.7 --activate
+RUN npm install --global pnpm@10.34.7
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/cloud-portal/package.json apps/cloud-portal/package.json
 COPY apps/marketing/package.json apps/marketing/package.json
