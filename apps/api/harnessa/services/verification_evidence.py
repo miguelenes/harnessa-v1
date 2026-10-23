@@ -10,7 +10,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from harnessa.adapters.specification_workspace import SpecificationWorkspaceManager
@@ -20,6 +20,7 @@ from harnessa.db.retrieval import VerificationEvidence
 from harnessa.db.specification import SpecificationInterview
 from harnessa.services.retrieval_governance import safe_retrieval_content
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -209,21 +210,27 @@ async def record_verification_evidence(
     content_hash = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    inserted_id = await db.scalar(
+        insert(VerificationEvidence)
+        .values(id=uuid4(), **payload, content_hash=content_hash)
+        .on_conflict_do_nothing(
+            index_elements=[
+                VerificationEvidence.project_id,
+                VerificationEvidence.source_record_id,
+            ]
+        )
+        .returning(VerificationEvidence.id)
+    )
     existing = await db.scalar(
         select(VerificationEvidence).where(
             VerificationEvidence.project_id == evidence.project_id,
             VerificationEvidence.source_record_id == evidence.source_record_id,
         )
     )
-    if existing is not None:
-        if existing.content_hash != content_hash:
-            raise HTTPException(409, "Verifier source record already exists with different content")
-        return existing
-
-    record = VerificationEvidence(
-        **payload,
-        content_hash=content_hash,
-    )
-    db.add(record)
-    await db.flush()
-    return record
+    if existing is None:
+        raise HTTPException(409, "Verifier source record could not be persisted")
+    if existing.content_hash != content_hash:
+        raise HTTPException(409, "Verifier source record already exists with different content")
+    if inserted_id is not None and existing.id != inserted_id:
+        raise HTTPException(409, "Persisted verifier record changed during insertion")
+    return existing

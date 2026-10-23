@@ -580,6 +580,17 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
             ),
             verifier_id="fixture-verifier-v1",
         )
+
+        async def record_concurrently() -> str:
+            async with SessionLocal() as competing_db:
+                record = await record_verification_evidence(
+                    competing_db, evidence, workspace_manager=manager
+                )
+                await competing_db.commit()
+                return str(record.id)
+
+        concurrent_ids = await asyncio.gather(record_concurrently(), record_concurrently())
+        assert concurrent_ids[0] == concurrent_ids[1]
         recorded = await record_verification_evidence(db, evidence, workspace_manager=manager)
         repeated = await record_verification_evidence(db, evidence, workspace_manager=manager)
         assert recorded.id == repeated.id
