@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -113,7 +114,7 @@ async def test_project_event_stream_replays_heartbeats_and_recovers_expired_curs
             if line.startswith("id:")
         ]
         assert replay_ids
-        assert all(left < right for left, right in zip(replay_ids, replay_ids[1:]))
+        assert all(left < right for left, right in pairwise(replay_ids))
 
         polls = 0
         heartbeat_request = SimpleNamespace(is_disconnected=disconnect_after_one_poll)
@@ -183,7 +184,7 @@ async def test_stream_disconnect_and_reconnect_do_not_create_or_cancel_runs() ->
             if line.startswith("id:")
         ]
         assert first_replay_ids
-        assert all(left < right for left, right in zip(first_replay_ids, first_replay_ids[1:]))
+        assert all(left < right for left, right in pairwise(first_replay_ids))
         resume_cursor = first_replay_ids[-1]
 
         polls = 0
