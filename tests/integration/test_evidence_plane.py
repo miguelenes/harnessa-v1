@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -21,7 +22,7 @@ from harnessa.db.github import (
 )
 from harnessa.db.model_gateway import GatewayUsageImport, ModelRequestLedger
 from harnessa.db.models import Membership, Project, ProjectMembership, Repository, Task, User
-from harnessa.db.orchestration import DomainEvent, EffectIntent, RunArtifact, TaskTransition
+from harnessa.db.orchestration import DomainEvent, EffectIntent, Run, RunArtifact, TaskTransition
 from harnessa.db.review import VerificationExecution, VerificationManifestRevision
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import (
@@ -392,18 +393,24 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
             storage_key=stored.storage_key,
         )
         db.add(artifact)
+        db.add_all(
+            [
+                Run(
+                    project_id=first["project_id"],
+                    task_id=first["task_id"],
+                    attempt=attempt,
+                    status="SUCCEEDED",
+                    source_revision="b" * 40 if attempt == 106 else "c" * 40,
+                    adapter_name="test-fixture",
+                    created_at=now + timedelta(seconds=attempt),
+                )
+                for attempt in range(2, 107)
+            ]
+        )
         await db.commit()
         monkeypatch.setattr("harnessa.api.evidence_routes.settings.artifact_root", str(tmp_path))
         actor = await db.get(User, first["user_id"])
         assert actor is not None
-        first_check = await reconcile_artifact_integrity(
-            first["project_id"], artifact.id, actor, db
-        )
-        duplicate_check = await reconcile_artifact_integrity(
-            first["project_id"], artifact.id, actor, db
-        )
-        assert first_check.status == "verified"
-        assert duplicate_check.event_id == first_check.event_id
         usage_observation = GatewayUsageObservation(
             source_observation_id="litellm-export-row-001",
             request_identifier="gateway-request-fixture",
@@ -638,3 +645,61 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
                 db=db,
             )
         assert unauthorized.value.status_code == 403
+
+        evidence = await list_project_evidence(
+            first["project_id"],
+            source="github.reconciled_object",
+            revision=None,
+            cursor=None,
+            limit=100,
+            actor=actor,
+            db=db,
+        )
+        github_evidence = next(
+            item
+            for item in evidence.items
+            if item.envelope.source_system == "github.reconciled_object"
+        )
+        assert github_evidence.stale is False
+
+        first_check = await reconcile_artifact_integrity(
+            first["project_id"], artifact.id, actor, db
+        )
+        duplicate_check = await reconcile_artifact_integrity(
+            first["project_id"], artifact.id, actor, db
+        )
+        assert first_check.status == "verified"
+        assert duplicate_check.event_id == first_check.event_id
+        concurrent_stored = store.put_bytes(b"concurrent artifact fixture", media_type="text/plain")
+        concurrent_artifact = RunArtifact(
+            organization_id=first["organization_id"],
+            project_id=first["project_id"],
+            task_id=first["task_id"],
+            run_id=first["run_id"],
+            fencing_token=1,
+            digest=concurrent_stored.digest,
+            media_type=concurrent_stored.media_type,
+            size_bytes=concurrent_stored.size_bytes,
+            storage_key=concurrent_stored.storage_key,
+        )
+        db.add(concurrent_artifact)
+        await db.commit()
+
+        async def check_concurrently():
+            async with SessionLocal() as concurrent_db:
+                concurrent_actor = await concurrent_db.get(User, first["user_id"])
+                assert concurrent_actor is not None
+                return await reconcile_artifact_integrity(
+                    first["project_id"], concurrent_artifact.id, concurrent_actor, concurrent_db
+                )
+
+        concurrent_checks = await asyncio.gather(check_concurrently(), check_concurrently())
+        assert concurrent_checks[0].event_id == concurrent_checks[1].event_id
+        concurrent_event_count = await db.scalar(
+            select(func.count(DomainEvent.id)).where(
+                DomainEvent.project_id == first["project_id"],
+                DomainEvent.event_type == "evidence.artifact_integrity_checked",
+                DomainEvent.payload["artifact_id"].as_string() == str(concurrent_artifact.id),
+            )
+        )
+        assert concurrent_event_count == 1

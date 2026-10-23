@@ -192,7 +192,11 @@ async def reconcile_artifact_integrity(
 ) -> EvidenceIntegrityRead:
     """Check one authorized artifact's CAS bytes and append an audit event."""
     await require_membership(db, actor, project_id)
-    artifact = await db.get(RunArtifact, artifact_id)
+    artifact = await db.scalar(
+        select(RunArtifact)
+        .where(RunArtifact.id == artifact_id, RunArtifact.project_id == project_id)
+        .with_for_update()
+    )
     if artifact is None or artifact.project_id != project_id:
         raise HTTPException(404, "Artifact not found")
     status = await run_in_threadpool(
@@ -503,9 +507,18 @@ async def list_project_evidence(
             )
         )
     runs = await fetch(Run, *task_filters(Run), *([Run.id == run_id] if run_id else []))
-    latest_run_by_task = {
-        task.id: task for task in sorted(runs, key=lambda item: (item.created_at, str(item.id)))
-    }
+    latest_runs = (
+        await db.execute(
+            select(Run)
+            .where(
+                Run.project_id == project_id,
+                *([Run.task_id == task_id] if task_id else []),
+            )
+            .order_by(Run.task_id, Run.created_at.desc(), Run.id.desc())
+            .distinct(Run.task_id)
+        )
+    ).scalars()
+    latest_run_by_task = {run.task_id: run for run in latest_runs}
     for row in runs:
         rows.append(
             _record(
