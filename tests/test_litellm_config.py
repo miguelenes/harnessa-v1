@@ -3,9 +3,13 @@ from pathlib import Path
 import yaml
 
 
-def test_litellm_routes_pin_providers_and_disable_proxy_fallbacks():
+def _load_litellm_config():
     config_path = Path(__file__).parents[1] / "infra" / "litellm" / "config.yaml"
-    config = yaml.safe_load(config_path.read_text())
+    return yaml.safe_load(config_path.read_text())
+
+
+def test_litellm_routes_pin_providers_and_disable_proxy_fallbacks():
+    config = _load_litellm_config()
 
     deployments = {deployment["model_name"]: deployment["litellm_params"] for deployment in config["model_list"]}
 
@@ -27,8 +31,7 @@ def test_litellm_routes_pin_providers_and_disable_proxy_fallbacks():
 
 
 def test_litellm_does_not_log_messages():
-    config_path = Path(__file__).parents[1] / "infra" / "litellm" / "config.yaml"
-    config = yaml.safe_load(config_path.read_text())
+    config = _load_litellm_config()
 
     assert config["litellm_settings"]["set_verbose"] is False
     assert config["litellm_settings"]["turn_off_message_logging"] is True
