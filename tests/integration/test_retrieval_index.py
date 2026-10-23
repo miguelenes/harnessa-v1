@@ -35,6 +35,7 @@ from harnessa.db.retrieval import (
     RetrievalSync,
 )
 from harnessa.db.session import SessionLocal
+from harnessa.db.specification import SpecificationInterview
 from harnessa.services.retrieval_governance import MCPTool
 from harnessa.services.retrieval_index import sync_repository_index
 from harnessa.services.specifications import search_repository
@@ -48,8 +49,11 @@ from sqlalchemy import delete, select, update
 pytestmark = pytest.mark.integration
 
 
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+def _git(root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
+    )
+    return result.stdout.strip()
 
 
 def _commit(root: Path, message: str) -> None:
@@ -490,13 +494,30 @@ async def test_search_cites_synced_openspec_history_and_project_approved_skill(
 async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _, project_id, repository_id, actor, _manager = await _source_fixture(tmp_path, monkeypatch)
+    root, project_id, repository_id, actor, manager = await _source_fixture(tmp_path, monkeypatch)
     async with SessionLocal() as db:
         project = await db.get(Project, project_id)
         assert project is not None
         task = Task(project_id=project_id, title="Fixture verification", stage="DONE", run_status="SUCCEEDED")
         db.add(task)
         await db.flush()
+        source_revision = await asyncio.to_thread(_git, root, "rev-parse", "HEAD")
+        db.add(
+            SpecificationInterview(
+                organization_id=project.organization_id,
+                project_id=project_id,
+                task_id=task.id,
+                repository_id=repository_id,
+                created_by=actor.id,
+                topic="Fixture verification",
+                change_id="fixture-verification",
+                base_sha=source_revision,
+                head_sha=source_revision,
+                idempotency_key=f"verification-{uuid4()}",
+                request_hash="b" * 64,
+                artifact_hash="c" * 64,
+            )
+        )
         run = Run(
             task_id=task.id,
             project_id=project_id,
@@ -516,7 +537,7 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
             attempt=1,
             fencing_token=7,
             source_record_id="fixture-verifier-001",
-            source_revision="a" * 40,
+            source_revision=source_revision,
             outcome="passed",
             summary="Verified lexical fixture isolation and authorization revocation.",
             criteria=(
@@ -524,8 +545,8 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
             ),
             verifier_id="fixture-verifier-v1",
         )
-        recorded = await record_verification_evidence(db, evidence)
-        repeated = await record_verification_evidence(db, evidence)
+        recorded = await record_verification_evidence(db, evidence, workspace_manager=manager)
+        repeated = await record_verification_evidence(db, evidence, workspace_manager=manager)
         assert recorded.id == repeated.id
         failed = replace(
             evidence,
@@ -533,10 +554,34 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
             outcome="failed",
             summary="Failed isolated verifier sentinel result.",
         )
-        await record_verification_evidence(db, failed)
+        await record_verification_evidence(db, failed, workspace_manager=manager)
         with pytest.raises(HTTPException) as mismatch:
-            await record_verification_evidence(db, replace(evidence, attempt=2))
+            await record_verification_evidence(
+                db, replace(evidence, attempt=2), workspace_manager=manager
+            )
         assert mismatch.value.status_code == 409
+        unrelated_repository = Repository(
+            project_id=project_id,
+            target_id="fixture/other-source",
+            display_name="Other fixture",
+            default_branch="main",
+        )
+        db.add(unrelated_repository)
+        await db.flush()
+        with pytest.raises(HTTPException) as wrong_repository:
+            await record_verification_evidence(
+                db,
+                replace(evidence, repository_id=unrelated_repository.id),
+                workspace_manager=manager,
+            )
+        assert wrong_repository.value.status_code == 409
+        with pytest.raises(HTTPException) as unknown_revision:
+            await record_verification_evidence(
+                db,
+                replace(evidence, source_revision="a" * 40),
+                workspace_manager=manager,
+            )
+        assert unknown_revision.value.status_code == 409
         await db.commit()
         result = await search_repository(
             db,
@@ -547,7 +592,7 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
             limit=5,
         )
         citation = next(item for item in result.citations if "/verification/" in item.path)
-        assert citation.revision == "a" * 40
+        assert citation.revision == source_revision
         assert citation.content_hash == recorded.content_hash
         assert result.context_manifest is not None
         assert any(uri.startswith("verified-runs://") for uri in result.context_manifest.sources_considered)

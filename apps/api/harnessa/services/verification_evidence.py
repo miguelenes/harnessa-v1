@@ -13,9 +13,11 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import HTTPException
+from harnessa.adapters.specification_workspace import SpecificationWorkspaceManager
 from harnessa.db.models import Project, Repository, Task
 from harnessa.db.orchestration import Run, RunArtifact
 from harnessa.db.retrieval import VerificationEvidence
+from harnessa.db.specification import SpecificationInterview
 from harnessa.services.retrieval_governance import safe_retrieval_content
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,9 +42,12 @@ class VerificationEvidenceInput:
 
 
 async def record_verification_evidence(
-    db: AsyncSession, evidence: VerificationEvidenceInput
+    db: AsyncSession,
+    evidence: VerificationEvidenceInput,
+    *,
+    workspace_manager: SpecificationWorkspaceManager,
 ) -> VerificationEvidence:
-    """Persist trusted verifier output, idempotently and with exact run scope."""
+    """Persist trusted verifier output with task, repository, revision and run scope."""
     if not evidence.source_record_id.strip() or len(evidence.source_record_id) > 200:
         raise HTTPException(422, "Invalid verifier source record ID")
     if not evidence.source_revision.strip() or len(evidence.source_revision) > 200:
@@ -74,6 +79,9 @@ async def record_verification_evidence(
     run = await db.scalar(select(Run).where(Run.id == evidence.run_id))
     task = await db.scalar(select(Task).where(Task.id == evidence.task_id))
     project = await db.scalar(select(Project).where(Project.id == evidence.project_id))
+    interview = await db.scalar(
+        select(SpecificationInterview).where(SpecificationInterview.task_id == evidence.task_id)
+    )
     repository = await db.scalar(
         select(Repository).where(
             Repository.id == evidence.repository_id,
@@ -89,10 +97,15 @@ async def record_verification_evidence(
         or run.attempt != evidence.attempt
         or run.fencing_token != evidence.fencing_token
         or task.project_id != evidence.project_id
+        or interview is None
+        or interview.project_id != evidence.project_id
+        or interview.repository_id != evidence.repository_id
         or project is None
         or project.organization_id != evidence.organization_id
     ):
         raise HTTPException(409, "Verification evidence scope does not match the durable run")
+    if not await workspace_manager.contains_revision(repository, evidence.source_revision):
+        raise HTTPException(409, "Verification source revision is not a commit in the bound repository")
     if evidence.artifact_digest is not None:
         artifact = await db.scalar(
             select(RunArtifact).where(
