@@ -11,13 +11,22 @@ COPY packages/ui-react/package.json packages/ui-react/package.json
 COPY packages/ui-svelte/package.json packages/ui-svelte/package.json
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter harnessa
 
+FROM python:3.12.15-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70 AS python-dependencies
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y git \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv==0.13.5 \
+    && uv sync --frozen --no-dev
+
 FROM python:3.12.15-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70
 WORKDIR /app
 COPY --from=openspec-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=openspec-runtime /app/node_modules /app/node_modules
-ENV PATH="/app/node_modules/.bin:${PATH}"
-COPY pyproject.toml uv.lock ./
-RUN pip install --no-cache-dir uv==0.13.5 && uv sync --frozen --no-dev
+COPY --from=python-dependencies /usr/local/bin/uv /usr/local/bin/uv
+COPY --from=python-dependencies /app/.venv /app/.venv
+ENV PATH="/app/.venv/bin:/app/node_modules/.bin:${PATH}"
 COPY apps/api apps/api
 ENV PYTHONPATH=/app/apps/api
 CMD ["uv", "run", "--no-sync", "uvicorn", "harnessa.main:app", "--host", "0.0.0.0", "--port", "8000"]
