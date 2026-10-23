@@ -19,6 +19,7 @@ from harness2.core import schedule as harness_schedule
 from harness2.core import tree as harness_tree
 from harness2.substrate.opencode import OPENCODE_SURFACE  # type: ignore[import-untyped]
 from harnessa.adapters.artifacts import LocalArtifactStore
+from harnessa.adapters.async_bridge import call_on_event_loop
 from harnessa.adapters.harness2 import (
     canonical_tree_bytes,
     component_diff,
@@ -69,14 +70,19 @@ class FrozenExperiment:
     image_revision: str
     tool_revision: str
     root: Path
+    claim_attempt: int = 0
+    proposer_run_id: UUID | None = None
 
 
 def _is_holdout_path(path: Path) -> bool:
-    parts = {part.casefold().replace(".", "_") for part in path.parts}
-    return any(
-        part in _HOLDOUT_PARTS or part.startswith(("hidden_", "grader_", "rubric_"))
-        for part in parts
-    )
+    for part in path.parts:
+        tokens = re.split(r"[^a-z0-9]+", part.casefold())
+        if any(
+            token in _HOLDOUT_PARTS or token.startswith(("hidden", "grader", "rubric"))
+            for token in tokens if token
+        ):
+            return True
+    return False
 
 
 def _redact(text: str) -> str:
@@ -209,13 +215,16 @@ class GatewayHarness2Proposer:
         model_router: LiteLLMModelRouter | None = None,
         is_cancelled: threading.Event | None = None,
         max_output_tokens: int | None = None,
+        max_concurrency: int | None = None,
+        event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self.experiment = experiment
         self.model_router = model_router or LiteLLMModelRouter()
         self.cancelled = is_cancelled or threading.Event()
+        self.event_loop = event_loop
         self.max_output_tokens = max_output_tokens or settings.harness2_max_output_tokens
         self._semaphore = threading.BoundedSemaphore(
-            max(1, settings.harness2_max_probe_concurrency)
+            max(1, min(max_concurrency or settings.harness2_max_probe_concurrency, 3))
         )
 
     def call(
@@ -262,14 +271,16 @@ class GatewayHarness2Proposer:
         started = time.monotonic()
         try:
             with self._semaphore:
-                response = asyncio.run(
-                    self._complete(
-                        key=key,
-                        system=system_prompt,
-                        user=user_content,
-                        input_tokens=input_tokens,
-                    )
+                coroutine = self._complete(
+                    key=key,
+                    system=system_prompt,
+                    user=user_content,
+                    input_tokens=input_tokens,
                 )
+                if self.event_loop is None:
+                    response = asyncio.run(coroutine)
+                else:
+                    response = call_on_event_loop(coroutine, self.event_loop)
         except Exception as exc:
             raise ProposerError(f"Budgeted Harness² probe failed ({type(exc).__name__})") from exc
         if self.cancelled.is_set():
@@ -301,6 +312,7 @@ class GatewayHarness2Proposer:
     ) -> dict[str, Any]:
         request = ModelRouteRequest(
             task_id=self.experiment.task_id,
+            run_id=self.experiment.proposer_run_id,
             pool=ModelPoolKind.PROBE,
             model_alias=self.experiment.route_alias,
             requirements=RouteRequirements(

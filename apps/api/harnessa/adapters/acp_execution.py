@@ -404,7 +404,8 @@ class ACPExecutionAdapter:
                     task_id=task.id,
                     run_id=run.id,
                     fencing_token=run.fencing_token,
-                    model_alias=self.model_alias,
+                    model_alias=run.model_alias or self.model_alias,
+                    model_pool=run.model_pool,
                 ),
                 model_router=self.model_router,
                 sessions=self.sessions_factory,
@@ -472,7 +473,12 @@ class ACPExecutionAdapter:
                 )
 
             async def persist_ui_event(event: Mapping[str, Any]) -> None:
-                await persist_acp_ui_event(self.sessions_factory, task=task, run=run, event=event)
+                if run.persist_ui_events:
+                    await persist_acp_ui_event(
+                        self.sessions_factory, task=task, run=run, event=event
+                    )
+                elif run.probe_event_sink is not None:
+                    await run.probe_event_sink(event)
 
             session = ACPAgentSession(
                 process,

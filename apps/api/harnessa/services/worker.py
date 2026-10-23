@@ -9,7 +9,7 @@ import os
 import socket
 from collections.abc import Mapping
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from harnessa.adapters.acp_execution import ACPExecutionAdapter
 from harnessa.adapters.artifacts import LocalArtifactStore
@@ -22,6 +22,7 @@ from harnessa.services.effects import EffectResult, ReconcileOutcome, reconcile_
 from harnessa.services.evidence import reconcile_due_gateway_usage_imports
 from harnessa.services.github_processor import GitHubWebhookProcessor
 from harnessa.services.github_webhooks import process_github_webhook_outbox
+from harnessa.services.harness_experiments import HarnessExperimentWorker
 from harnessa.services.model_gateway import reconcile_stale_model_reservations
 from harnessa.services.post_integration import process_post_integration_steps
 from harnessa.services.scheduler import Scheduler
@@ -79,6 +80,13 @@ async def run() -> None:
     consumer = StreamConsumer(redis, consumer_name=owner)
     scheduler = Scheduler()
     adapter = _configured_execution_adapter()
+    harness_execution = adapter if isinstance(adapter, ACPExecutionAdapter) else None
+    harness_worker = HarnessExperimentWorker(harness_execution, worker_id=owner)
+
+    async def current_execution_fence(run_id: UUID, fencing_token: int) -> bool:
+        return await scheduler.is_current_fence(run_id, fencing_token) or await harness_worker.is_current_fence(
+            run_id, fencing_token
+        )
     try:
         source_mapping = json.loads(settings.acp_repository_sources_json)
         verification_dispatcher = VerificationDispatcher(
@@ -87,6 +95,8 @@ async def run() -> None:
     except (json.JSONDecodeError, AttributeError, TypeError):
         verification_dispatcher = None
     active_runs: set[asyncio.Task[bool]] = set()
+    active_harness: asyncio.Task[bool] | None = None
+    last_harness_dispatch = 0.0
     last_prune = 0.0
     last_model_reconcile = 0.0
     last_gateway_usage_reconcile = 0.0
@@ -97,7 +107,7 @@ async def run() -> None:
     if isinstance(adapter, ACPExecutionAdapter) and adapter.enabled:
         try:
             await adapter.validate()
-            await adapter.reconcile_orphans(is_current_fence=scheduler.is_current_fence)
+            await adapter.reconcile_orphans(is_current_fence=current_execution_fence)
             await scheduler.reconcile_orphan_artifacts()
             last_acp_reconcile = asyncio.get_running_loop().time()
             logger.info(
@@ -118,6 +128,14 @@ async def run() -> None:
                         raise
                     except Exception:
                         logger.exception("Run worker failed outside its recovery boundary")
+                if active_harness is not None and active_harness.done():
+                    try:
+                        active_harness.result()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.exception("Harness experiment worker failed outside its recovery boundary")
+                    active_harness = None
                 await publisher.publish_once()
                 await consumer.process_once(block_ms=100)
                 await scheduler.recover_expired_leases()
@@ -150,6 +168,9 @@ async def run() -> None:
                     available = max(0, settings.max_concurrent_runs - len(active_runs))
                     for _ in range(available):
                         active_runs.add(asyncio.create_task(scheduler.run_once(adapter, owner)))
+                if active_harness is None and asyncio.get_running_loop().time() - last_harness_dispatch >= 1:
+                    active_harness = asyncio.create_task(harness_worker.run_once())
+                    last_harness_dispatch = asyncio.get_running_loop().time()
                 now = asyncio.get_running_loop().time()
                 if now - last_model_reconcile >= 30:
                     await reconcile_stale_model_reservations(SessionLocal)
@@ -169,7 +190,7 @@ async def run() -> None:
                     try:
                         if not adapter.sandbox_validated:
                             await adapter.validate()
-                        await adapter.reconcile_orphans(is_current_fence=scheduler.is_current_fence)
+                        await adapter.reconcile_orphans(is_current_fence=current_execution_fence)
                     except Exception:
                         logger.exception("ACP periodic validation or orphan reconciliation failed")
                 if not active_runs:
@@ -182,8 +203,13 @@ async def run() -> None:
     finally:
         for task in active_runs:
             task.cancel()
-        if active_runs:
-            await asyncio.gather(*active_runs, return_exceptions=True)
+        if active_harness is not None:
+            active_harness.cancel()
+        pending_workers = [*active_runs]
+        if active_harness is not None:
+            pending_workers.append(active_harness)
+        if pending_workers:
+            await asyncio.gather(*pending_workers, return_exceptions=True)
         await redis.aclose()
 
 

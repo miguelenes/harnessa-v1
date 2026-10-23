@@ -85,6 +85,7 @@ def upgrade() -> None:
         sa.Column("last_error", sa.String(300), nullable=True),
         sa.Column("cancel_requested_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("worker_heartbeat_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "mode IN ('parallel','sequential','both')", name="ck_harness_experiment_mode"
