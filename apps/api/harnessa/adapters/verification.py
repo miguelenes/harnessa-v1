@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -25,6 +26,50 @@ _SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _MAX_COMMANDS = 50
 _MAX_CRITERIA = 200
 _MAX_ARG_BYTES = 16_384
+
+
+def _podman_environment(*, extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    env = {
+        "PATH": os.defpath,
+        "HOME": str(Path.home()),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
+    for key in (
+        "XDG_RUNTIME_DIR",
+        "CONTAINERS_STORAGE_CONF",
+        "CONTAINERS_CONF",
+        "CONTAINERS_CONF_OVERRIDE",
+        "CONTAINERS_REGISTRIES_CONF",
+        "TMPDIR",
+    ):
+        if value := os.environ.get(key):
+            env[key] = value
+    env.update(extra or {})
+    return env
+
+
+async def _communicate_process(
+    process: asyncio.subprocess.Process, timeout: float
+) -> tuple[bytes, bytes]:
+    try:
+        result = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except (TimeoutError, asyncio.CancelledError):
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        raise
+    return result
+
+
+async def _wait_process(process: asyncio.subprocess.Process, timeout: float) -> int:
+    try:
+        return await asyncio.wait_for(process.wait(), timeout=timeout)
+    except (TimeoutError, asyncio.CancelledError):
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        raise
 
 
 class VerificationPolicyError(ValueError):
@@ -172,12 +217,16 @@ class PodmanCommandExecutor:
         memory_bytes: int = 2 * 1024**3,
         pids_limit: int = 256,
         tmpfs_bytes: int = 512 * 1024**2,
+        workspace_bytes: int = 1024**3,
     ) -> None:
         self.executable = shutil.which(executable) or executable
         self.cpus = cpus
         self.memory_bytes = memory_bytes
         self.pids_limit = pids_limit
         self.tmpfs_bytes = tmpfs_bytes
+        if workspace_bytes < 16 * 1024**2 or workspace_bytes > 4 * 1024**3:
+            raise VerificationPolicyError("Verifier workspace size must be between 16 MB and 4 GB")
+        self.workspace_bytes = workspace_bytes
 
     async def validate(self, manifest: VerificationManifest) -> None:
         if not shutil.which(self.executable) and not Path(self.executable).is_file():
@@ -265,6 +314,318 @@ class PodmanCommandExecutor:
             ]
         )
         return argv
+
+    def volume_command(
+        self, command: VerificationCommand, volume: str, fixture_path: Path | None = None
+    ) -> list[str]:
+        if not re.fullmatch(r"harnessa-verify-[a-f0-9]{32}", volume):
+            raise VerificationPolicyError("Verification workspace volume name is invalid")
+        argv = [
+            self.executable,
+            "run",
+            "--rm",
+            "--pull=never",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--userns=keep-id",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            "--memory",
+            str(self.memory_bytes),
+            "--cpus",
+            str(self.cpus),
+            "--pids-limit",
+            str(self.pids_limit),
+            "--ulimit",
+            "nofile=1024:1024",
+            "--tmpfs",
+            f"/tmp:rw,nosuid,nodev,size={self.tmpfs_bytes},mode=1777",
+            "--env",
+            "HOME=/tmp",
+            "--volume",
+            f"{volume}:/workspace:rw,rprivate,Z",
+        ]
+        if fixture_path is not None:
+            resolved = fixture_path.resolve(strict=True)
+            if any(char in str(resolved) for char in ",:"):
+                raise VerificationPolicyError("Protected fixture path has unsupported characters")
+            argv.extend(["--volume", f"{resolved}:/verification-fixtures:ro,rprivate,Z"])
+        argv.extend(
+            [
+                "--workdir",
+                "/workspace",
+                "--entrypoint",
+                command.argv[0],
+                command.image,
+                *command.argv[1:],
+            ]
+        )
+        return argv
+
+    async def execute_revision(
+        self,
+        command: VerificationCommand,
+        *,
+        repository_path: Path,
+        source_revision: str,
+        protected_fixtures: Mapping[str, bytes],
+        max_total_seconds: int = 1800,
+        max_artifact_bytes: int = 1_000_000,
+    ) -> tuple[CommandEvidence, tuple[dict[str, object], ...], int, bool]:
+        """Clone, execute, and collect evidence inside a quota-limited tmpfs volume."""
+        volume = "harnessa-verify-" + os.urandom(16).hex()
+        source = repository_path.expanduser().resolve(strict=True)
+        if not _SHA.fullmatch(source_revision):
+            raise VerificationPolicyError("Verification requires an exact full source commit SHA")
+        provision_script = r"""import os, subprocess, sys
+podman, volume, source, revision, timeout = sys.argv[1:]
+timeout = int(timeout)
+env = {"PATH": os.defpath, "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0", "GIT_TEMPLATE_DIR": "/dev/null", "GIT_ALLOW_PROTOCOL": "file"}
+def run(args, timeout=300):
+    return subprocess.run(args, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=timeout)
+try:
+    stage = "mount"
+    mount = subprocess.run([podman, "volume", "mount", volume], capture_output=True, check=True, timeout=30).stdout.decode().strip()
+    target = mount
+    stage = "init"
+    run(["git", "init", "--quiet", target], timeout=timeout)
+    stage = "fetch"
+    run(["git", "-C", target, "fetch", "--quiet", "--depth=1", "--no-tags", "--no-recurse-submodules", source, revision], timeout=timeout)
+    stage = "checkout"
+    run(["git", "-C", target, "-c", "core.hooksPath=/dev/null", "checkout", "--quiet", "--detach", "FETCH_HEAD"], timeout=timeout)
+except Exception as exc:
+    print(stage + ":" + type(exc).__name__, file=sys.stderr)
+    sys.exit(23)
+"""
+        artifact_script = r"""import base64, hashlib, json, os, subprocess, sys
+podman, volume, *paths = sys.argv[1:]
+stage = "mount"
+try:
+    mount = subprocess.run([podman, "volume", "mount", volume], capture_output=True, check=True, timeout=30).stdout.decode().strip()
+    root = os.path.realpath(mount)
+    records = []
+    total = 0
+    missing = False
+    limit = int(os.environ["HARNessa_ARTIFACT_LIMIT"])
+    for relative in paths:
+        stage = "artifact"
+        target = os.path.join(root, *relative.split("/"))
+        if os.path.islink(target):
+            raise ValueError()
+        if not os.path.exists(target):
+            missing = True
+            records.append({"path": relative, "status": "missing"})
+            continue
+        resolved = os.path.realpath(target)
+        if os.path.commonpath([root, resolved]) != root or not os.path.isfile(resolved):
+            raise ValueError()
+        size = os.path.getsize(resolved)
+        total += size
+        if total > limit:
+            raise ValueError()
+        with open(resolved, "rb") as stream:
+            content = stream.read(limit + 1)
+        if len(content) != size:
+            raise ValueError()
+        records.append({"path": relative, "status": "captured", "size_bytes": size, "sha256": hashlib.sha256(content).hexdigest(), "content_base64": base64.b64encode(content).decode("ascii")})
+    print(json.dumps({"records": records, "bytes": total, "missing": missing}, separators=(",", ":")))
+except Exception as exc:
+    print(stage + ":" + type(exc).__name__, file=sys.stderr)
+    sys.exit(24)
+"""
+        started = time.monotonic()
+        timed_out = False
+        exit_code: int | None = None
+        stdout = b""
+        stderr = b""
+        records: tuple[dict[str, object], ...] = ()
+        artifact_bytes = 0
+        artifact_missing = False
+        fixture_temporary = TemporaryDirectory(prefix="harnessa-fixtures-")
+        fixture_root = Path(fixture_temporary.name) / "protected-fixtures"
+        if protected_fixtures:
+            fixture_root.mkdir(mode=0o700)
+            for relative_path, content in protected_fixtures.items():
+                target = fixture_root / PurePosixPath(relative_path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if not target.resolve().is_relative_to(fixture_root.resolve()):
+                    fixture_temporary.cleanup()
+                    raise VerificationPolicyError("Protected fixture escaped its mount root")
+                target.write_bytes(content)
+                target.chmod(0o400)
+            for directory in sorted(
+                (path for path in fixture_root.rglob("*") if path.is_dir()),
+                key=lambda path: len(path.parts),
+                reverse=True,
+            ):
+                directory.chmod(0o500)
+            fixture_root.chmod(0o500)
+        fixture_mount = fixture_root if protected_fixtures else None
+        try:
+            volume_create = await asyncio.create_subprocess_exec(
+                self.executable,
+                "volume",
+                "create",
+                "--label",
+                "harnessa.purpose=verification-workspace",
+                "--opt",
+                "type=tmpfs",
+                "--opt",
+                "device=tmpfs",
+                "--opt",
+                f"o=size={self.workspace_bytes},nodev,nosuid",
+                volume,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=_podman_environment(),
+            )
+            _create_out, _create_err = await _communicate_process(volume_create, timeout=30)
+            if volume_create.returncode != 0:
+                raise VerificationUnavailable("Could not allocate a bounded verifier workspace")
+
+            provision = await asyncio.create_subprocess_exec(
+                self.executable,
+                "unshare",
+                sys.executable,
+                "-c",
+                provision_script,
+                self.executable,
+                volume,
+                str(source),
+                source_revision,
+                str(max(1, min(300, max_total_seconds))),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=_podman_environment(),
+            )
+            _provision_out, provision_err = await _communicate_process(
+                provision, timeout=min(300, max_total_seconds) + 30
+            )
+            if provision.returncode != 0:
+                detail = provision_err.decode("utf-8", errors="replace")[:100]
+                raise VerificationUnavailable(
+                    "Could not materialize the revision within the verifier workspace limit"
+                    + (f" ({detail})" if detail else "")
+                )
+
+            command_remaining = max_total_seconds - int(time.monotonic() - started)
+            if command_remaining < 1:
+                return (
+                    CommandEvidence(
+                        command_id=command.id,
+                        image=command.image,
+                        exit_code=None,
+                        timed_out=False,
+                        stdout="",
+                        stderr="Shared verification time limit exhausted during bounded checkout",
+                        duration_ms=max(0, round((time.monotonic() - started) * 1000)),
+                        outcome="unverified",
+                    ),
+                    (),
+                    0,
+                    bool(command.artifact_paths),
+                )
+
+            process = await asyncio.create_subprocess_exec(
+                *self.volume_command(command, volume, fixture_mount),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=_podman_environment(),
+            )
+            stdout_task = asyncio.create_task(
+                _read_bounded(process.stdout, command.output_limit_bytes)
+            )
+            stderr_task = asyncio.create_task(
+                _read_bounded(process.stderr, command.output_limit_bytes)
+            )
+            try:
+                await _wait_process(
+                    process, timeout=min(command.timeout_seconds, command_remaining)
+                )
+            except TimeoutError:
+                timed_out = True
+            stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+            exit_code = process.returncode
+
+            if command.artifact_paths:
+                capture = await asyncio.create_subprocess_exec(
+                    self.executable,
+                    "unshare",
+                    sys.executable,
+                    "-c",
+                    artifact_script,
+                    self.executable,
+                    volume,
+                    *command.artifact_paths,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=_podman_environment(
+                        extra={"HARNessa_ARTIFACT_LIMIT": str(max_artifact_bytes)}
+                    ),
+                )
+                capture_out, capture_err = await _communicate_process(capture, timeout=45)
+                if capture.returncode != 0:
+                    detail = capture_err.decode("utf-8", errors="replace")[:100]
+                    raise VerificationPolicyError(
+                        "Verification artifacts exceeded their bounded safe capture"
+                        + (f" ({detail})" if detail else "")
+                    )
+                artifact_result = json.loads(capture_out)
+                artifact_bytes = int(artifact_result["bytes"])
+                artifact_missing = bool(artifact_result["missing"])
+                captured: list[dict[str, object]] = []
+                for item in artifact_result["records"]:
+                    record = dict(item)
+                    encoded = record.pop("content_base64", None)
+                    if encoded is not None:
+                        content = base64.b64decode(str(encoded), validate=True)
+                        try:
+                            safe_to_store = safe_retrieval_content(content.decode("utf-8"))
+                        except UnicodeDecodeError:
+                            safe_to_store = False
+                        record["content_base64"] = str(encoded) if safe_to_store else ""
+                        record["redacted"] = not safe_to_store
+                    captured.append(record)
+                records = tuple(captured)
+        except TimeoutError as exc:
+            raise VerificationUnavailable(
+                "Bounded verifier workspace preparation or evidence capture timed out"
+            ) from exc
+        finally:
+            remove = await asyncio.create_subprocess_exec(
+                self.executable,
+                "volume",
+                "rm",
+                volume,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=_podman_environment(),
+            )
+            await _wait_process(remove, timeout=30)
+            fixture_temporary.cleanup()
+
+        duration_ms = max(0, round((time.monotonic() - started) * 1000))
+        outcome: Literal["passed", "failed", "unverified"] = (
+            "unverified"
+            if exit_code is None
+            else "failed"
+            if timed_out or exit_code != 0
+            else "passed"
+        )
+        evidence = CommandEvidence(
+            command_id=command.id,
+            image=command.image,
+            exit_code=exit_code,
+            timed_out=timed_out,
+            stdout=_redact(stdout),
+            stderr=_redact(stderr),
+            duration_ms=duration_ms,
+            outcome=outcome,
+            artifacts=records,
+        )
+        return evidence, records, artifact_bytes, artifact_missing
 
     async def execute(self, command: VerificationCommand, workspace: Path) -> CommandEvidence:
         started = time.monotonic()
@@ -496,27 +857,6 @@ class VerificationRunner:
                         )
                     }
                 )
-                workspace = root / command.id
-                remaining = max(1, self.max_total_seconds - int(time.monotonic() - started))
-                await _git(
-                    "clone",
-                    "--quiet",
-                    "--no-hardlinks",
-                    "--no-checkout",
-                    str(source),
-                    str(workspace),
-                    timeout_seconds=remaining,
-                )
-                remaining = max(1, self.max_total_seconds - int(time.monotonic() - started))
-                await _git(
-                    "-C",
-                    str(workspace),
-                    "checkout",
-                    "--quiet",
-                    "--detach",
-                    source_revision,
-                    timeout_seconds=remaining,
-                )
                 elapsed = time.monotonic() - started
                 if elapsed >= self.max_total_seconds:
                     commands.append(
@@ -526,7 +866,7 @@ class VerificationRunner:
                             exit_code=None,
                             timed_out=False,
                             stdout="",
-                            stderr="Shared verification time limit exhausted during checkout",
+                            stderr="Shared verification time limit exhausted before command execution",
                             duration_ms=0,
                             outcome="unverified",
                         )
@@ -539,10 +879,44 @@ class VerificationRunner:
                         )
                     }
                 )
-                evidence = await self.executor.execute(bounded_command, workspace)
-                artifacts, artifact_bytes, artifact_missing = _capture_artifacts(
-                    workspace, command.artifact_paths, max_bytes=1_000_000
-                )
+                workspace = root / command.id
+                execute_revision = getattr(self.executor, "execute_revision", None)
+                if callable(execute_revision):
+                    evidence, artifacts, artifact_bytes, artifact_missing = await execute_revision(
+                        bounded_command,
+                        repository_path=source,
+                        source_revision=source_revision,
+                        protected_fixtures=fixtures,
+                        max_total_seconds=max(
+                            1, self.max_total_seconds - int(time.monotonic() - started)
+                        ),
+                        max_artifact_bytes=1_000_000,
+                    )
+                else:
+                    remaining = max(1, self.max_total_seconds - int(time.monotonic() - started))
+                    await _git(
+                        "clone",
+                        "--quiet",
+                        "--no-hardlinks",
+                        "--no-checkout",
+                        str(source),
+                        str(workspace),
+                        timeout_seconds=remaining,
+                    )
+                    remaining = max(1, self.max_total_seconds - int(time.monotonic() - started))
+                    await _git(
+                        "-C",
+                        str(workspace),
+                        "checkout",
+                        "--quiet",
+                        "--detach",
+                        source_revision,
+                        timeout_seconds=remaining,
+                    )
+                    evidence = await self.executor.execute(bounded_command, workspace)
+                    artifacts, artifact_bytes, artifact_missing = _capture_artifacts(
+                        workspace, command.artifact_paths, max_bytes=1_000_000
+                    )
                 evidence = CommandEvidence(
                     command_id=evidence.command_id,
                     image=evidence.image,

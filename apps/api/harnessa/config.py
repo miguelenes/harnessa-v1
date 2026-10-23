@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     acp_pids_limit: int = 256
     acp_tmpfs_limit_bytes: int = 536870912
     acp_workspace_limit_bytes: int = 4294967296
+    verification_workspace_limit_bytes: int = Field(default=1073741824, ge=16777216, le=4294967296)
     acp_frame_limit_bytes: int = 1048576
     acp_update_limit: int = 10000
     acp_artifact_limit_bytes: int = 10485760

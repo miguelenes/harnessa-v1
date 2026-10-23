@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,96 @@ async def _bounded_git_diff(
     return stdout.decode("utf-8", errors="replace")
 
 
+async def _compose_review_head(
+    source: Path,
+    implementation_head: str,
+    specification_diff: str,
+    archive_diff: str,
+    review_ref: str,
+) -> str:
+    """Create a pinned review candidate with the approved spec and its archive."""
+    with tempfile.NamedTemporaryFile(prefix="harnessa-review-index-") as index_file:
+        env = {
+            "PATH": os.defpath,
+            "HOME": "/nonexistent",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_INDEX_FILE": index_file.name,
+            "GIT_AUTHOR_NAME": "Harnessa Review Preparation",
+            "GIT_AUTHOR_EMAIL": "review@harnessa.invalid",
+            "GIT_COMMITTER_NAME": "Harnessa Review Preparation",
+            "GIT_COMMITTER_EMAIL": "review@harnessa.invalid",
+        }
+
+        async def git(*args: str, input_bytes: bytes | None = None) -> bytes:
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "-C",
+                str(source),
+                *args,
+                stdin=asyncio.subprocess.PIPE
+                if input_bytes is not None
+                else asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                stdout, _stderr = await asyncio.wait_for(
+                    process.communicate(input_bytes), timeout=60
+                )
+            except TimeoutError as exc:
+                process.kill()
+                await process.wait()
+                raise SpecificationWorkspaceError(
+                    "OpenSpec review head preparation timed out"
+                ) from exc
+            if process.returncode:
+                raise SpecificationWorkspaceError(
+                    "OpenSpec archive could not be applied to the implementation head"
+                )
+            return stdout.strip()
+
+        await git("read-tree", implementation_head)
+        for diff in (specification_diff, archive_diff):
+            if diff:
+                await git("apply", "--cached", "--binary", "-", input_bytes=diff.encode())
+        tree = (await git("write-tree")).decode("ascii")
+        if not specification_diff and not archive_diff:
+            commit = implementation_head.encode("ascii")
+        else:
+            commit = await git(
+                "commit-tree",
+                tree,
+                "-p",
+                implementation_head,
+                "-m",
+                "Prepare OpenSpec archive for review",
+            )
+        final_head = commit.decode("ascii")
+        await git("update-ref", review_ref, final_head)
+        return final_head
+
+
+def _lease_is_current(lease: TaskLease | None, owner: str, token: int, now: datetime) -> bool:
+    return bool(
+        lease
+        and lease.owner_id == owner
+        and lease.fencing_token == token
+        and lease.expires_at is not None
+        and lease.expires_at > now
+    )
+
+
+def _bind_verified_review_head(
+    sync_preview: dict[str, Any], expected_head: str, verified_head: str | None
+) -> bool:
+    verified = verified_head is not None and verified_head == expected_head
+    sync_preview["final_head_verified"] = verified
+    return verified
+
+
 class VerificationDispatcher:
     """Claim VERIFYING tasks with a lease and persist exact verifier evidence."""
 
@@ -93,7 +184,7 @@ class VerificationDispatcher:
     ) -> None:
         self.repository_sources = repository_sources
         self.sessions = sessions
-        self.lease_seconds = lease_seconds
+        self.lease_seconds = max(lease_seconds, settings.run_max_wall_seconds + 60)
         self.workspace_manager = specification_workspace_manager()
         self.artifact_store = LocalArtifactStore(Path(settings.artifact_root))
 
@@ -156,6 +247,7 @@ class VerificationDispatcher:
             )
         if (
             run is None
+            or interview is None
             or repository is None
             or manifest_row is None
             or policy is None
@@ -168,6 +260,9 @@ class VerificationDispatcher:
                 "Run is missing its exact source, repository, or approved manifest",
             )
 
+        review_head: str | None = None
+        sync_preview: dict[str, Any] | None = None
+        approved_spec_diff = ""
         try:
             current_base = await self.workspace_manager.current_base(repository)
             if current_base != run.base_sha or manifest_row.source_revision != run.base_sha:
@@ -218,6 +313,38 @@ class VerificationDispatcher:
                 path: base64.b64decode(content, validate=True)
                 for path, content in manifest_row.protected_fixtures.items()
             }
+            approved_workspace = await self.workspace_manager.open(
+                interview.id,
+                repository,
+                change_id=interview.change_id,
+                base_sha=interview.base_sha,
+                head_sha=interview.head_sha,
+            )
+            approved_spec_diff = await self.workspace_manager.artifact_diff(
+                approved_workspace, interview.base_sha, interview.head_sha
+            )
+            archive_preview = await self.workspace_manager.archive_preview(approved_workspace)
+            review_ref = f"refs/harnessa/review-candidates/{run.id.hex}-f{token}"
+            review_head = await _compose_review_head(
+                source,
+                run.source_revision,
+                approved_spec_diff,
+                archive_preview["diff"],
+                review_ref,
+            )
+            sync_preview = {
+                "policy": "review_branch",
+                "archive_preview_ready": True,
+                "expected_base_sha": run.base_sha,
+                "specification_commit_sha": run.specification_commit_sha,
+                "implementation_head_sha": run.source_revision,
+                "review_candidate_ref": review_ref,
+                "proposed_final_review_head": review_head,
+                "archive_command_output": archive_preview["command_output"],
+                "archive_diff": archive_preview["diff"],
+                "diff_sha256": hashlib.sha256(archive_preview["diff"].encode()).hexdigest(),
+                "final_head_verified": False,
+            }
             elapsed = (datetime.now(UTC) - (run.started_at or datetime.now(UTC))).total_seconds()
             shared_limit = min(settings.run_max_wall_seconds, policy.max_wall_seconds)
             remaining = int(shared_limit - elapsed)
@@ -230,16 +357,23 @@ class VerificationDispatcher:
                     run=run,
                     repository=repository,
                     manifest_row=manifest_row,
+                    review_head=review_head,
+                    sync_preview=sync_preview,
                 )
             result = await VerificationRunner(
-                PodmanCommandExecutor(), max_total_seconds=remaining
+                PodmanCommandExecutor(workspace_bytes=settings.verification_workspace_limit_bytes),
+                max_total_seconds=remaining,
             ).run(
                 manifest,
                 repository_path=source,
-                source_revision=run.source_revision,
+                source_revision=review_head,
                 protected_fixtures=protected_fixtures,
             )
-        except (OSError, ValueError, VerificationUnavailable) as exc:
+            if not _bind_verified_review_head(sync_preview, review_head, result.source_revision):
+                raise SpecificationWorkspaceError(
+                    "Verification result did not bind to the composed review head"
+                )
+        except (OSError, ValueError, VerificationUnavailable, SpecificationWorkspaceError) as exc:
             return await self._record_unverified(
                 task.id,
                 owner,
@@ -248,10 +382,15 @@ class VerificationDispatcher:
                 run=run,
                 repository=repository,
                 manifest_row=manifest_row,
+                review_head=review_head,
+                sync_preview=sync_preview,
             )
 
         payload = {
             "source_revision": result.source_revision,
+            "implementation_head_sha": run.source_revision,
+            "openspec_sync_preview": sync_preview,
+            "approved_specification_diff": approved_spec_diff,
             "manifest_revision": result.manifest_revision,
             "manifest_digest": result.manifest_digest,
             "outcome": result.outcome,
@@ -259,6 +398,13 @@ class VerificationDispatcher:
             "criteria": [item.__dict__ for item in result.criteria],
             "content_hash": result.content_hash,
         }
+        payload["content_hash"] = hashlib.sha256(
+            json.dumps(
+                {key: value for key, value in payload.items() if key != "content_hash"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
         stored = await __import__("asyncio").to_thread(
             self.artifact_store.put_bytes,
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(),
@@ -277,23 +423,30 @@ class VerificationDispatcher:
         run: Run | None = None,
         repository: Repository | None = None,
         manifest_row: VerificationManifestRevision | None = None,
+        review_head: str | None = None,
+        sync_preview: dict[str, Any] | None = None,
     ) -> bool:
         payload: dict[str, Any] = {
             "outcome": "unverified",
             "reason": reason[:300],
-            "source_revision": run.source_revision if run else None,
+            "source_revision": review_head or (run.source_revision if run else None),
+            "implementation_head_sha": run.source_revision if run else None,
             "manifest_revision": manifest_row.revision if manifest_row else None,
             "manifest_digest": manifest_row.manifest_digest if manifest_row else None,
             "commands": [],
             "criteria": [],
         }
+        if sync_preview is not None:
+            _bind_verified_review_head(sync_preview, review_head or "", None)
+            payload["openspec_sync_preview"] = sync_preview
         if run is None or repository is None or manifest_row is None:
             async with self.sessions() as db:
                 task = await db.get(Task, task_id)
                 lease = await db.scalar(
                     select(TaskLease).where(TaskLease.task_id == task_id).with_for_update()
                 )
-                if task and lease and lease.owner_id == owner and lease.fencing_token == token:
+                if task and _lease_is_current(lease, owner, token, datetime.now(UTC)):
+                    assert lease is not None
                     before = task.version
                     old_status = task.run_status
                     lease.owner_id = None
@@ -375,6 +528,7 @@ class VerificationDispatcher:
         artifact: StoredArtifact,
     ) -> None:
         async with self.sessions() as db:
+            now = datetime.now(UTC)
             task = await db.scalar(select(Task).where(Task.id == task_id).with_for_update())
             lease = await db.scalar(
                 select(TaskLease).where(TaskLease.task_id == task_id).with_for_update()
@@ -390,18 +544,17 @@ class VerificationDispatcher:
             )
             if (
                 not task
-                or not lease
-                or lease.owner_id != owner
-                or lease.fencing_token != token
+                or not _lease_is_current(lease, owner, token, now)
                 or task.stage != TaskStage.VERIFYING.value
                 or current_run is None
                 or project is None
                 or policy is None
                 or current_run.source_revision
-                != payload.get("source_revision", current_run.source_revision)
+                != payload.get("implementation_head_sha", current_run.source_revision)
             ):
                 await db.rollback()
                 return
+            assert lease is not None
             evidence = VerificationExecution(
                 organization_id=project.organization_id,
                 project_id=task.project_id,
@@ -411,7 +564,7 @@ class VerificationDispatcher:
                 manifest_revision_id=manifest.id,
                 attempt=run.attempt,
                 fencing_token=run.fencing_token,
-                source_revision=run.source_revision or "0" * 40,
+                source_revision=payload.get("source_revision") or run.source_revision or "0" * 40,
                 outcome=payload["outcome"],
                 result=payload,
                 content_hash=payload.get("content_hash")
@@ -433,7 +586,7 @@ class VerificationDispatcher:
             )
             await db.flush()
             lease.owner_id = None
-            lease.expires_at = datetime.now(UTC)
+            lease.expires_at = now
             before = task.version
             old_status = task.run_status
             attempt_limit = min(settings.run_max_attempts, policy.max_attempts)
@@ -481,7 +634,7 @@ class VerificationDispatcher:
                     "outcome": payload["outcome"],
                     "verification_id": str(evidence.id),
                     "artifact_digest": artifact.digest,
-                    "source_revision": run.source_revision,
+                    "source_revision": payload.get("source_revision", run.source_revision),
                 },
             )
             if payload["outcome"] in {"passed", "failed", "manual_review_required", "unverified"}:
@@ -533,18 +686,16 @@ class VerificationDispatcher:
                     }
                     for item in model_events
                 ]
+                review_head = payload.get("source_revision", run.source_revision or "")
                 code_diff, spec_diff = await asyncio.gather(
-                    _bounded_git_diff(source, run.base_sha or "", run.source_revision or ""),
-                    _bounded_git_diff(
-                        source, run.base_sha or "", run.source_revision or "", pathspec="openspec"
-                    ),
+                    _bounded_git_diff(source, run.base_sha or "", review_head),
+                    _bounded_git_diff(source, run.base_sha or "", review_head, pathspec="openspec"),
                 )
                 interview = await db.scalar(
                     select(SpecificationInterview).where(SpecificationInterview.task_id == task.id)
                 )
                 approved_spec_diff = ""
-                openspec_archive_preview = {"command_output": "", "diff": ""}
-                archive_preview_ready = False
+                openspec_sync_preview = payload.get("openspec_sync_preview")
                 if interview is not None:
                     try:
                         approved_workspace = await self.workspace_manager.open(
@@ -557,19 +708,26 @@ class VerificationDispatcher:
                         approved_spec_diff = await self.workspace_manager.artifact_diff(
                             approved_workspace, interview.base_sha, interview.head_sha
                         )
-                        openspec_archive_preview = await self.workspace_manager.archive_preview(
-                            approved_workspace
-                        )
-                        archive_preview_ready = True
                     except (OSError, ValueError, SpecificationWorkspaceError):
                         approved_spec_diff = "[approved OpenSpec diff could not be materialized]"
-                        openspec_archive_preview = {
-                            "command_output": "[OpenSpec archive preview could not be materialized]",
-                            "diff": "",
-                        }
+                if not isinstance(openspec_sync_preview, dict):
+                    openspec_sync_preview = {
+                        "policy": "review_branch",
+                        "archive_preview_ready": False,
+                        "expected_base_sha": run.base_sha,
+                        "specification_commit_sha": run.specification_commit_sha,
+                        "implementation_head_sha": run.source_revision,
+                        "review_candidate_ref": None,
+                        "proposed_final_review_head": None,
+                        "archive_command_output": "[OpenSpec archive preview was not prepared]",
+                        "archive_diff": "",
+                        "diff_sha256": hashlib.sha256(b"").hexdigest(),
+                        "final_head_verified": False,
+                    }
                 bundle = {
                     "base_sha": run.base_sha,
-                    "head_sha": run.source_revision,
+                    "head_sha": review_head,
+                    "implementation_head_sha": run.source_revision,
                     "specification_hash": run.specification_hash,
                     "specification_revision": run.specification_revision,
                     "policy_revision": run.policy_revision,
@@ -584,21 +742,10 @@ class VerificationDispatcher:
                     "artifact_digest": artifact.digest,
                     "code_diff": code_diff,
                     "openspec_diff": spec_diff,
-                    "approved_specification_diff": approved_spec_diff,
-                    "openspec_sync_preview": {
-                        "policy": "review_branch",
-                        "archive_preview_ready": archive_preview_ready,
-                        "expected_base_sha": run.base_sha,
-                        "specification_commit_sha": run.specification_commit_sha,
-                        "proposed_final_review_head": run.source_revision,
-                        "archive_command_output": openspec_archive_preview["command_output"],
-                        "archive_diff": openspec_archive_preview["diff"],
-                        "diff_sha256": hashlib.sha256(
-                            openspec_archive_preview["diff"].encode()
-                        ).hexdigest(),
-                        "final_head_verified": run.source_revision
-                        == payload.get("source_revision"),
-                    },
+                    "approved_specification_diff": payload.get(
+                        "approved_specification_diff", approved_spec_diff
+                    ),
+                    "openspec_sync_preview": openspec_sync_preview,
                     "harness_adaptation_hook": {
                         "reserved_for": "M12",
                         "triggered": False,
@@ -635,7 +782,7 @@ class VerificationDispatcher:
                         verification_execution_id=evidence.id,
                         fencing_token=run.fencing_token,
                         base_sha=run.base_sha or "0" * 40,
-                        head_sha=run.source_revision or "0" * 40,
+                        head_sha=review_head or "0" * 40,
                         specification_hash=run.specification_hash or "0" * 64,
                         specification_revision=run.specification_revision or 1,
                         harness_revision=run.harness_revision,

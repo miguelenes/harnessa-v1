@@ -95,9 +95,7 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
     monkeypatch.setattr(review_routes, "_manifest_workspace", manager)
     async with SessionLocal() as db:
         with pytest.raises(HTTPException) as missing_bundle:
-            await review_routes.get_review_bundle(
-                "00000000-0000-0000-0000-000000000000", actor, db
-            )
+            await review_routes.get_review_bundle("00000000-0000-0000-0000-000000000000", actor, db)
         assert missing_bundle.value.status_code == 404
         interview = await db.get(SpecificationInterview, interview_id)
         repository_row = await db.get(Repository, repository_id)
@@ -170,7 +168,17 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
             manifest_digest=manifest.manifest_digest,
             bundle_digest=digest,
             artifact_digest=hashlib.sha256(b"bundle-artifact").hexdigest(),
-            bundle={"openspec_sync_preview": {"archive_preview_ready": True}},
+            bundle={
+                "implementation_head_sha": source_revision,
+                "openspec_sync_preview": {
+                    "archive_preview_ready": True,
+                    "final_head_verified": True,
+                    "implementation_head_sha": source_revision,
+                    "proposed_final_review_head": source_revision,
+                    "archive_diff": "",
+                    "diff_sha256": hashlib.sha256(b"").hexdigest(),
+                },
+            },
             status="prepared",
         )
         db.add(bundle)
@@ -224,7 +232,17 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
         assert unavailable_archive.value.status_code == 409
         bundle_row.status = "prepared"
         bundle_row.invalidated_reason = None
-        bundle_row.bundle = {"openspec_sync_preview": {"archive_preview_ready": True}}
+        bundle_row.bundle = {
+            "implementation_head_sha": source_revision,
+            "openspec_sync_preview": {
+                "archive_preview_ready": True,
+                "final_head_verified": True,
+                "implementation_head_sha": source_revision,
+                "proposed_final_review_head": source_revision,
+                "archive_diff": "",
+                "diff_sha256": hashlib.sha256(b"").hexdigest(),
+            },
+        }
         await db.flush()
         comment = await review_routes.decide_review_bundle(
             task_id,

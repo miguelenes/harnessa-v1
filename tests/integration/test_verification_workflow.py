@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from harnessa.config import settings
 from harnessa.db.orchestration import Run
@@ -10,7 +12,11 @@ from harnessa.services.scheduler import Scheduler
 from harnessa.services.verification_workflow import VerificationDispatcher
 from sqlalchemy import select
 
-from tests.integration.test_specifications import _create_ready_interview, _specification_fixture
+from tests.integration.test_specifications import (
+    _create_ready_interview,
+    _git,
+    _specification_fixture,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -111,9 +117,8 @@ async def test_unavailable_repository_source_finishes_as_visible_unverified_revi
         task = await db.get(Task, task_id)
         assert evidence is not None and evidence.outcome == "unverified"
         assert evidence.result["criteria"]
-        assert (
-            bundle is not None and bundle.bundle["openspec_sync_preview"]["archive_preview_ready"]
-        )
+        assert bundle is not None
+        assert bundle.bundle["openspec_sync_preview"]["archive_preview_ready"] is False
         assert task is not None and task.stage == "HUMAN_REVIEW"
         assert task.blocked_reason == "verification_unverified"
 
@@ -151,6 +156,21 @@ async def test_missing_approved_image_is_unverified_and_still_publishes_review_e
         assert "commands" in evidence.result
         assert bundle is not None
         assert bundle.bundle["openspec_sync_preview"]["archive_preview_ready"] is True
+        assert bundle.bundle["openspec_sync_preview"]["final_head_verified"] is True
+        assert (
+            bundle.bundle["openspec_sync_preview"]["proposed_final_review_head"] == bundle.head_sha
+        )
+        assert evidence.source_revision == bundle.head_sha
+        assert evidence.result["implementation_head_sha"] == source_revision
+        assert bundle.head_sha != source_revision
+        source = await manager.source_path(repository)
+        assert (
+            await asyncio.to_thread(
+                _git, source, "cat-file", "-e", f"{bundle.head_sha}:openspec/specs/access/spec.md"
+            )
+            == ""
+        )
+        assert "openspec/changes/archive/" in bundle.bundle["openspec_sync_preview"]["archive_diff"]
         assert bundle.bundle["verification"]["outcome"] == "unverified"
 
 

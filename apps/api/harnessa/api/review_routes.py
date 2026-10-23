@@ -48,8 +48,20 @@ _manifest_workspace = SpecificationWorkspaceManager()
 
 async def _bundle_stale_reason(db: AsyncSession, bundle: ReviewBundle) -> str | None:
     sync_preview = bundle.bundle.get("openspec_sync_preview")
-    if not isinstance(sync_preview, dict) or sync_preview.get("archive_preview_ready") is not True:
-        return "OpenSpec sync and archive preview is unavailable"
+    if (
+        not isinstance(sync_preview, dict)
+        or sync_preview.get("archive_preview_ready") is not True
+        or sync_preview.get("final_head_verified") is not True
+        or sync_preview.get("proposed_final_review_head") != bundle.head_sha
+        or sync_preview.get("implementation_head_sha")
+        != bundle.bundle.get("implementation_head_sha")
+    ):
+        return "OpenSpec archive is not incorporated into a verified final review head"
+    archive_diff = sync_preview.get("archive_diff")
+    if not isinstance(archive_diff, str) or hashlib.sha256(
+        archive_diff.encode()
+    ).hexdigest() != sync_preview.get("diff_sha256"):
+        return "OpenSpec archive diff does not match its recorded digest"
     run = await db.get(Run, bundle.run_id)
     repository = await db.get(Repository, bundle.repository_id)
     execution = await db.get(VerificationExecution, bundle.verification_execution_id)
@@ -59,8 +71,12 @@ async def _bundle_stale_reason(db: AsyncSession, bundle: ReviewBundle) -> str | 
     project = await db.get(Project, bundle.project_id)
     if not run or not repository or not execution or not interview or not project:
         return "Bound run, repository, interview, or verification evidence is missing"
-    if run.source_revision != bundle.head_sha or execution.source_revision != bundle.head_sha:
-        return "Implementation source revision changed"
+    if (
+        run.source_revision != bundle.bundle.get("implementation_head_sha")
+        or execution.source_revision != bundle.head_sha
+        or not await _manifest_workspace.contains_revision(repository, bundle.head_sha)
+    ):
+        return "Verified implementation or OpenSpec review revision changed"
     if (
         interview.readiness_state != "READY"
         or interview.artifact_hash != bundle.specification_hash
