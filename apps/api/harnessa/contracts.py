@@ -453,6 +453,19 @@ class TaskRead(TaskCreate):
     version: int
     created_at: datetime
     updated_at: datetime
+    specification_readiness_state: str | None = None
+    specification_revision: int | None = None
+    allowed_transitions: list[TaskStage] = Field(default_factory=list)
+
+
+class TaskCapabilitiesRead(BaseModel):
+    """Actions the current actor may attempt; transition guards remain authoritative."""
+
+    role: Role
+    allowed_transitions: list[TaskStage] = Field(default_factory=list)
+    allowed_commands: list[TaskCommand] = Field(default_factory=list)
+    can_answer_questions: bool = False
+    can_edit_artifacts: bool = False
 
 
 class TaskTransitionRequest(BaseModel):

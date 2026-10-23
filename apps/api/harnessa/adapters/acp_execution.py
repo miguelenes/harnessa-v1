@@ -48,14 +48,130 @@ from harnessa.adapters.specification_workspace import (
 )
 from harnessa.adapters.workspaces import ManagedWorkspace, WorkspaceError, WorkspaceManager
 from harnessa.config import settings
-from harnessa.db.models import Project, Repository
+from harnessa.db.models import Project, Repository, Task
+from harnessa.db.orchestration import Run, TaskLease
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
+from harnessa.services.lifecycle import record_domain_event
 from harnessa.services.model_gateway import LiteLLMModelRouter
 
 logger = logging.getLogger("harnessa.acp_execution")
 ArtifactPublisher = Callable[[bytes, str], Awaitable[Mapping[str, Any]]]
 _MAX_RECOVERY_ARTIFACT_BYTES = 100_000
+
+
+async def persist_acp_ui_event(
+    sessions_factory: async_sessionmaker[AsyncSession],
+    *,
+    task: TaskInput,
+    run: RunInput,
+    event: Mapping[str, Any],
+) -> None:
+    """Append one normalized ACP UI event only while its run lease is current."""
+    kind = event.get("kind")
+    event_types = {
+        "step_started": "run.step_started",
+        "step_finished": "run.step_finished",
+        "message_started": "run.message_started",
+        "message_content": "run.message_content",
+        "message_ended": "run.message_ended",
+        "tool_started": "run.tool_started",
+        "tool_args_redacted": "run.tool_args_redacted",
+        "tool_ended": "run.tool_ended",
+        "tool_result_redacted": "run.tool_result_redacted",
+    }
+    event_type = event_types.get(kind) if isinstance(kind, str) else None
+    if event_type is None:
+        return
+    payload: dict[str, Any] = {}
+    if kind in {"step_started", "step_finished"}:
+        payload["step_name"] = "agent_execution"
+        if kind == "step_finished" and event.get("outcome") in {
+            "completed", "cancelled", "failed"
+        }:
+            payload["outcome"] = event["outcome"]
+    if kind in {"message_started", "message_content", "message_ended"}:
+        message_id = event.get("message_id")
+        if not isinstance(message_id, str) or len(message_id) > 64:
+            return
+        payload["message_id"] = message_id
+        if kind == "message_content":
+            text = event.get("text")
+            if not isinstance(text, str) or not text or len(text) > 8192:
+                return
+            payload["text"] = text
+    if kind in {
+        "tool_started", "tool_args_redacted", "tool_ended", "tool_result_redacted"
+    }:
+        tool_call_id = event.get("tool_call_id")
+        if not isinstance(tool_call_id, str) or len(tool_call_id) > 64:
+            return
+        payload["tool_call_id"] = tool_call_id
+        if kind == "tool_started":
+            tool_name = event.get("tool_name")
+            allowed_names = {
+                "read", "edit", "delete", "move", "search", "execute",
+                "think", "fetch", "switch_mode", "other",
+            }
+            payload["tool_name"] = tool_name if tool_name in allowed_names else "other"
+        if kind == "tool_ended" and event.get("outcome") in {"completed", "failed"}:
+            payload["outcome"] = event["outcome"]
+
+    async with sessions_factory() as event_db:
+        # Match scheduler transactions: lease -> task -> run.  This prevents the
+        # event writer from inverting the locks used for completion/recovery.
+        current_lease = await event_db.scalar(
+            select(TaskLease).where(TaskLease.task_id == task.id).with_for_update()
+        )
+        current_task = await event_db.scalar(
+            select(Task).where(Task.id == task.id).with_for_update()
+        )
+        current_run = await event_db.scalar(
+            select(Run).where(Run.id == run.id).with_for_update()
+        )
+        is_interrupted = bool(
+            current_task is not None
+            and (
+                current_task.run_status in {"CANCELLED", "PAUSED"}
+                or getattr(current_task, "cancel_requested_at", None)
+                or (
+                    current_run is not None
+                    and getattr(current_run, "cancel_requested_at", None)
+                )
+            )
+        )
+        terminal_closure = kind in {
+            "message_ended", "tool_args_redacted", "tool_ended",
+            "tool_result_redacted", "step_finished",
+        }
+        if (
+            current_task is None
+            or current_run is None
+            or current_lease is None
+            or current_task.project_id != task.project_id
+            or current_run.task_id != task.id
+            or current_run.project_id != task.project_id
+            or current_run.fencing_token != run.fencing_token
+            or current_lease.run_id != run.id
+            or current_lease.fencing_token != run.fencing_token
+            or current_lease.expires_at is None
+            or current_lease.expires_at <= datetime.now(UTC)
+            or current_run.status != "RUNNING"
+            or (
+                current_task.run_status != "RUNNING"
+                and not (is_interrupted and terminal_closure)
+            )
+        ):
+            raise StaleLease("Agent event rejected because the run lease is no longer current")
+        await record_domain_event(
+            event_db,
+            task=current_task,
+            event_type=event_type,
+            actor_id=None,
+            run_id=run.id,
+            payload=payload,
+        )
+        await event_db.commit()
 
 
 class ACPExecutionAdapter:
@@ -353,11 +469,17 @@ class ACPExecutionAdapter:
                     )
                 )
 
+            async def persist_ui_event(event: Mapping[str, Any]) -> None:
+                await persist_acp_ui_event(
+                    self.sessions_factory, task=task, run=run, event=event
+                )
+
             session = ACPAgentSession(
                 process,
                 max_frame_bytes=self.limits.max_protocol_frame_bytes,
                 max_updates=self.limits.max_agent_updates,
                 on_progress=checkpoint_progress,
+                on_ui_event=persist_ui_event,
                 workspace_root=workspace.workspace_path,
             )
             async with self._active_lock:

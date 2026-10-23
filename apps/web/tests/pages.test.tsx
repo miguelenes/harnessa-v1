@@ -31,10 +31,10 @@ describe("web application pages", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows the public product entry point", () => {
+  it("shows the public workspace entry point", () => {
     render(<Home />);
-    expect(screen.getByRole("heading", { name: /control plane for repository change/i })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Sign in" }).getAttribute("href")).toBe("/login");
+    expect(screen.getByRole("heading", { name: "Harnessa workspace" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open projects" }).getAttribute("href")).toBe("/projects");
   });
 
   it("renders the root layout and shared button variants", () => {

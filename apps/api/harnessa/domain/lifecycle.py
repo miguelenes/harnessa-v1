@@ -65,6 +65,11 @@ _TRANSITIONS: dict[TaskStage, frozenset[TaskStage]] = {
 }
 
 
+def allowed_transition_targets(current: TaskStage) -> frozenset[TaskStage]:
+    """Return lifecycle edges before role- and state-specific command checks."""
+    return _TRANSITIONS[current]
+
+
 def assert_transition(
     current: TaskStage,
     target: TaskStage,

@@ -937,6 +937,17 @@ async def update_artifacts(
 ) -> SpecificationInterview:
     interview, repository, task, _ = await _interview_for_update(db, interview_id, actor)
     if interview.revision != expected_revision:
+        current, current_files, _ = await read_artifacts(
+            db, interview_id=interview_id, actor=actor
+        )
+        replay_files = {
+            f"openspec/changes/{interview.change_id}/proposal.md": proposal_md,
+            f"openspec/changes/{interview.change_id}/specs/{interview.change_id}/spec.md": spec_md,
+            f"openspec/changes/{interview.change_id}/design.md": design_md,
+            f"openspec/changes/{interview.change_id}/tasks.md": tasks_md,
+        }
+        if all(current_files.get(path) == value for path, value in replay_files.items()):
+            return current
         raise HTTPException(409, "Specification interview revision changed")
     files = {
         f"openspec/changes/{interview.change_id}/{_ARTIFACT_NAMES['proposal_md']}": proposal_md,
