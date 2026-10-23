@@ -1121,6 +1121,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/evidence/gateway-usage/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Gateway Usage
+         * @description Import bounded, metadata-only LiteLLM observations without replaying requests.
+         */
+        post: operations["reconcile_gateway_usage_projects__project_id__evidence_gateway_usage_reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evidence/artifacts/{artifact_id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Artifact Integrity
+         * @description Check one authorized artifact's CAS bytes and append an audit event.
+         */
+        post: operations["reconcile_artifact_integrity_projects__project_id__evidence_artifacts__artifact_id__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Evidence */
+        get: operations["list_project_evidence_projects__project_id__evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -1212,6 +1269,48 @@ export interface components {
              * @default Harnessa
              */
             organization_name: string;
+        };
+        /**
+         * CoreEvidenceEnvelope
+         * @description Source-linked evidence metadata; unknown and redacted values are distinguishable.
+         */
+        CoreEvidenceEnvelope: {
+            /** Schema Version */
+            schema_version: number;
+            /** Source System */
+            source_system: string;
+            source_record_id: components["schemas"]["EvidenceTextValue"];
+            organization_id?: components["schemas"]["EvidenceUuidValue"];
+            project_id?: components["schemas"]["EvidenceUuidValue"];
+            repository_id?: components["schemas"]["EvidenceUuidValue"];
+            task_id: components["schemas"]["EvidenceUuidValue"];
+            task_revision?: components["schemas"]["EvidenceTextValue"];
+            run_id: components["schemas"]["EvidenceUuidValue"];
+            attempt: components["schemas"]["EvidenceIntegerValue"];
+            model_request_id?: components["schemas"]["EvidenceUuidValue"];
+            tool_invocation_id?: components["schemas"]["EvidenceTextValue"];
+            webhook_delivery_id?: components["schemas"]["EvidenceTextValue"];
+            git_effect_id?: components["schemas"]["EvidenceTextValue"];
+            artifact_id?: components["schemas"]["EvidenceUuidValue"];
+            evaluation_id?: components["schemas"]["EvidenceUuidValue"];
+            harness_revision?: components["schemas"]["EvidenceTextValue"];
+            skill_revision?: components["schemas"]["EvidenceTextValue"];
+            revision: components["schemas"]["EvidenceTextValue"];
+            content_sha256: components["schemas"]["EvidenceTextValue"];
+            stream_cursor?: components["schemas"]["EvidenceIntegerValue"];
+            occurred_at: components["schemas"]["EvidenceTimestampValue"];
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            correlation_id: components["schemas"]["EvidenceUuidValue"];
+            causation_id: components["schemas"]["EvidenceUuidValue"];
+            /** Scope */
+            scope: string[];
+            idempotency_key?: components["schemas"]["EvidenceTextValue"];
+            sensitivity: components["schemas"]["EvidenceSensitivity"];
+            redaction_status: components["schemas"]["EvidenceRedactionStatus"];
         };
         /** DeadLetterRead */
         DeadLetterRead: {
@@ -1359,6 +1458,163 @@ export interface components {
             next_cursor: number | null;
             /** Replay Limit */
             replay_limit: number;
+        };
+        /** EvidenceIntegerValue */
+        EvidenceIntegerValue: {
+            status: components["schemas"]["EvidenceValueStatus"];
+            /**
+             * Value
+             * @default null
+             */
+            value: number | null;
+        };
+        /** EvidenceIntegrityRead */
+        EvidenceIntegrityRead: {
+            /**
+             * Artifact Id
+             * Format: uuid
+             */
+            artifact_id: string;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Expected Size Bytes */
+            expected_size_bytes: number;
+            /** Status */
+            status: string;
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+        };
+        /** EvidencePage */
+        EvidencePage: {
+            /** Items */
+            items: components["schemas"]["EvidenceRecordRead"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Limit */
+            limit: number;
+        };
+        /** EvidenceRecordRead */
+        EvidenceRecordRead: {
+            envelope: components["schemas"]["CoreEvidenceEnvelope"];
+            /** Kind */
+            kind: string;
+            /** Summary */
+            summary: string;
+            /**
+             * Import Status
+             * @default native
+             */
+            import_status: string;
+            /**
+             * Reconciliation Status
+             * @default not_required
+             */
+            reconciliation_status: string;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+        };
+        /**
+         * EvidenceRedactionStatus
+         * @enum {string}
+         */
+        EvidenceRedactionStatus: "not_required" | "applied" | "pending";
+        /**
+         * EvidenceSensitivity
+         * @enum {string}
+         */
+        EvidenceSensitivity: "public" | "internal" | "confidential" | "restricted";
+        /** EvidenceTextValue */
+        EvidenceTextValue: {
+            status: components["schemas"]["EvidenceValueStatus"];
+            /**
+             * Value
+             * @default null
+             */
+            value: string | null;
+        };
+        /** EvidenceTimestampValue */
+        EvidenceTimestampValue: {
+            status: components["schemas"]["EvidenceValueStatus"];
+            /**
+             * Value
+             * @default null
+             */
+            value: string | null;
+        };
+        /** EvidenceUuidValue */
+        EvidenceUuidValue: {
+            status: components["schemas"]["EvidenceValueStatus"];
+            /**
+             * Value
+             * @default null
+             */
+            value: string | null;
+        };
+        /**
+         * EvidenceValueStatus
+         * @enum {string}
+         */
+        EvidenceValueStatus: "known" | "unknown" | "redacted";
+        /** GatewayUsageImportBatch */
+        GatewayUsageImportBatch: {
+            /** Observations */
+            observations: components["schemas"]["GatewayUsageObservation"][];
+        };
+        /** GatewayUsageImportResult */
+        GatewayUsageImportResult: {
+            /** Source Observation Id */
+            source_observation_id: string;
+            /** Status */
+            status: string;
+            /** Attempts */
+            attempts: number;
+            /** Ledger Event Id */
+            ledger_event_id: string | null;
+            /** Next Retry At */
+            next_retry_at: string | null;
+        };
+        /** GatewayUsageObservation */
+        GatewayUsageObservation: {
+            /** Source Observation Id */
+            source_observation_id: string;
+            /** Request Identifier */
+            request_identifier: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Gateway Billed Usd
+             * @default null
+             */
+            gateway_billed_usd: number | string | null;
+            /**
+             * Provider Reported Usd
+             * @default null
+             */
+            provider_reported_usd: number | string | null;
+            /**
+             * Input Tokens
+             * @default null
+             */
+            input_tokens: number | null;
+            /**
+             * Output Tokens
+             * @default null
+             */
+            output_tokens: number | null;
         };
         /** GitHubActorMappingCreate */
         GitHubActorMappingCreate: {
@@ -3356,85 +3612,53 @@ export interface components {
             /** Scopes */
             scopes?: string[];
         };
+        /** Harness2ArtifactEvidence */
+        Harness2ArtifactEvidence: {
+            /** Path */
+            path: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Evidence Kind */
+            evidence_kind: string;
+        };
         /**
-         * CoreEvidenceEnvelope
-         * @description Source-linked evidence metadata; unknown and redacted values are distinguishable.
+         * Harness2ImportFixture
+         * @description Minimized, untrusted manifest contract for the M12 Harness² adapter.
          */
-        CoreEvidenceEnvelope: {
+        Harness2ImportFixture: {
             /** Schema Version */
             schema_version: number;
-            /** Source System */
-            source_system: string;
-            source_record_id: components["schemas"]["EvidenceTextValue"];
-            task_id: components["schemas"]["EvidenceUuidValue"];
-            run_id: components["schemas"]["EvidenceUuidValue"];
-            attempt: components["schemas"]["EvidenceIntegerValue"];
-            revision: components["schemas"]["EvidenceTextValue"];
-            content_sha256: components["schemas"]["EvidenceTextValue"];
-            occurred_at: components["schemas"]["EvidenceTimestampValue"];
+            /** Source Revision */
+            source_revision: string;
+            /** Benchmark */
+            benchmark: string;
+            /** Benchmark Task Id */
+            benchmark_task_id: string;
+            /** Executor */
+            executor: string;
+            /** Recursion Mode */
+            recursion_mode: string;
+            /** K */
+            k: number;
             /**
-             * Recorded At
-             * Format: date-time
-             */
-            recorded_at: string;
-            correlation_id: components["schemas"]["EvidenceUuidValue"];
-            causation_id: components["schemas"]["EvidenceUuidValue"];
-            /** Scope */
-            scope: string[];
-            sensitivity: components["schemas"]["EvidenceSensitivity"];
-            redaction_status: components["schemas"]["EvidenceRedactionStatus"];
-        };
-        /** EvidenceIntegerValue */
-        EvidenceIntegerValue: {
-            status: components["schemas"]["EvidenceValueStatus"];
-            /**
-             * Value
+             * Seed
              * @default null
              */
-            value: number | null;
-        };
-        /**
-         * EvidenceRedactionStatus
-         * @enum {string}
-         */
-        EvidenceRedactionStatus: "not_required" | "applied" | "pending";
-        /**
-         * EvidenceSensitivity
-         * @enum {string}
-         */
-        EvidenceSensitivity: "public" | "internal" | "confidential" | "restricted";
-        /** EvidenceTextValue */
-        EvidenceTextValue: {
-            status: components["schemas"]["EvidenceValueStatus"];
+            seed: number | null;
+            /** Result */
+            result: string;
+            candidate_revision: components["schemas"]["EvidenceTextValue"];
+            judge_revision: components["schemas"]["EvidenceTextValue"];
+            /** Artifacts */
+            artifacts: components["schemas"]["Harness2ArtifactEvidence"][];
             /**
-             * Value
-             * @default null
+             * Trust
+             * @default untrusted_import
              */
-            value: string | null;
+            trust: string;
         };
-        /** EvidenceTimestampValue */
-        EvidenceTimestampValue: {
-            status: components["schemas"]["EvidenceValueStatus"];
-            /**
-             * Value
-             * @default null
-             */
-            value: string | null;
-        };
-        /** EvidenceUuidValue */
-        EvidenceUuidValue: {
-            status: components["schemas"]["EvidenceValueStatus"];
-            /**
-             * Value
-             * @default null
-             */
-            value: string | null;
-        };
-        /**
-         * EvidenceValueStatus
-         * @enum {string}
-         */
-        EvidenceValueStatus: "known" | "unknown" | "redacted";
         /**
          * OrchestrationOperation
          * @enum {string}
@@ -6108,6 +6332,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitHubWebhookReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_gateway_usage_projects__project_id__evidence_gateway_usage_reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GatewayUsageImportBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayUsageImportResult"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_artifact_integrity_projects__project_id__evidence_artifacts__artifact_id__reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceIntegrityRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_project_evidence_projects__project_id__evidence_get: {
+        parameters: {
+            query?: {
+                task_id?: string | null;
+                run_id?: string | null;
+                source?: string | null;
+                revision?: string | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidencePage"];
                 };
             };
             /** @description Validation Error */

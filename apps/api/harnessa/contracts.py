@@ -673,18 +673,142 @@ class CoreEvidenceEnvelope(BaseModel):
     schema_version: int = Field(ge=1)
     source_system: str = Field(min_length=1, max_length=120)
     source_record_id: EvidenceTextValue
+    organization_id: EvidenceUuidValue = Field(
+        default_factory=lambda: EvidenceUuidValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    project_id: EvidenceUuidValue = Field(
+        default_factory=lambda: EvidenceUuidValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    repository_id: EvidenceUuidValue = Field(
+        default_factory=lambda: EvidenceUuidValue(status=EvidenceValueStatus.UNKNOWN)
+    )
     task_id: EvidenceUuidValue
+    task_revision: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
     run_id: EvidenceUuidValue
     attempt: EvidenceIntegerValue
+    model_request_id: EvidenceUuidValue = Field(
+        default_factory=lambda: EvidenceUuidValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    tool_invocation_id: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    webhook_delivery_id: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    git_effect_id: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    artifact_id: EvidenceUuidValue = Field(
+        default_factory=lambda: EvidenceUuidValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    evaluation_id: EvidenceUuidValue = Field(
+        default_factory=lambda: EvidenceUuidValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    harness_revision: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    skill_revision: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
     revision: EvidenceTextValue
     content_sha256: EvidenceTextValue
+    stream_cursor: EvidenceIntegerValue = Field(
+        default_factory=lambda: EvidenceIntegerValue(status=EvidenceValueStatus.UNKNOWN)
+    )
     occurred_at: EvidenceTimestampValue
     recorded_at: datetime
     correlation_id: EvidenceUuidValue
     causation_id: EvidenceUuidValue
     scope: list[str] = Field(min_length=1, max_length=32)
+    idempotency_key: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
     sensitivity: EvidenceSensitivity
     redaction_status: EvidenceRedactionStatus
+
+
+class EvidenceRecordRead(BaseModel):
+    envelope: CoreEvidenceEnvelope
+    kind: str
+    summary: str
+    import_status: str = "native"
+    reconciliation_status: str = "not_required"
+    stale: bool = False
+
+
+class EvidencePage(BaseModel):
+    items: list[EvidenceRecordRead]
+    next_cursor: str | None
+    limit: int
+
+
+class EvidenceIntegrityRead(BaseModel):
+    artifact_id: UUID
+    expected_sha256: str
+    expected_size_bytes: int
+    status: str
+    checked_at: datetime
+    event_id: UUID
+
+
+class GatewayUsageObservation(BaseModel):
+    source_observation_id: str = Field(min_length=1, max_length=200)
+    request_identifier: str = Field(min_length=1, max_length=200)
+    observed_at: datetime
+    gateway_billed_usd: Decimal | None = Field(default=None, ge=0)
+    provider_reported_usd: Decimal | None = Field(default=None, ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+
+
+class GatewayUsageImportBatch(BaseModel):
+    observations: list[GatewayUsageObservation] = Field(min_length=1, max_length=100)
+
+
+class GatewayUsageImportResult(BaseModel):
+    source_observation_id: str
+    status: str
+    attempts: int
+    ledger_event_id: UUID | None
+    next_retry_at: datetime | None
+
+
+class Harness2ArtifactEvidence(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=0)
+    evidence_kind: str = Field(min_length=1, max_length=80)
+
+
+class Harness2ImportFixture(BaseModel):
+    """Minimized, untrusted manifest contract for the M12 Harness² adapter."""
+
+    schema_version: int = Field(ge=1)
+    source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    benchmark: str = Field(min_length=1, max_length=80)
+    benchmark_task_id: str = Field(min_length=1, max_length=200)
+    executor: str = Field(min_length=1, max_length=80)
+    recursion_mode: str = Field(min_length=1, max_length=40)
+    k: int = Field(ge=1, le=1000)
+    seed: int | None = None
+    result: str = Field(pattern=r"^(passed|failed|unknown)$")
+    candidate_revision: EvidenceTextValue
+    judge_revision: EvidenceTextValue
+    artifacts: list[Harness2ArtifactEvidence] = Field(max_length=500)
+    trust: str = "untrusted_import"
+
+    @model_validator(mode="after")
+    def validate_paths(self) -> Harness2ImportFixture:
+        paths = [item.path for item in self.artifacts]
+        if len(set(paths)) != len(paths) or any(
+            path.startswith("/") or ".." in path.split("/") for path in paths
+        ):
+            raise ValueError("Harness² artifact paths must be unique and relative")
+        if self.trust != "untrusted_import":
+            raise ValueError("Harness² fixture trust cannot be elevated")
+        return self
 
 
 class EventReplayItem(BaseModel):

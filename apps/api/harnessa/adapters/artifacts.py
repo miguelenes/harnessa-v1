@@ -49,6 +49,51 @@ class LocalArtifactStore:
             storage_key=f"sha256/{digest[:2]}/{digest}",
         )
 
+    def verify_reference(
+        self,
+        storage_key: str,
+        *,
+        expected_digest: str,
+        expected_size: int,
+        max_bytes: int = 64 * 1024 * 1024,
+    ) -> str:
+        """Verify one referenced CAS object with a fixed byte and path boundary."""
+        if not re.fullmatch(r"sha256/[0-9a-f]{2}/[0-9a-f]{64}", storage_key):
+            return "invalid_reference"
+        _, prefix, digest = storage_key.split("/")
+        if digest != expected_digest or prefix != expected_digest[:2]:
+            return "invalid_reference"
+        path = self.root / storage_key
+        try:
+            if (
+                any(
+                    item.is_symlink()
+                    for item in (self.root / "sha256", self.root / "sha256" / prefix, path)
+                )
+                or not path.is_file()
+            ):
+                return "missing"
+            if not path.resolve(strict=True).is_relative_to(self.root):
+                return "invalid_reference"
+            stat_result = path.stat()
+            if stat_result.st_size != expected_size:
+                return "size_mismatch"
+            if stat_result.st_size > max_bytes:
+                return "over_limit"
+            digest_state = hashlib.sha256()
+            read_bytes = 0
+            with path.open("rb") as content:
+                while chunk := content.read(1024 * 1024):
+                    read_bytes += len(chunk)
+                    if read_bytes > max_bytes:
+                        return "over_limit"
+                    digest_state.update(chunk)
+            return (
+                "verified" if digest_state.hexdigest() == expected_digest else "checksum_mismatch"
+            )
+        except FileNotFoundError:
+            return "missing"
+
     def remove_unreferenced(self, referenced_keys: set[str], *, minimum_age_seconds: int) -> int:
         """Collect old CAS files without a committed artifact row."""
         root = self.root / "sha256"
