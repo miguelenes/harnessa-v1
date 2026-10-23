@@ -138,6 +138,29 @@ def test_proposer_dispatches_bounded_requests_and_validates_editor_output(tmp_pa
         proposer.call("mission", None, "cancelled")
 
 
+def test_proposer_reports_safe_gateway_error_code_without_provider_message(tmp_path) -> None:
+    from harness2.core.proposer import ProposerError
+    from harnessa.services.model_gateway import ModelGatewayError
+
+    frozen = FrozenExperiment(
+        experiment_id=uuid4(), task_id=uuid4(), project_id=uuid4(), organization_id=uuid4(),
+        base_sha="a" * 40, specification_hash="b" * 64, specification_revision=1,
+        policy_revision=1, mode="parallel", k=1, route_alias="probe", image_revision="image",
+        tool_revision="tools", root=tmp_path,
+    )
+    proposer = GatewayHarness2Proposer(frozen)
+
+    async def reject(**_kwargs):
+        raise ModelGatewayError("model_reservation_limit", 402, "private accounting detail")
+
+    proposer._complete = reject  # type: ignore[method-assign]
+
+    with pytest.raises(ProposerError, match="model_reservation_limit") as error:
+        proposer.call("mission", None, "candidate")
+
+    assert "private accounting detail" not in str(error.value)
+
+
 @pytest.mark.anyio
 async def test_proposer_builds_probe_pool_request_with_stable_identity(monkeypatch) -> None:
     frozen = FrozenExperiment(

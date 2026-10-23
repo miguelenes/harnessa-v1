@@ -209,6 +209,10 @@ class PodmanSandboxBackend:
                     "OPENCODE_CONFIG=/run/harnessa/opencode.json",
                 ]
             )
+            if os.environ.get("HARNESSA_ACP_DEBUG", "") == "1":
+                command.extend(
+                    ["--env", "OPENCODE_LOG_LEVEL=DEBUG", "--env", "OPENCODE_PRINT_LOGS=1"]
+                )
         if approved_specification is not None:
             specification_path = approved_specification.resolve(strict=True)
             if not specification_path.is_dir() or any(

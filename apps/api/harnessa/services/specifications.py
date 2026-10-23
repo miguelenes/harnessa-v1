@@ -1366,7 +1366,9 @@ async def evaluate_readiness(
                     tools=True,
                     minimum_context=minimum_context,
                     usage_reporting=True,
-                    cancellation=True,
+                    # Cancellation is enforced at Harnessa's run boundary. Do
+                    # not claim that upstream providers support remote cancel.
+                    cancellation=False,
                 ),
             )
         )

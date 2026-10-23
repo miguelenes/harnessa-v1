@@ -37,7 +37,7 @@ from harnessa.contracts import (
     RouteRequirements,
 )
 from harnessa.db.session import SessionLocal
-from harnessa.services.model_gateway import LiteLLMModelRouter
+from harnessa.services.model_gateway import LiteLLMModelRouter, ModelGatewayError
 
 _MAX_CONTEXT_BYTES = 500_000
 _MAX_CONTEXT_FILES = 500
@@ -282,7 +282,8 @@ class GatewayHarness2Proposer:
                 else:
                     response = call_on_event_loop(coroutine, self.event_loop)
         except Exception as exc:
-            raise ProposerError(f"Budgeted Harness² probe failed ({type(exc).__name__})") from exc
+            code = exc.code if isinstance(exc, ModelGatewayError) else type(exc).__name__
+            raise ProposerError(f"Budgeted Harness² probe failed ({code})") from exc
         if self.cancelled.is_set():
             raise ProposerError("Harness² experiment cancelled after probe response")
         text = _extract_chat_text(response)

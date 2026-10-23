@@ -107,6 +107,7 @@ async def test_broker_binds_model_calls_to_run_scope_and_forwards_tools(tmp_path
         assert request.model_alias == "budgeted-code"
         assert request.max_output_tokens == 128
         assert request.requirements.tools
+        assert request.requirements.cancellation is False
         assert request.messages is not None
         assert request.messages[0].tool_calls is not None
         assert request.messages[1].tool_call_id == "call-1"
@@ -139,9 +140,29 @@ def test_broker_preserves_probe_pool_for_adaptation_rollouts() -> None:
     assert request.run_id == scope.run_id
 
 
+def test_broker_defaults_omitted_output_limit_to_the_run_scoped_ceiling() -> None:
+    scope = BrokerScope(
+        token="scoped-token",
+        organization_id=uuid4(),
+        project_id=uuid4(),
+        task_id=uuid4(),
+        run_id=uuid4(),
+        fencing_token=3,
+        model_alias="bounded-route",
+    )
+
+    request = _route_request(
+        {"messages": [{"role": "user", "content": "bounded request"}]},
+        scope,
+        256,
+    )
+
+    assert request.max_output_tokens == 256
+
+
 @pytest.mark.anyio
 async def test_broker_rejects_missing_credentials_stale_fences_and_unbounded_output(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     router = _Router()
     client, broker = await _client_for(tmp_path, router=router, current_fence=False)
@@ -180,6 +201,8 @@ async def test_broker_rejects_missing_credentials_stale_fences_and_unbounded_out
         )
         assert oversized_request.status_code == 400
         assert router.requests == []
+        assert "invalid_request" in caplog.text
+        assert "x" * 100 not in caplog.text
     finally:
         await client.aclose()
         await broker.close()

@@ -230,7 +230,9 @@ class Scheduler:
                                         + settings.acp_model_max_output_tokens,
                                     ),
                                     usage_reporting=True,
-                                    cancellation=True,
+                                    # Cancellation is fenced by Harnessa locally;
+                                    # upstream generation may continue after disconnect.
+                                    cancellation=False,
                                 ),
                             )
                         )

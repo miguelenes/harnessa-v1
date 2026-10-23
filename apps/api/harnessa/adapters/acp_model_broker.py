@@ -122,8 +122,13 @@ class ACPModelBroker:
                 await asyncio.gather(monitor_task, return_exceptions=True)
                 await response_task
         except (ValueError, ValidationError) as exc:
+            category = (
+                "schema_validation" if isinstance(exc, ValidationError) else "invalid_request"
+            )
+            logger.warning("ACP model request rejected before routing (%s)", category)
             await _send_json(writer, 400, {"error": {"message": str(exc)[:300]}})
         except ModelGatewayError as exc:
+            logger.warning("ACP model request rejected by gateway (%s)", exc.code)
             await _send_json(
                 writer,
                 exc.status_code if 400 <= exc.status_code <= 599 else 503,
@@ -252,7 +257,11 @@ def _route_request(
     tools = body.get("tools")
     if tools is not None and (not isinstance(tools, list) or len(tools) > _MAX_TOOLS):
         raise ValueError("Request tools exceed the supported limit")
-    requested_output = body.get("max_tokens", body.get("max_completion_tokens"))
+    # ACP clients such as OpenCode may omit a provider-specific output field.
+    # In that case, enforce the run-scoped ceiling supplied by Harnessa.
+    requested_output = body.get(
+        "max_tokens", body.get("max_completion_tokens", max_output_tokens)
+    )
     if isinstance(requested_output, bool) or not isinstance(requested_output, int):
         raise TypeError("A bounded max_tokens value is required")
     if not 1 <= requested_output <= max_output_tokens:
@@ -279,7 +288,10 @@ def _route_request(
             tools=bool(tools),
             minimum_context=min(2_000_000, estimated_input + requested_output),
             usage_reporting=True,
-            cancellation=True,
+            # Harnessa fences and stops the local run/request. A provider may
+            # continue generation after disconnect; its bounded reservation is
+            # retained and reconciled conservatively if usage is unknown.
+            cancellation=False,
         ),
         max_output_tokens=requested_output,
         estimated_input_tokens=estimated_input,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import subprocess
 import threading
 import time
@@ -21,7 +22,7 @@ from harness2.substrate.opencode import OpencodeSubstrate  # type: ignore[import
 from harnessa.adapters.acp_execution import ACPExecutionAdapter
 from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.async_bridge import call_on_event_loop
-from harnessa.adapters.execution import RunInput, TaskInput
+from harnessa.adapters.execution import ExecutionFailure, RunInput, StaleLease, TaskInput
 from harnessa.adapters.harness2 import component_diff, validate_product_tree
 from harnessa.adapters.protocols import HarnessEvaluator
 from harnessa.adapters.specification_workspace import SpecificationWorkspaceError
@@ -45,6 +46,11 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 _RUN_NAMESPACE = UUID("d7f1cfc3-bd1f-41fc-90f7-bd06482e154d")
+_SAFE_ACP_DIAGNOSTICS = {
+    "connection_refused", "connection_reset", "dns_failure", "timeout",
+    "authentication_rejected", "permission_rejected", "budget_rejected",
+    "rate_limited", "provider_unavailable",
+}
 _SURFACE = OpencodeSubstrate().surface()
 _BENCH_SPEC = BenchSpec(
     name="harnessa",
@@ -57,6 +63,40 @@ _BENCH_SPEC = BenchSpec(
     },
     allow_subagents=False,
 )
+
+
+def _exception_type_chain(error: BaseException, *, limit: int = 4) -> str:
+    """Return exception classes and safe protocol codes, never exception messages."""
+    names: list[str] = []
+    current: BaseException | None = error
+    while current is not None and len(names) < limit:
+        name = type(current).__name__[:80]
+        code = getattr(current, "code", None)
+        if name == "RequestError" and isinstance(code, int) and not isinstance(code, bool):
+            metadata = [f"code={code}"]
+            data = getattr(current, "data", None)
+            if isinstance(data, dict):
+                for key in ("type", "name", "error_code"):
+                    value = data.get(key)
+                    if isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,79}", value):
+                        metadata.append(f"{key}={value}")
+                for key in ("status", "status_code"):
+                    value = data.get(key)
+                    if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599:
+                        metadata.append(f"{key}={value}")
+            name = f"{name}[{','.join(metadata)}]"
+        diagnostics = getattr(current, "harnessa_diagnostics", None)
+        if isinstance(diagnostics, list):
+            safe = sorted(
+                item
+                for item in diagnostics
+                if isinstance(item, str) and item in _SAFE_ACP_DIAGNOSTICS
+            )
+            if safe:
+                name = f"{name}[stderr={','.join(safe)}]"
+        names.append(name)
+        current = current.__cause__ or current.__context__
+    return "->".join(names)
 
 
 class HarnessACPTaskAdapter:
@@ -120,9 +160,23 @@ class HarnessACPTaskAdapter:
         with self._semaphore:
             if not (run_dir / "outcome.json").is_file():
                 started = time.monotonic()
-                result = call_on_event_loop(
-                    self._execute(run_uuid, harness_dir or self._base_harness), self._event_loop
-                )
+                try:
+                    result = call_on_event_loop(
+                        self._execute(run_uuid, harness_dir or self._base_harness), self._event_loop
+                    )
+                except ExecutionFailure as exc:
+                    # Preserve a bounded, non-content diagnostic so failed model
+                    # rollouts remain comparable and debuggable without storing
+                    # prompts, provider responses, or exception messages.
+                    result = {
+                        "status": "failed",
+                        "error_code": exc.code[:100],
+                        "failure_type": _exception_type_chain(exc),
+                    }
+                except (HarnessAdaptationError, StaleLease):
+                    raise
+                except Exception as exc:  # noqa: BLE001 - redact adapter internals at this boundary.
+                    result = {"status": "failed", "error_code": type(exc).__name__[:100]}
                 elapsed_ms = int((time.monotonic() - started) * 1000)
                 run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                 artifact = result.get("patch_artifact")
@@ -150,6 +204,7 @@ class HarnessACPTaskAdapter:
                 with self._records_lock:
                     self.records.append({
                         "label": _probe_label(run_id),
+                        "source_run_id": run_id,
                         "run_uuid": str(run_uuid),
                         "phase": "baseline" if harness_dir is None else "candidate",
                         "status": (
@@ -299,8 +354,12 @@ class HarnessACPTaskAdapter:
                 if failed_run is not None:
                     failed_run.status = "FAILED"
                     failed_run.finished_at = datetime.now(UTC)
-                    failed_run.error_code = type(exc).__name__[:80]
-                    failed_run.error_message = type(exc).__name__[:300]
+                    failed_run.error_code = (
+                        exc.code[:80] if isinstance(exc, ExecutionFailure) else type(exc).__name__[:80]
+                    )
+                    failed_run.error_message = (
+                        _exception_type_chain(exc)[:300]
+                    )
                     await db.commit()
             raise
         finally:
@@ -454,6 +513,12 @@ class HarnessExperimentWorker:
             if await self._cancelled(experiment_id, attempt):
                 await self._finish(experiment_id, attempt, "cancelled", "Cancellation requested during probe execution")
                 return
+            comparison_passed, comparison_issues = _matched_comparison(result, adapter.records)
+            result["comparison_successful"] = comparison_passed
+            result["comparison_integrity"] = {
+                "status": "passed" if comparison_passed else "failed",
+                "issues": comparison_issues,
+            }
             await self._execute_composed(frozen, adapter, result)
             await self._persist(frozen, adapter, result)
             holdout = await self._grade_holdout(frozen, result)
@@ -711,6 +776,22 @@ class HarnessExperimentWorker:
         """Grade only finalized CAS references; never return grader feedback to an agent."""
         manifest = result.get("holdout_manifest")
         manifest_digest = manifest.get("digest") if isinstance(manifest, dict) else None
+        if result.get("composed_successful") is not True:
+            not_run = {
+                "status": "not_run",
+                "reason_code": "composed_artifact_unavailable",
+                "manifest_digest": manifest_digest,
+            }
+            result["holdout_evaluation"] = not_run
+            persisted = await self._persist_holdout_evaluation(frozen, result)
+            if not persisted:
+                not_run = {
+                    "status": "unknown",
+                    "reason_code": "frozen_identity_changed_before_receipt_commit",
+                    "manifest_digest": manifest_digest,
+                }
+                result["holdout_evaluation"] = not_run
+            return not_run
         safe: dict[str, Any] = {
             "status": "unavailable",
             "reason_code": "evaluator_not_configured",
@@ -921,6 +1002,53 @@ def _probe_label(value: str) -> str:
     suffix = value[-64:]
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
     return f"{suffix}-{digest}"[:100]
+
+
+def _matched_comparison(
+    result: Mapping[str, Any], records: list[dict[str, Any]]
+) -> tuple[bool, list[str]]:
+    """Require a delivered baseline and delivered final candidates in each mode."""
+    issues: list[str] = []
+    if result.get("comparison_successful") is not True:
+        issues.append("upstream_comparison_failed")
+    baselines = [row for row in records if row.get("phase") == "baseline"]
+    if (
+        len(baselines) != 1
+        or baselines[0].get("status") != "succeeded"
+        or not baselines[0].get("delivered")
+    ):
+        issues.append("baseline_rollout_missing_or_failed")
+    modes = result.get("modes")
+    if not isinstance(modes, Mapping) or not modes:
+        issues.append("mode_results_missing")
+    else:
+        for mode_result in modes.values():
+            if not isinstance(mode_result, Mapping) or mode_result.get("ok") is not True:
+                issues.append("mode_failed")
+                continue
+            finals = mode_result.get("finals")
+            if not isinstance(finals, list) or not finals:
+                issues.append("final_candidates_missing")
+                continue
+            for label in finals:
+                if not isinstance(label, str):
+                    issues.append("final_candidate_label_invalid")
+                    continue
+                candidate = next(
+                    (
+                        row for row in records
+                        if row.get("phase") == "candidate"
+                        and str(row.get("source_run_id", "")).rsplit("/", 1)[-1] == label
+                    ),
+                    None,
+                )
+                if (
+                    candidate is None
+                    or candidate.get("status") != "succeeded"
+                    or not candidate.get("delivered")
+                ):
+                    issues.append("final_candidate_rollout_missing_or_failed")
+    return not issues, sorted(set(issues))
 
 
 def _assert_holdout_free_tree(source: Path, revision: str) -> None:
