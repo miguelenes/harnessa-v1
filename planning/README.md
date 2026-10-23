@@ -16,7 +16,7 @@ Read [shared planning decisions](architecture-decisions.md) for runtime ownershi
 | 4 | [Run orchestration decision](archive/completed/04-runtime-decision.md) — **archived complete (NO-GO)** | LangGraph parity spike; retain the current Harnessa scheduler |
 | 5 | [Isolated workspaces and ACP execution](archive/completed/05-acp-execution.md) — **archived complete** | ACP SDK, trusted runner and safe execution |
 | 6 | [OpenSpec discovery and clarification](archive/completed/06-openspec.md) — **archived complete** | Open PR audit/repair/merge/branch cleanup, merged design baseline, dependency/Python audit, 85% tests, AGENTS.md, hosted CI/review/merge, OpenSpec READY APIs |
-| 7 | [Governed retrieval and MCP](prompts/07-retrieval-mcp.md) | Reconcile every pending PR/branch from M6, establish clean `main`, add the root command helper and grounded LLM-ready `AGENTS.md`, then deliver LlamaIndex/Qdrant retrieval and scoped tools |
+| 7 | [Governed retrieval and MCP](archive/completed/07-retrieval-mcp.md) — **archived complete** | Reconcile every pending PR/branch from M6, establish clean `main`, add the root command helper and grounded LLM-ready `AGENTS.md`, then deliver LlamaIndex/Qdrant retrieval and scoped tools |
 | 8 | [Web control plane and AG-UI](prompts/08-web-ag-ui.md) | Real API-backed UI, typed events and replay |
 | 9 | [Implementation, verification and review](prompts/09-verification-review.md) | Revision-bound implementation and independent verification |
 | 10 | [GitHub synchronization and completion](prompts/10-github.md) | Authorized issue/PR workflow and reconciled effects |
