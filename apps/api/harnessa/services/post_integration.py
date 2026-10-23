@@ -176,8 +176,12 @@ def _archive_result(integration: IntegrationEvidence, bundle: ReviewBundle) -> d
         raise SpecificationWorkspaceError("Pre-merge archive evidence is stale or invalid")
     if integration.mode == "github":
         merge_sha = integration.evidence.get("merge_commit_sha")
+        verified_source_sha = integration.evidence.get("verified_source_head_sha")
+        published_github_sha = integration.evidence.get("github_head_sha")
         if (
-            integration.evidence.get("github_head_sha") != bundle.head_sha
+            verified_source_sha != bundle.head_sha
+            or not isinstance(published_github_sha, str)
+            or not re.fullmatch(r"[0-9a-f]{40,64}", published_github_sha)
             or not isinstance(merge_sha, str)
             or not re.fullmatch(r"[0-9a-f]{40,64}", merge_sha)
         ):
@@ -192,6 +196,11 @@ def _archive_result(integration: IntegrationEvidence, bundle: ReviewBundle) -> d
         "archive_diff_sha256": digest,
         "review_head_sha": bundle.head_sha,
         "integration_revision": merge_sha,
+        **(
+            {"github_head_sha": integration.evidence["github_head_sha"]}
+            if integration.mode == "github"
+            else {}
+        ),
     }
 
 

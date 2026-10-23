@@ -180,12 +180,17 @@ def test_pull_request_reconciliation_classifies_base_and_merged_head_drift() -> 
 
 def test_archive_finalization_binds_the_verified_bundle_and_merge_revision() -> None:
     head = "a" * 40
+    published_head = "c" * 40
     merge = "b" * 40
     archive_diff = "diff --git a/openspec/specs/x/spec.md b/openspec/specs/x/spec.md\n"
     digest = hashlib.sha256(archive_diff.encode()).hexdigest()
     integration = SimpleNamespace(
         mode="github",
-        evidence={"github_head_sha": head, "merge_commit_sha": merge},
+        evidence={
+            "verified_source_head_sha": head,
+            "github_head_sha": published_head,
+            "merge_commit_sha": merge,
+        },
         integration_revision=merge,
     )
     bundle = SimpleNamespace(
@@ -209,6 +214,7 @@ def test_archive_finalization_binds_the_verified_bundle_and_merge_revision() -> 
         "archive_diff_sha256": digest,
         "review_head_sha": head,
         "integration_revision": merge,
+        "github_head_sha": published_head,
     }
     bundle.bundle["openspec_sync_preview"]["diff_sha256"] = "0" * 64
     with pytest.raises(SpecificationWorkspaceError, match="stale or invalid"):
