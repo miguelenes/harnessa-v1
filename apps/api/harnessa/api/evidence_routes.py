@@ -1,7 +1,7 @@
 """Project-authorized read projection for cross-system provenance."""
 
 import base64
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -43,8 +43,10 @@ from harnessa.db.specification import (
     SpecificationReadinessEvaluation,
 )
 from harnessa.services.authorization import require_membership
+from harnessa.services.evidence import reconcile_gateway_usage_receipt
 from harnessa.services.lifecycle import record_domain_event
 from sqlalchemy import or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -61,8 +63,10 @@ async def reconcile_gateway_usage(
     actor: User = Depends(current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[GatewayUsageImportResult]:
-    """Import bounded, metadata-only LiteLLM observations without replaying requests."""
-    await require_membership(db, actor, project_id)
+    """Import bounded gateway usage metadata from an authorized operator."""
+    membership = await require_membership(db, actor, project_id)
+    if membership.role not in {"administrator", "operator"}:
+        raise HTTPException(403, "Gateway usage import requires operator or administrator access")
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(404, "Project not found")
@@ -71,41 +75,12 @@ async def reconcile_gateway_usage(
     for observation in batch.observations:
         if observation.observed_at.tzinfo is None or observation.observed_at.utcoffset() is None:
             raise HTTPException(422, "observed_at must include a timezone")
-        existing = (
-            await db.execute(
-                select(GatewayUsageImport).where(
-                    GatewayUsageImport.project_id == project_id,
-                    GatewayUsageImport.source_observation_id == observation.source_observation_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
-            same = (
-                existing.request_identifier == observation.request_identifier
-                and existing.gateway_billed_usd == observation.gateway_billed_usd
-                and existing.provider_reported_usd == observation.provider_reported_usd
-                and existing.input_tokens == observation.input_tokens
-                and existing.output_tokens == observation.output_tokens
-                and existing.usage_observed_at == observation.observed_at
-            )
-            if not same:
-                raise HTTPException(409, "Observation ID was already used for different metadata")
-            if existing.status == "matched":
-                result.append(
-                    GatewayUsageImportResult(
-                        source_observation_id=existing.source_observation_id,
-                        status=existing.status,
-                        attempts=existing.attempts,
-                        ledger_event_id=existing.ledger_event_id,
-                        next_retry_at=existing.next_retry_at,
-                    )
-                )
-                continue
-            receipt = existing
-        else:
-            receipt = GatewayUsageImport(
+        await db.execute(
+            pg_insert(GatewayUsageImport)
+            .values(
                 organization_id=project.organization_id,
                 project_id=project_id,
+                submitted_by=actor.id,
                 source_observation_id=observation.source_observation_id,
                 request_identifier=observation.request_identifier,
                 gateway_billed_usd=observation.gateway_billed_usd,
@@ -116,63 +91,47 @@ async def reconcile_gateway_usage(
                 status="retryable",
                 attempts=0,
             )
-            db.add(receipt)
-            await db.flush()
-        candidates = list(
-            (
-                await db.execute(
-                    select(ModelRequestLedger).where(
-                        ModelRequestLedger.project_id == project_id,
-                        ModelRequestLedger.request_identifier == observation.request_identifier,
-                        ModelRequestLedger.event_type == "attempt_succeeded",
-                    )
+            .on_conflict_do_nothing(constraint="uq_gateway_usage_source_observation")
+        )
+        receipt = (
+            await db.execute(
+                select(GatewayUsageImport)
+                .where(
+                    GatewayUsageImport.project_id == project_id,
+                    GatewayUsageImport.source_observation_id == observation.source_observation_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one()
+        same = (
+            receipt.request_identifier == observation.request_identifier
+            and receipt.gateway_billed_usd == observation.gateway_billed_usd
+            and receipt.provider_reported_usd == observation.provider_reported_usd
+            and receipt.input_tokens == observation.input_tokens
+            and receipt.output_tokens == observation.output_tokens
+            and receipt.usage_observed_at == observation.observed_at
+        )
+        if not same:
+            raise HTTPException(409, "Observation ID was already used for different metadata")
+        if receipt.status == "matched" or (
+            receipt.status == "retryable"
+            and receipt.next_retry_at is not None
+            and receipt.next_retry_at > now
+        ):
+            result.append(
+                GatewayUsageImportResult(
+                    source_observation_id=receipt.source_observation_id,
+                    status=receipt.status,
+                    attempts=receipt.attempts,
+                    ledger_event_id=receipt.ledger_event_id,
+                    next_retry_at=receipt.next_retry_at,
                 )
             )
-            .scalars()
-            .all()
-        )
-        receipt.attempts += 1
-        receipt.next_retry_at = None
-        if len(candidates) == 1:
-            matched = candidates[0]
-            event = ModelRequestLedger(
-                request_id=matched.request_id,
-                attempt=matched.attempt,
-                event_type="usage_reconciled",
-                organization_id=matched.organization_id,
-                project_id=matched.project_id,
-                task_id=matched.task_id,
-                run_id=matched.run_id,
-                account_id=matched.account_id,
-                deployment_id=matched.deployment_id,
-                pool_name=matched.pool_name,
-                model_alias=matched.model_alias,
-                actual_model=matched.actual_model,
-                request_identifier=matched.request_identifier,
-                route_decision=matched.route_decision,
-                price_revision=matched.price_revision,
-                input_tokens=observation.input_tokens,
-                output_tokens=observation.output_tokens,
-                usage_known=observation.input_tokens is not None
-                or observation.output_tokens is not None,
-                latency_ms=None,
-                billed_usd=observation.gateway_billed_usd,
-                provider_reported_usd=observation.provider_reported_usd,
-                http_status=matched.http_status,
-                error_code=None,
-                details={"source_observation_id": observation.source_observation_id},
-            )
-            db.add(event)
-            await db.flush()
-            receipt.status = "matched"
-            receipt.ledger_event_id = event.id
-        elif len(candidates) > 1:
-            receipt.status = "ambiguous"
-        else:
+            continue
+        if receipt.status in {"failed", "ambiguous"}:
             receipt.status = "retryable"
-            receipt.next_retry_at = now.replace(microsecond=0) + timedelta(
-                seconds=min(3600, 30 * (2 ** min(receipt.attempts - 1, 7)))
-            )
+            receipt.attempts = 0
+        await reconcile_gateway_usage_receipt(db, receipt, now=now)
         result.append(
             GatewayUsageImportResult(
                 source_observation_id=receipt.source_observation_id,
@@ -184,7 +143,6 @@ async def reconcile_gateway_usage(
         )
     await db.commit()
     return result
-
 
 def _known_uuid(value: UUID | None) -> EvidenceUuidValue:
     return (
@@ -598,10 +556,16 @@ async def list_project_evidence(
         *([ModelRequestLedger.run_id == run_id] if run_id else []),
     )
     for row in ledger:
+        imported_usage = row.event_type == "usage_reconciled"
+        source_system = (
+            "harnessa.operator_gateway_usage_import"
+            if imported_usage
+            else "litellm.gateway_ledger"
+        )
         detail = f"{row.event_type}; model={row.actual_model or row.model_alias}; route={row.route_decision}; gateway_request={row.request_identifier or 'unknown'}; usage={'known' if row.usage_known else 'unknown'}; gateway_billed={row.billed_usd if row.billed_usd is not None else 'unknown'}; provider_reported={row.provider_reported_usd if row.provider_reported_usd is not None else 'unknown'}; estimate={row.estimated_usd if row.estimated_usd is not None else 'unknown'}"
         rows.append(
             _record(
-                source="litellm.gateway_ledger",
+                source=source_system,
                 source_id=str(row.id),
                 kind="model_request",
                 summary=detail,
@@ -618,10 +582,10 @@ async def list_project_evidence(
                     if isinstance(row.details.get("source_observation_id"), str)
                     else None
                 ),
-                import_status="gateway_recorded",
+                import_status="operator_submitted" if imported_usage else "gateway_recorded",
                 reconciliation_status=(
-                    "reconciled"
-                    if row.event_type == "usage_reconciled"
+                    "matched_operator_report"
+                    if imported_usage
                     else "pending_gateway_usage"
                     if not row.usage_known
                     else "recorded"
@@ -820,11 +784,11 @@ async def list_project_evidence(
         for row in usage_imports:
             rows.append(
                 _record(
-                    source="litellm.gateway_usage_import",
+                    source="harnessa.operator_gateway_usage_import",
                     source_id=str(row.id),
                     kind="usage_import",
                     summary=(
-                        f"{row.status}; request={row.request_identifier}; attempts={row.attempts}; "
+                        f"operator-submitted unverified gateway report; {row.status}; request={row.request_identifier}; attempts={row.attempts}; "
                         f"gateway_billed={row.gateway_billed_usd if row.gateway_billed_usd is not None else 'unknown'}; "
                         f"provider_reported={row.provider_reported_usd if row.provider_reported_usd is not None else 'unknown'}; "
                         f"next_retry={row.next_retry_at.isoformat() if row.next_retry_at else 'none'}"
@@ -836,7 +800,7 @@ async def list_project_evidence(
                     task_id=None,
                     run_id=None,
                     idempotency_key=row.source_observation_id,
-                    import_status="gateway_usage_import",
+                    import_status="operator_submitted_unverified",
                     reconciliation_status=row.status,
                 )
             )

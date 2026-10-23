@@ -20,10 +20,20 @@ def upgrade() -> None:
         "model_request_ledger",
         sa.Column("provider_reported_usd", sa.Numeric(18, 8), nullable=True),
     )
+    op.add_column(
+        "model_request_ledger",
+        sa.Column("gateway_usage_source_observation_id", sa.String(200), nullable=True),
+    )
+    op.create_unique_constraint(
+        "uq_model_ledger_gateway_usage_source",
+        "model_request_ledger",
+        ["project_id", "gateway_usage_source_observation_id"],
+    )
     op.create_table(
         "gateway_usage_imports",
         sa.Column("organization_id", sa.Uuid(), nullable=False),
         sa.Column("project_id", sa.Uuid(), nullable=False),
+        sa.Column("submitted_by", sa.Uuid(), nullable=False),
         sa.Column("source_observation_id", sa.String(200), nullable=False),
         sa.Column("request_identifier", sa.String(200), nullable=False),
         sa.Column("gateway_billed_usd", sa.Numeric(18, 8), nullable=True),
@@ -49,10 +59,11 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "status IN ('matched', 'retryable', 'ambiguous')", name="ck_gateway_usage_import_status"
+            "status IN ('matched', 'retryable', 'ambiguous', 'failed')", name="ck_gateway_usage_import_status"
         ),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["project_id"], ["projects.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["submitted_by"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "project_id", "source_observation_id", name="uq_gateway_usage_source_observation"
@@ -72,6 +83,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("gateway_usage_imports")
+    op.drop_constraint("uq_model_ledger_gateway_usage_source", "model_request_ledger", type_="unique")
+    op.drop_column("model_request_ledger", "gateway_usage_source_observation_id")
     op.drop_column("model_request_ledger", "provider_reported_usd")
     op.drop_constraint("ck_model_ledger_event", "model_request_ledger", type_="check")
     op.create_check_constraint(

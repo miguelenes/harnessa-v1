@@ -18,8 +18,8 @@ from harnessa.db.github import (
     GitHubSyncObject,
     GitHubWebhookDelivery,
 )
-from harnessa.db.model_gateway import ModelRequestLedger
-from harnessa.db.models import Project, Repository, Task, User
+from harnessa.db.model_gateway import GatewayUsageImport, ModelRequestLedger
+from harnessa.db.models import Membership, Project, ProjectMembership, Repository, Task, User
 from harnessa.db.orchestration import DomainEvent, EffectIntent, RunArtifact, TaskTransition
 from harnessa.db.review import VerificationExecution, VerificationManifestRevision
 from harnessa.db.session import SessionLocal
@@ -28,10 +28,46 @@ from harnessa.db.specification import (
     SpecificationInterview,
     SpecificationReadinessEvaluation,
 )
+from harnessa.services.evidence import reconcile_due_gateway_usage_imports
+from sqlalchemy import func, select
 
 from tests.integration.test_model_gateway import gateway_fixture
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.anyio
+async def test_gateway_usage_import_requires_operator_or_administrator():
+    fixture = await gateway_fixture()
+    observation = GatewayUsageObservation(
+        source_observation_id="viewer-cannot-submit",
+        request_identifier="untrusted-request",
+        observed_at=datetime.now(UTC),
+        gateway_billed_usd="1.00",
+    )
+    async with SessionLocal() as db:
+        actor = await db.get(User, fixture["user_id"])
+        org_membership = (
+            await db.execute(select(Membership).where(Membership.user_id == fixture["user_id"]))
+        ).scalar_one()
+        project_membership = (
+            await db.execute(
+                select(ProjectMembership).where(
+                    ProjectMembership.user_id == fixture["user_id"],
+                    ProjectMembership.project_id == fixture["project_id"],
+                )
+            )
+        ).scalar_one()
+        org_membership.role = project_membership.role = "viewer"
+        await db.commit()
+        assert actor is not None
+        with pytest.raises(HTTPException, match="operator or administrator"):
+            await reconcile_gateway_usage(
+                fixture["project_id"],
+                GatewayUsageImportBatch(observations=[observation]),
+                actor,
+                db,
+            )
 
 
 @pytest.mark.anyio
@@ -339,6 +375,17 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
         )
         assert unmatched[0].status == "retryable"
         assert unmatched[0].next_retry_at is not None
+        async with SessionLocal() as worker_db:
+            receipt = (
+                await worker_db.execute(
+                    select(GatewayUsageImport).where(
+                        GatewayUsageImport.project_id == first["project_id"],
+                        GatewayUsageImport.source_observation_id == "litellm-export-row-001",
+                    )
+                )
+            ).scalar_one()
+            receipt.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
+            await worker_db.commit()
         db.add(
             ModelRequestLedger(
                 request_id=model.request_id,
@@ -359,11 +406,9 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
             )
         )
         await db.commit()
+        assert await reconcile_due_gateway_usage_imports(SessionLocal, limit=100) == 1
         matched = await reconcile_gateway_usage(
-            first["project_id"],
-            GatewayUsageImportBatch(observations=[usage_observation]),
-            actor,
-            db,
+            first["project_id"], GatewayUsageImportBatch(observations=[usage_observation]), actor, db
         )
         replayed = await reconcile_gateway_usage(
             first["project_id"],
@@ -373,9 +418,39 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
         )
         assert matched[0].status == "matched"
         assert matched[0].ledger_event_id == replayed[0].ledger_event_id
+        assert matched[0].ledger_event_id is not None
+        imported_event = await db.get(ModelRequestLedger, matched[0].ledger_event_id)
+        assert imported_event is not None
+        assert imported_event.gateway_usage_source_observation_id == "litellm-export-row-001"
+
+        concurrent_observation = usage_observation.model_copy(
+            update={"source_observation_id": "litellm-export-row-concurrent"}
+        )
+
+        async def submit_usage():
+            async with SessionLocal() as concurrent_db:
+                concurrent_actor = await concurrent_db.get(User, first["user_id"])
+                assert concurrent_actor is not None
+                return await reconcile_gateway_usage(
+                    first["project_id"],
+                    GatewayUsageImportBatch(observations=[concurrent_observation]),
+                    concurrent_actor,
+                    concurrent_db,
+                )
+
+        from asyncio import gather
+
+        concurrent_results = await gather(submit_usage(), submit_usage())
+        assert concurrent_results[0][0].ledger_event_id == concurrent_results[1][0].ledger_event_id
+        assert await db.scalar(
+            select(func.count()).select_from(ModelRequestLedger).where(
+                ModelRequestLedger.gateway_usage_source_observation_id
+                == "litellm-export-row-concurrent"
+            )
+        ) == 1
         project_evidence = await list_project_evidence(
             first["project_id"],
-            source="litellm.gateway_usage_import",
+            source="harnessa.operator_gateway_usage_import",
             revision=None,
             cursor=None,
             limit=50,
@@ -383,6 +458,7 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
             db=db,
         )
         assert project_evidence.items[0].reconciliation_status == "matched"
+        assert project_evidence.items[0].import_status == "operator_submitted_unverified"
         assert project_evidence.items[0].envelope.idempotency_key.value == "litellm-export-row-001"
         for index in range(105):
             sequence = index + 3

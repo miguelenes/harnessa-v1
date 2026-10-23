@@ -19,6 +19,7 @@ from harnessa.adapters.sandbox_policy import SandboxLimits
 from harnessa.config import settings
 from harnessa.db.session import SessionLocal
 from harnessa.services.effects import EffectResult, ReconcileOutcome, reconcile_effect_intents
+from harnessa.services.evidence import reconcile_due_gateway_usage_imports
 from harnessa.services.github_processor import GitHubWebhookProcessor
 from harnessa.services.github_webhooks import process_github_webhook_outbox
 from harnessa.services.model_gateway import reconcile_stale_model_reservations
@@ -88,6 +89,7 @@ async def run() -> None:
     active_runs: set[asyncio.Task[bool]] = set()
     last_prune = 0.0
     last_model_reconcile = 0.0
+    last_gateway_usage_reconcile = 0.0
     last_acp_reconcile = 0.0
     last_github_reconcile = 0.0
     last_post_integration_reconcile = 0.0
@@ -152,6 +154,12 @@ async def run() -> None:
                 if now - last_model_reconcile >= 30:
                     await reconcile_stale_model_reservations(SessionLocal)
                     last_model_reconcile = now
+                if now - last_gateway_usage_reconcile >= 30:
+                    try:
+                        await reconcile_due_gateway_usage_imports(SessionLocal, limit=100)
+                    except Exception:
+                        logger.exception("Late gateway usage reconciliation failed")
+                    last_gateway_usage_reconcile = now
                 if now - last_prune >= 3600:
                     await prune_retained_events()
                     await scheduler.reconcile_orphan_artifacts()
