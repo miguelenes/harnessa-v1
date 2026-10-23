@@ -111,6 +111,7 @@ def _link_read(row: GitHubRepositoryLink) -> GitHubRepositoryLinkRead:
         opted_in=row.opted_in,
         required_checks=row.required_checks,
         topic_label=row.topic_label,
+        archive_policy=row.archive_policy,
         setup_status=row.setup_status,
         last_synced_at=row.last_synced_at,
         last_error=row.last_error,
@@ -472,6 +473,7 @@ async def opt_in_github_repository(
             authorized_at=datetime.now(UTC),
             required_checks=body.required_checks,
             topic_label=body.topic_label,
+            archive_policy=body.archive_policy,
         )
         db.add(row)
     else:
@@ -483,6 +485,7 @@ async def opt_in_github_repository(
         row.authorized_at = datetime.now(UTC)
         row.required_checks = body.required_checks
         row.topic_label = body.topic_label
+        row.archive_policy = body.archive_policy
         row.setup_status = "ready"
         row.last_error = None
     try:
@@ -676,7 +679,6 @@ async def queue_github_review_publication(
             raise HTTPException(404, "Review project not found")
         db.add(
             EffectIntent(
-                organization_id=project.organization_id,
                 project_id=project.id,
                 task_id=task.id,
                 kind="github.review_bundle.publish",
@@ -706,7 +708,9 @@ async def queue_github_review_publication(
     return GitHubEffectQueuedRead(queued=True, stable_keys=[stable_key])
 
 
-@router.post("/tasks/{task_id}/github-issue", response_model=GitHubEffectQueuedRead, status_code=202)
+@router.post(
+    "/tasks/{task_id}/github-issue", response_model=GitHubEffectQueuedRead, status_code=202
+)
 async def queue_github_issue_creation(
     task_id: UUID,
     actor: User = Depends(current_active_user),
@@ -744,7 +748,6 @@ async def queue_github_issue_creation(
             raise HTTPException(404, "Task project not found")
         db.add(
             EffectIntent(
-                organization_id=project.organization_id,
                 project_id=project.id,
                 task_id=task.id,
                 kind="github.issue.create",
@@ -761,9 +764,13 @@ async def queue_github_issue_creation(
             await db.commit()
         except IntegrityError:
             await db.rollback()
-            existing = await db.scalar(select(EffectIntent).where(EffectIntent.stable_key == stable_key))
+            existing = await db.scalar(
+                select(EffectIntent).where(EffectIntent.stable_key == stable_key)
+            )
             if existing is None:
-                raise HTTPException(409, "GitHub issue intent conflicted and could not be recovered")
+                raise HTTPException(
+                    409, "GitHub issue intent conflicted and could not be recovered"
+                )
     return GitHubEffectQueuedRead(queued=True, stable_keys=[stable_key])
 
 
@@ -825,7 +832,6 @@ async def queue_github_commit_status(
             raise HTTPException(404, "Task project not found")
         db.add(
             EffectIntent(
-                organization_id=project.organization_id,
                 project_id=project.id,
                 task_id=task.id,
                 kind="github.commit_status.publish",
@@ -846,9 +852,13 @@ async def queue_github_commit_status(
             await db.commit()
         except IntegrityError:
             await db.rollback()
-            existing = await db.scalar(select(EffectIntent).where(EffectIntent.stable_key == stable_key))
+            existing = await db.scalar(
+                select(EffectIntent).where(EffectIntent.stable_key == stable_key)
+            )
             if existing is None:
-                raise HTTPException(409, "GitHub status intent conflicted and could not be recovered")
+                raise HTTPException(
+                    409, "GitHub status intent conflicted and could not be recovered"
+                )
     return GitHubEffectQueuedRead(queued=True, stable_keys=[stable_key])
 
 
@@ -881,6 +891,7 @@ async def receive_github_webhook(
     )
     if app_config is None:
         raise HTTPException(404, "GitHub webhook is not configured")
+    app_configuration_id = app_config.id
     try:
         secret = resolve_secret_reference(app_config.webhook_secret_ref)
     except GitHubAppError as exc:
@@ -925,7 +936,7 @@ async def receive_github_webhook(
         await db.rollback()
         existing = await db.scalar(
             select(GitHubWebhookDelivery).where(
-                GitHubWebhookDelivery.app_configuration_id == app_config.id,
+                GitHubWebhookDelivery.app_configuration_id == app_configuration_id,
                 GitHubWebhookDelivery.delivery_id == delivery_id,
             )
         )

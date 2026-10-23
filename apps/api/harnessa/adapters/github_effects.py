@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import re
 import subprocess
 from collections.abc import Mapping
@@ -45,6 +46,287 @@ class GitHubEffectReconciler:
     ) -> None:
         self.session_factory = session_factory
         self.workspace_manager = workspace_manager or SpecificationWorkspaceManager()
+
+    async def publish_archive_maintenance(self, integration_id: UUID) -> dict[str, Any]:
+        """Publish archive-only changes as a durable PR on the current protected base."""
+        from harnessa.db.review import IntegrationEvidence
+
+        async with self.session_factory() as db:
+            integration = await db.get(IntegrationEvidence, integration_id)
+            if integration is None or integration.status != "confirmed":
+                raise GitHubAppError("Confirmed integration evidence is unavailable")
+            bundle = await db.get(ReviewBundle, integration.bundle_id)
+            repository = await db.get(Repository, integration.repository_id)
+            if bundle is None or repository is None:
+                raise GitHubAppError("Archive maintenance source is unavailable")
+            link = await db.scalar(
+                select(GitHubRepositoryLink).where(
+                    GitHubRepositoryLink.repository_id == integration.repository_id,
+                    GitHubRepositoryLink.opted_in.is_(True),
+                    GitHubRepositoryLink.setup_status == "ready",
+                )
+            )
+            if link is None or link.archive_policy != "post_merge":
+                raise GitHubAppError("Post-merge archive policy is not enabled")
+            installation = await db.get(GitHubInstallation, link.installation_id)
+            app = (
+                await db.get(GitHubAppConfiguration, installation.app_configuration_id)
+                if installation
+                else None
+            )
+            preview = bundle.bundle.get("openspec_sync_preview")
+            if (
+                installation is None
+                or not installation.active
+                or app is None
+                or not app.enabled
+                or not isinstance(preview, dict)
+            ):
+                raise GitHubAppError("Archive maintenance installation or preview is unavailable")
+            archive_diff = preview.get("archive_diff")
+            archive_digest = preview.get("diff_sha256")
+            if (
+                not isinstance(archive_diff, str)
+                or not isinstance(archive_digest, str)
+                or hashlib.sha256(archive_diff.encode()).hexdigest() != archive_digest
+            ):
+                raise GitHubAppError("Archive maintenance diff failed its digest check")
+            changes = _archive_patch_changes(archive_diff)
+            source_path = await self.workspace_manager.source_path(repository)
+            app_id = app.app_id
+            private_key_ref = app.private_key_secret_ref
+            installation_number = installation.installation_id
+            github_repository_id = link.github_repository_id
+            owner, name = link.owner, link.name
+            organization_id, project_id = integration.organization_id, integration.project_id
+            task_id = integration.task_id
+            bundle_digest = bundle.bundle_digest
+            merge_sha = integration.integration_revision
+            stable_key = f"github-archive-pr:{integration.id}:{archive_digest}"
+
+        if not isinstance(merge_sha, str) or not re.fullmatch(r"[0-9a-f]{40,64}", merge_sha):
+            raise GitHubAppError("Verified integration revision is invalid")
+        if not await self.workspace_manager.contains_revision(repository, bundle.head_sha):
+            raise GitHubAppError("Archive candidate revision is unavailable locally")
+
+        client = GitHubAppClient()
+        token, _ = await client.create_installation_token(
+            app_id=app_id,
+            private_key_reference=private_key_ref,
+            installation_id=installation_number,
+            repository_ids=[github_repository_id],
+            permissions={"contents": "write", "pull_requests": "write"},
+        )
+
+        async def request(
+            method: str,
+            path: str,
+            body: dict[str, Any] | None = None,
+            params: dict[str, str | int] | None = None,
+        ) -> dict[str, Any] | list[Any]:
+            return await client._request(method, path, token=token, body=body, params=params)
+
+        repo_path = f"/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
+        remote_repo = await request("GET", repo_path)
+        if not isinstance(remote_repo, dict) or not isinstance(
+            remote_repo.get("default_branch"), str
+        ):
+            raise GitHubAppError("GitHub repository omitted its default branch")
+        base_branch = remote_repo["default_branch"]
+        base_ref = await request("GET", f"{repo_path}/git/ref/heads/{quote(base_branch, safe='')}")
+        base_sha = _ref_sha(_as_dict(base_ref))
+        if base_sha is None:
+            raise GitHubAppError("GitHub default branch has no current commit")
+        comparison = await request("GET", f"{repo_path}/compare/{merge_sha}...{base_sha}")
+        merge_base = comparison.get("merge_base_commit") if isinstance(comparison, dict) else None
+        if (
+            not isinstance(comparison, dict)
+            or comparison.get("status") not in {"ahead", "identical"}
+            or not isinstance(merge_base, dict)
+            or merge_base.get("sha") != merge_sha
+        ):
+            raise GitHubAppError("Current default branch does not descend from the verified merge")
+
+        branch = f"harnessa/archive-{integration_id.hex[:16]}-{archive_digest[:10]}"
+        marker = f"<!-- Harnessa-Archive: {integration_id} {archive_digest} -->"
+        existing_prs = await request(
+            "GET",
+            f"{repo_path}/pulls",
+            params={"state": "all", "head": f"{owner}:{branch}", "base": base_branch},
+        )
+        pr = None
+        if isinstance(existing_prs, list):
+            pr = next(
+                (
+                    item
+                    for item in existing_prs
+                    if isinstance(item, dict)
+                    and isinstance(item.get("body"), str)
+                    and marker in item["body"]
+                ),
+                None,
+            )
+
+        branch_ref_path = f"{repo_path}/git/ref/heads/{quote(branch, safe='')}"
+        branch_ref: dict[str, Any] | None = None
+        try:
+            branch_ref = _as_dict(await request("GET", branch_ref_path))
+        except GitHubAppError as exc:
+            if exc.status_code != 404:
+                raise
+        if branch_ref is None:
+            base_commit = await request("GET", f"{repo_path}/git/commits/{base_sha}")
+            if not isinstance(base_commit, dict) or not isinstance(base_commit.get("tree"), dict):
+                raise GitHubAppError("GitHub base commit did not include its tree")
+            entries: list[dict[str, Any]] = []
+            for path, deleted in sorted(changes.items()):
+                entry: dict[str, Any] = {"path": path, "mode": "100644", "type": "blob"}
+                if deleted:
+                    entry["sha"] = None
+                else:
+                    content = await asyncio.to_thread(
+                        subprocess.run,
+                        ["git", "cat-file", "blob", f"{bundle.head_sha}:{path}"],
+                        cwd=source_path,
+                        check=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    blob = await request(
+                        "POST",
+                        f"{repo_path}/git/blobs",
+                        {
+                            "content": base64.b64encode(content.stdout).decode("ascii"),
+                            "encoding": "base64",
+                        },
+                    )
+                    if not isinstance(blob, dict) or not isinstance(blob.get("sha"), str):
+                        raise GitHubAppError("GitHub did not return an archive blob")
+                    entry["sha"] = blob["sha"]
+                entries.append(entry)
+            tree = await request(
+                "POST",
+                f"{repo_path}/git/trees",
+                {"base_tree": base_commit["tree"].get("sha"), "tree": entries},
+            )
+            if not isinstance(tree, dict) or not isinstance(tree.get("sha"), str):
+                raise GitHubAppError("GitHub did not return an archive tree")
+            commit = await request(
+                "POST",
+                f"{repo_path}/git/commits",
+                {
+                    "message": f"Archive Harnessa change {integration_id}\n\n{marker}",
+                    "tree": tree["sha"],
+                    "parents": [base_sha],
+                },
+            )
+            if not isinstance(commit, dict) or not isinstance(commit.get("sha"), str):
+                raise GitHubAppError("GitHub did not return an archive commit")
+            try:
+                branch_ref = _as_dict(
+                    await request(
+                        "POST",
+                        f"{repo_path}/git/refs",
+                        {"ref": f"refs/heads/{branch}", "sha": commit["sha"]},
+                    )
+                )
+            except GitHubAppError as exc:
+                if exc.status_code != 422:
+                    raise
+                branch_ref = _as_dict(await request("GET", branch_ref_path))
+        branch_sha = _ref_sha(branch_ref)
+        if branch_sha is None:
+            raise GitHubAppError("GitHub archive branch revision is unavailable")
+        branch_commit = await request("GET", f"{repo_path}/git/commits/{branch_sha}")
+        commit_message = branch_commit.get("message") if isinstance(branch_commit, dict) else None
+        if not isinstance(commit_message, str) or marker not in commit_message:
+            raise GitHubAppError("Existing archive branch is not owned by this integration")
+        if pr is None:
+            created_pr = await request(
+                "POST",
+                f"{repo_path}/pulls",
+                {
+                    "title": f"Harnessa archive: {bundle_digest[:12]}",
+                    "head": branch,
+                    "base": base_branch,
+                    "body": f"Post-merge OpenSpec archive for task `{task_id}`.\n\n"
+                    f"Integration: `{integration_id}`\nArchive digest: `{archive_digest}`\n\n{marker}",
+                    "maintainer_can_modify": False,
+                },
+            )
+            pr = _as_dict(created_pr)
+        elif pr.get("state") == "closed" and pr.get("merged") is not True:
+            reopened = await request(
+                "PATCH", f"{repo_path}/pulls/{pr.get('number')}", {"state": "open"}
+            )
+            pr = _as_dict(reopened)
+        if (
+            not isinstance(pr, dict)
+            or not isinstance(pr.get("id"), int)
+            or not isinstance(pr.get("number"), int)
+        ):
+            raise GitHubAppError("GitHub did not return the archive pull request identity")
+        remote_head = pr.get("head")
+        if not isinstance(remote_head, dict) or remote_head.get("sha") != branch_sha:
+            raise GitHubAppError("Archive pull request head differs from the owned branch")
+        async with self.session_factory() as db:
+            existing = await db.scalar(
+                select(GitHubSyncObject)
+                .where(GitHubSyncObject.stable_key == stable_key)
+                .with_for_update()
+            )
+            if existing is None:
+                existing = GitHubSyncObject(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    repository_link_id=link.id,
+                    task_id=task_id,
+                    object_kind="pull_request",
+                    object_purpose="maintenance_archive",
+                    github_object_id=str(pr["id"]),
+                    object_number=pr["number"],
+                    stable_key=stable_key,
+                    url=pr.get("html_url") if isinstance(pr.get("html_url"), str) else None,
+                    state="awaiting_archive_merge",
+                    base_sha=base_sha,
+                    head_sha=branch_sha,
+                    check_results={},
+                    field_baseline={
+                        "integration_evidence_id": str(integration_id),
+                        "archive_diff_sha256": archive_digest,
+                        "published_branch": branch,
+                        "published_branch_sha": branch_sha,
+                        "expected_base_sha": base_sha,
+                    },
+                    sync_conflicts={},
+                )
+                db.add(existing)
+            else:
+                existing.github_object_id = str(pr["id"])
+                existing.object_number = pr["number"]
+                existing.url = pr.get("html_url") if isinstance(pr.get("html_url"), str) else None
+                existing.state = "awaiting_archive_merge"
+                existing.base_sha = base_sha
+                existing.head_sha = branch_sha
+                existing.field_baseline = {
+                    **existing.field_baseline,
+                    "integration_evidence_id": str(integration_id),
+                    "archive_diff_sha256": archive_digest,
+                    "published_branch": branch,
+                    "published_branch_sha": branch_sha,
+                    "expected_base_sha": base_sha,
+                }
+            await db.commit()
+        return {
+            "outcome": "awaiting_merge",
+            "policy": "post_merge_maintenance_pr",
+            "pull_request_id": pr["id"],
+            "pull_request_number": pr["number"],
+            "pull_request_url": pr.get("html_url"),
+            "archive_diff_sha256": archive_digest,
+            "published_branch_sha": branch_sha,
+            "base_sha": base_sha,
+        }
 
     async def reconcile(
         self, *, kind: str, stable_key: str, payload: Mapping[str, object]
@@ -118,6 +400,13 @@ class GitHubEffectReconciler:
             organization_id = bundle.organization_id
             project_id = bundle.project_id
             repository_link_id = link.id
+            archive_policy = link.archive_policy
+            preview = bundle.bundle.get("openspec_sync_preview")
+            archive_paths = (
+                _archive_patch_paths(preview.get("archive_diff"))
+                if archive_policy == "post_merge" and isinstance(preview, dict)
+                else set()
+            )
 
         client = GitHubAppClient()
         token, _ = await client.create_installation_token(
@@ -212,7 +501,7 @@ class GitHubEffectReconciler:
             branch_ref = None
         if branch_ref is None:
             tree_entries = await asyncio.to_thread(
-                _review_tree_entries, source_path, base_sha, head_sha
+                _review_tree_entries, source_path, base_sha, head_sha, archive_paths
             )
             base_commit = await request("GET", f"{repo_path}/git/commits/{base_sha}")
             if not isinstance(base_commit, dict) or not isinstance(base_commit.get("tree"), dict):
@@ -308,15 +597,24 @@ class GitHubEffectReconciler:
         async with self.session_factory() as db:
             link = await db.get(GitHubRepositoryLink, link_id)
             if link is None or not link.opted_in or link.setup_status != "ready":
-                return EffectResult("applied", {"state": "rejected", "reason": "repository_not_opted_in"})
+                return EffectResult(
+                    "applied", {"state": "rejected", "reason": "repository_not_opted_in"}
+                )
             installation = await db.get(GitHubInstallation, link.installation_id)
             app_config = (
                 await db.get(GitHubAppConfiguration, installation.app_configuration_id)
                 if installation
                 else None
             )
-            if installation is None or app_config is None or not installation.active or not app_config.enabled:
-                return EffectResult("applied", {"state": "rejected", "reason": "installation_unavailable"})
+            if (
+                installation is None
+                or app_config is None
+                or not installation.active
+                or not app_config.enabled
+            ):
+                return EffectResult(
+                    "applied", {"state": "rejected", "reason": "installation_unavailable"}
+                )
             app_id = app_config.app_id
             private_key_ref = app_config.private_key_secret_ref
             installation_number = installation.installation_id
@@ -336,14 +634,17 @@ class GitHubEffectReconciler:
         existing: dict[str, Any] | None = None
         for page in range(1, 101):
             rows = await client._request(
-                "GET", f"{repo_path}/issues", token=token,
+                "GET",
+                f"{repo_path}/issues",
+                token=token,
                 params={"state": "all", "per_page": 100, "page": page},
             )
             if not isinstance(rows, list):
                 raise GitHubAppError("GitHub issues response is invalid")
             existing = next(
                 (
-                    row for row in rows
+                    row
+                    for row in rows
                     if isinstance(row, dict)
                     and "pull_request" not in row
                     and isinstance(row.get("body"), str)
@@ -354,7 +655,9 @@ class GitHubEffectReconciler:
             if existing is not None or len(rows) < 100:
                 break
         else:
-            return EffectResult("unknown", {"state": "issue_search_limit", "stable_key": stable_key})
+            return EffectResult(
+                "unknown", {"state": "issue_search_limit", "stable_key": stable_key}
+            )
         issue = existing
         if issue is None:
             created = await client._request(
@@ -450,17 +753,29 @@ class GitHubEffectReconciler:
             if task.version != expected_version:
                 return EffectResult("applied", {"state": "stale", "reason": "task_version_changed"})
             if link is None or not link.opted_in or link.setup_status != "ready":
-                return EffectResult("applied", {"state": "rejected", "reason": "repository_not_opted_in"})
+                return EffectResult(
+                    "applied", {"state": "rejected", "reason": "repository_not_opted_in"}
+                )
             installation = await db.get(GitHubInstallation, link.installation_id)
             app_config = (
                 await db.get(GitHubAppConfiguration, installation.app_configuration_id)
                 if installation
                 else None
             )
-            if installation is None or app_config is None or not installation.active or not app_config.enabled:
-                return EffectResult("applied", {"state": "rejected", "reason": "installation_unavailable"})
+            if (
+                installation is None
+                or app_config is None
+                or not installation.active
+                or not app_config.enabled
+            ):
+                return EffectResult(
+                    "applied", {"state": "rejected", "reason": "installation_unavailable"}
+                )
             app_id, private_key_ref = app_config.app_id, app_config.private_key_secret_ref
-            installation_number, repository_id = installation.installation_id, link.github_repository_id
+            installation_number, repository_id = (
+                installation.installation_id,
+                link.github_repository_id,
+            )
             owner, name = link.owner, link.name
         client = GitHubAppClient()
         token, _ = await client.create_installation_token(
@@ -472,7 +787,9 @@ class GitHubEffectReconciler:
         )
         repo_path = f"/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
         statuses = await client._request(
-            "GET", f"{repo_path}/commits/{sha}/statuses", token=token,
+            "GET",
+            f"{repo_path}/commits/{sha}/statuses",
+            token=token,
             params={"per_page": 100},
         )
         if not isinstance(statuses, list):
@@ -484,12 +801,18 @@ class GitHubEffectReconciler:
         status: dict[str, Any] | None
         if latest is not None and all(
             latest.get(key) == value
-            for key, value in (("state", state), ("description", description), ("target_url", target_url))
+            for key, value in (
+                ("state", state),
+                ("description", description),
+                ("target_url", target_url),
+            )
         ):
             status = latest
         else:
             created = await client._request(
-                "POST", f"{repo_path}/statuses/{sha}", token=token,
+                "POST",
+                f"{repo_path}/statuses/{sha}",
+                token=token,
                 body={
                     "state": state,
                     "description": description,
@@ -502,7 +825,12 @@ class GitHubEffectReconciler:
             raise GitHubAppError("GitHub did not return a commit status identity")
         return EffectResult(
             "applied",
-            {"state": state, "status_id": status["id"], "context": context, "stable_key": stable_key},
+            {
+                "state": state,
+                "status_id": status["id"],
+                "context": context,
+                "stable_key": stable_key,
+            },
         )
 
     async def _reconcile_issue_comment(
@@ -687,7 +1015,9 @@ def _ref_sha(value: dict[str, Any] | list[Any] | None) -> str | None:
     return None
 
 
-def _review_tree_entries(source: Path, base_sha: str, head_sha: str) -> list[dict[str, Any]]:
+def _review_tree_entries(
+    source: Path, base_sha: str, head_sha: str, excluded_paths: set[str] | None = None
+) -> list[dict[str, Any]]:
     result = subprocess.run(
         ["git", "diff", "--name-status", "-z", base_sha, head_sha],
         cwd=source,
@@ -707,6 +1037,8 @@ def _review_tree_entries(source: Path, base_sha: str, head_sha: str) -> list[dic
         index += 1
         if relative.is_absolute() or ".." in relative.parts or ".git" in relative.parts:
             raise GitHubAppError("Review bundle contains an invalid repository path")
+        if relative.as_posix() in (excluded_paths or set()):
+            continue
         entry: dict[str, Any] = {"path": relative.as_posix(), "mode": "100644", "type": "blob"}
         if status == "D":
             entry["sha"] = None
@@ -717,6 +1049,38 @@ def _review_tree_entries(source: Path, base_sha: str, head_sha: str) -> list[dic
     if not entries:
         raise GitHubAppError("Review bundle has no file changes to publish")
     return entries
+
+
+def _archive_patch_paths(patch: object) -> set[str]:
+    return set(_archive_patch_changes(patch))
+
+
+def _archive_patch_changes(patch: object) -> dict[str, bool]:
+    if not isinstance(patch, str) or not patch:
+        raise GitHubAppError("Post-merge archive policy requires a prepared archive diff")
+    changes: dict[str, bool] = {}
+    sections = re.split(r"(?=^diff --git )", patch, flags=re.MULTILINE)
+    for section in sections:
+        first_line = section.splitlines()[0] if section else ""
+        if not first_line.startswith("diff --git a/"):
+            continue
+        match = re.fullmatch(r"diff --git a/([^\t]+) b/([^\t]+)", first_line)
+        if match is None or match.group(1) != match.group(2):
+            raise GitHubAppError("Archive diff contains an unsupported repository path")
+        path = PurePosixPath(match.group(1))
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or ".git" in path.parts
+            or len(path.parts) < 3
+            or path.parts[0] != "openspec"
+            or path.parts[1] not in {"specs", "changes"}
+        ):
+            raise GitHubAppError("Archive diff contains an invalid repository path")
+        changes[path.as_posix()] = "deleted file mode " in section or "+++ /dev/null" in section
+    if not changes:
+        raise GitHubAppError("Post-merge archive diff contains no file changes")
+    return changes
 
 
 def _git_mode(source: Path, revision: str, path: str) -> str:

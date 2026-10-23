@@ -204,7 +204,7 @@ class PostIntegrationStep(Scoped, Base):
             "kind IN ('archive','learning','cleanup')", name="ck_post_integration_step_kind"
         ),
         CheckConstraint(
-            "status IN ('pending','running','succeeded','failed','skipped')",
+            "status IN ('pending','running','succeeded','failed','skipped','awaiting_merge')",
             name="ck_post_integration_step_status",
         ),
     )

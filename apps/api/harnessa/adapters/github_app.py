@@ -7,6 +7,8 @@ import os
 import re
 import time
 from collections.abc import Mapping
+from email.utils import parsedate_to_datetime
+from math import ceil, isfinite
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -34,9 +36,46 @@ _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 class GitHubAppError(RuntimeError):
     """Sanitized adapter error; response bodies and authentication headers are omitted."""
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        rate_limited: bool = False,
+        retry_after_seconds: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.rate_limited = rate_limited
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _rate_limit_retry_after(status_code: int, headers: Mapping[str, str]) -> int | None:
+    """Return a bounded retry delay only when GitHub marks the response as rate limited."""
+    if status_code not in {403, 429}:
+        return None
+    retry_after = headers.get("Retry-After")
+    remaining = headers.get("X-RateLimit-Remaining")
+    reset = headers.get("X-RateLimit-Reset")
+    if status_code != 429 and retry_after is None and remaining != "0":
+        return None
+    delay: float | None = None
+    if retry_after is not None:
+        try:
+            delay = float(retry_after)
+        except ValueError:
+            try:
+                delay = (parsedate_to_datetime(retry_after).timestamp()) - time.time()
+            except (TypeError, ValueError, OverflowError):
+                delay = None
+    if delay is None and reset is not None:
+        try:
+            delay = float(reset) - time.time()
+        except ValueError:
+            delay = None
+    if delay is None or not isfinite(delay):
+        return 300
+    return min(86_400, max(1, ceil(delay)))
 
 
 def resolve_secret_reference(
@@ -163,9 +202,12 @@ class GitHubAppClient:
                     if len(content) > 2_000_000:
                         raise GitHubAppError("GitHub API response exceeded 2 MB")
                 if res.status_code < 200 or res.status_code >= 300:
+                    retry_after = _rate_limit_retry_after(res.status_code, res.headers)
                     raise GitHubAppError(
                         f"GitHub API request failed with HTTP {res.status_code}",
                         status_code=res.status_code,
+                        rate_limited=retry_after is not None,
+                        retry_after_seconds=retry_after,
                     )
                 if not content:
                     return {}
@@ -207,12 +249,15 @@ class GitHubAppClient:
         ):
             raise GitHubAppError("Installation tokens require 1 to 100 explicit repository IDs")
         requested = dict(permissions)
-        if any(
-            permission not in APP_ALLOWED_TOKEN_PERMISSIONS
-            or level not in {"read", "write"}
-            or (permission == "metadata" and level != "read")
-            for permission, level in requested.items()
-        ) or not requested:
+        if (
+            any(
+                permission not in APP_ALLOWED_TOKEN_PERMISSIONS
+                or level not in {"read", "write"}
+                or (permission == "metadata" and level != "read")
+                for permission, level in requested.items()
+            )
+            or not requested
+        ):
             raise GitHubAppError("Requested GitHub permission levels are invalid")
         response = await self._request(
             "POST",

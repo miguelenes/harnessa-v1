@@ -76,6 +76,7 @@ class GitHubInstallation(Scoped, Base):
     granted_permissions: Mapped[dict[str, str]] = mapped_column(JSON_DOCUMENT, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_after_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
 
@@ -91,6 +92,10 @@ class GitHubRepositoryLink(Scoped, Base):
         CheckConstraint(
             "setup_status IN ('ready','stale','revoked','error')",
             name="ck_github_link_setup_status",
+        ),
+        CheckConstraint(
+            "archive_policy IN ('pre_merge','post_merge')",
+            name="ck_github_link_archive_policy",
         ),
         Index("ix_github_links_project", "project_id", "opted_in"),
     )
@@ -114,8 +119,10 @@ class GitHubRepositoryLink(Scoped, Base):
     authorized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     required_checks: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False)
     topic_label: Mapped[str] = mapped_column(String(80), default="harnessa", nullable=False)
+    archive_policy: Mapped[str] = mapped_column(String(20), default="pre_merge", nullable=False)
     setup_status: Mapped[str] = mapped_column(String(20), default="ready", nullable=False)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_after_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
 
@@ -215,6 +222,10 @@ class GitHubSyncObject(Scoped, Base):
             "object_kind IN ('issue','branch','pull_request','check_run')",
             name="ck_github_object_kind",
         ),
+        CheckConstraint(
+            "object_purpose IN ('review','maintenance_archive')",
+            name="ck_github_object_purpose",
+        ),
         Index("ix_github_sync_task", "project_id", "task_id", "object_kind"),
     )
 
@@ -231,6 +242,7 @@ class GitHubSyncObject(Scoped, Base):
         ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
     )
     object_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    object_purpose: Mapped[str] = mapped_column(String(32), default="review", nullable=False)
     github_object_id: Mapped[str] = mapped_column(String(128), nullable=False)
     object_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stable_key: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -242,3 +254,4 @@ class GitHubSyncObject(Scoped, Base):
     field_baseline: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
     sync_conflicts: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
     reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_after_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

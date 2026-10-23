@@ -905,7 +905,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Get Integration Evidence */
+        get: operations["get_integration_evidence_tasks__task_id__integration_evidence_get"];
         put?: never;
         /** Record Manual Integration */
         post: operations["record_manual_integration_tasks__task_id__integration_evidence_post"];
@@ -1561,6 +1562,8 @@ export interface components {
             required_checks: string[];
             /** Topic Label */
             topic_label: string;
+            /** Archive Policy */
+            archive_policy: string;
             /** Setup Status */
             setup_status: string;
             /**
@@ -1590,6 +1593,12 @@ export interface components {
              * @default harnessa
              */
             topic_label: string;
+            /**
+             * Archive Policy
+             * @default pre_merge
+             * @enum {string}
+             */
+            archive_policy: "pre_merge" | "post_merge";
         };
         /** GitHubWebhookReceipt */
         GitHubWebhookReceipt: {
@@ -1624,6 +1633,30 @@ export interface components {
              */
             organization_id: string;
             role: components["schemas"]["Role"];
+        };
+        /** IntegrationEvidenceRead */
+        IntegrationEvidenceRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Status */
+            status: string;
+            /** Mode */
+            mode: string;
+            /** Stable Key */
+            stable_key: string;
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Evidence Digest */
+            evidence_digest: string;
+            /** Integration Revision */
+            integration_revision: string | null;
+            /** Steps */
+            steps: components["schemas"]["PostIntegrationStepRead"][];
         };
         /** MCPGrantCreate */
         MCPGrantCreate: {
@@ -2325,13 +2358,28 @@ export interface components {
             /** Pending Reservations */
             pending_reservations: number;
         };
+        /** PostIntegrationStepRead */
+        PostIntegrationStepRead: {
+            /** Kind */
+            kind: string;
+            /** Status */
+            status: string;
+            /** Attempts */
+            attempts: number;
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            };
+            /** Last Error */
+            last_error?: string | null;
+        };
         /** PostIntegrationStepRequest */
         PostIntegrationStepRequest: {
             /**
              * Status
              * @enum {string}
              */
-            status: "succeeded" | "failed";
+            status: "pending" | "succeeded" | "failed";
             /** Result */
             result?: {
                 [key: string]: unknown;
@@ -5566,6 +5614,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_integration_evidence_tasks__task_id__integration_evidence_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationEvidenceRead"];
                 };
             };
             /** @description Validation Error */

@@ -79,7 +79,10 @@ async def process_post_integration_steps(
                 session_factory=session_factory,
                 workspace_manager=manager,
             )
-            status = "skipped" if result.get("outcome") == "skipped" else "succeeded"
+            status = {
+                "skipped": "skipped",
+                "awaiting_merge": "awaiting_merge",
+            }.get(str(result.get("outcome")), "succeeded")
             error = None
         except Exception as exc:
             status = "failed"
@@ -114,6 +117,11 @@ async def _execute_step(
     session_factory: async_sessionmaker[AsyncSession],
     workspace_manager: SpecificationWorkspaceManager,
 ) -> dict[str, Any]:
+    archive_result: dict[str, Any] | None = None
+    archive_policy = "pre_merge"
+    repository: Repository | None = None
+    interview_id: UUID | None = None
+    candidate_ref: str | None = None
     async with session_factory() as db:
         integration = await db.get(IntegrationEvidence, integration_id)
         if integration is None or integration.status != "confirmed":
@@ -122,40 +130,71 @@ async def _execute_step(
         if bundle is None:
             raise SpecificationWorkspaceError("Review bundle is unavailable")
         if kind == "archive":
-            return _archive_result(integration, bundle)
-        if kind == "learning":
+            archive_result = _archive_result(integration, bundle)
+            if integration.mode == "github":
+                from harnessa.db.github import GitHubRepositoryLink
+
+                link = await db.scalar(
+                    select(GitHubRepositoryLink).where(
+                        GitHubRepositoryLink.repository_id == integration.repository_id,
+                        GitHubRepositoryLink.opted_in.is_(True),
+                        GitHubRepositoryLink.setup_status == "ready",
+                    )
+                )
+                if link is None:
+                    raise SpecificationWorkspaceError("Opted-in GitHub repository is unavailable")
+                archive_policy = link.archive_policy
+        elif kind == "learning":
             # No project-scoped learning hook is configured in this milestone.
-            # Record the optional hook's terminal outcome without blocking DONE.
             return {
                 "outcome": "skipped",
                 "reason": "no_learning_hook_configured",
                 "optional": True,
             }
-        if kind != "cleanup":
-            raise SpecificationWorkspaceError("Unknown post-integration step")
-        repository = await db.get(Repository, integration.repository_id)
-        interview = await db.scalar(
-            select(SpecificationInterview).where(
-                SpecificationInterview.task_id == integration.task_id
+        elif kind == "cleanup":
+            repository = await db.get(Repository, integration.repository_id)
+            interview = await db.scalar(
+                select(SpecificationInterview).where(
+                    SpecificationInterview.task_id == integration.task_id
+                )
             )
-        )
-        if repository is None or interview is None:
-            raise SpecificationWorkspaceError("Integrated repository or interview is unavailable")
-        sync_preview = bundle.bundle.get("openspec_sync_preview")
-        if not isinstance(sync_preview, dict):
-            raise SpecificationWorkspaceError("Review bundle archive provenance is missing")
-        reference = sync_preview.get("review_candidate_ref")
-        if not isinstance(reference, str):
+            if repository is None or interview is None:
+                raise SpecificationWorkspaceError(
+                    "Integrated repository or interview is unavailable"
+                )
+            sync_preview = bundle.bundle.get("openspec_sync_preview")
+            if not isinstance(sync_preview, dict):
+                raise SpecificationWorkspaceError("Review bundle archive provenance is missing")
+            reference = sync_preview.get("review_candidate_ref")
+            if not isinstance(reference, str):
+                raise SpecificationWorkspaceError("Review candidate reference is missing")
+            candidate_ref = reference
+            interview_id = interview.id
+        else:
+            raise SpecificationWorkspaceError("Unknown post-integration step")
+
+    if kind == "archive" and archive_result is not None:
+        if archive_policy == "post_merge":
+            from harnessa.adapters.github_effects import GitHubEffectReconciler
+
+            published = await GitHubEffectReconciler(
+                session_factory, workspace_manager=workspace_manager
+            ).publish_archive_maintenance(integration_id)
+            return {**archive_result, **published}
+        return archive_result
+    if kind == "cleanup" and repository is not None and interview_id is not None:
+        if candidate_ref is None:
             raise SpecificationWorkspaceError("Review candidate reference is missing")
         reference_result = await workspace_manager.remove_candidate_ref(
-            repository, reference, bundle.head_sha
+            repository, candidate_ref, bundle.head_sha
         )
-        workspace_removed = await workspace_manager.remove_interview_workspace(interview.id)
+        workspace_removed = await workspace_manager.remove_interview_workspace(interview_id)
         return {
             "outcome": "succeeded",
             "review_candidate_ref": reference_result,
             "interview_workspace": "removed" if workspace_removed else "already_absent",
         }
+    raise SpecificationWorkspaceError("Post-integration step could not be executed")
 
 
 def _archive_result(integration: IntegrationEvidence, bundle: ReviewBundle) -> dict[str, Any]:
@@ -178,10 +217,12 @@ def _archive_result(integration: IntegrationEvidence, bundle: ReviewBundle) -> d
         merge_sha = integration.evidence.get("merge_commit_sha")
         verified_source_sha = integration.evidence.get("verified_source_head_sha")
         published_github_sha = integration.evidence.get("github_head_sha")
+        published_branch_sha = integration.evidence.get("published_branch_sha")
         if (
             verified_source_sha != bundle.head_sha
             or not isinstance(published_github_sha, str)
             or not re.fullmatch(r"[0-9a-f]{40,64}", published_github_sha)
+            or published_github_sha != published_branch_sha
             or not isinstance(merge_sha, str)
             or not re.fullmatch(r"[0-9a-f]{40,64}", merge_sha)
         ):
@@ -222,9 +263,7 @@ async def complete_task_if_ready(db: AsyncSession, integration_id: UUID) -> bool
         or by_kind.get("learning") not in {"succeeded", "failed", "skipped"}
     ):
         return False
-    task = await db.scalar(
-        select(Task).where(Task.id == integration.task_id).with_for_update()
-    )
+    task = await db.scalar(select(Task).where(Task.id == integration.task_id).with_for_update())
     if task is None or task.stage != "LEARNING":
         return False
     before = task.version

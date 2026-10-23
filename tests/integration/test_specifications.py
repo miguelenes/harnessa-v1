@@ -186,6 +186,8 @@ async def _create_ready_interview(
     repository_id: UUID,
     actor: User,
     idempotency_key: str = "specification-topic-create",
+    expect_replayed: bool = False,
+    topic: str = "Add a scoped task acceptance workflow",
 ) -> UUID:
     await _configure_acp_route(project_id)
     async with SessionLocal() as db:
@@ -194,10 +196,10 @@ async def _create_ready_interview(
             project_id=project_id,
             repository_id=repository_id,
             actor=actor,
-            topic="Add a scoped task acceptance workflow",
+            topic=topic,
             idempotency_key=idempotency_key,
         )
-        assert replayed is False
+        assert replayed is expect_replayed
         interview, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
         assert evaluation.state == "READY"
         assert evaluation.score == 1

@@ -797,6 +797,7 @@ class GitHubRepositoryOptIn(BaseModel):
     github_repository_id: int = Field(gt=0)
     required_checks: list[str] = Field(min_length=1, max_length=40)
     topic_label: str = Field(default="harnessa", min_length=1, max_length=80)
+    archive_policy: Literal["pre_merge", "post_merge"] = "pre_merge"
 
 
 class GitHubRepositoryLinkRead(BaseModel):
@@ -809,6 +810,7 @@ class GitHubRepositoryLinkRead(BaseModel):
     opted_in: bool
     required_checks: list[str]
     topic_label: str
+    archive_policy: str = Field(pattern=r"^(pre_merge|post_merge)$")
     setup_status: str
     last_synced_at: datetime | None = None
     last_error: str | None = None
@@ -914,9 +916,28 @@ class ManualIntegrationRequest(BaseModel):
 
 
 class PostIntegrationStepRequest(BaseModel):
-    status: Literal["succeeded", "failed"]
+    status: Literal["pending", "succeeded", "failed"]
     result: dict[str, Any] = Field(default_factory=dict)
     error: str | None = Field(default=None, max_length=2000)
+
+
+class PostIntegrationStepRead(BaseModel):
+    kind: str = Field(pattern=r"^(archive|learning|cleanup)$")
+    status: str = Field(pattern=r"^(pending|running|succeeded|failed|skipped|awaiting_merge)$")
+    attempts: int
+    result: dict[str, Any]
+    last_error: str | None = None
+
+
+class IntegrationEvidenceRead(BaseModel):
+    id: UUID
+    status: str
+    mode: str
+    stable_key: str
+    evidence: dict[str, Any]
+    evidence_digest: str
+    integration_revision: str | None
+    steps: list[PostIntegrationStepRead]
 
 
 class SpecificationInterviewCreate(BaseModel):

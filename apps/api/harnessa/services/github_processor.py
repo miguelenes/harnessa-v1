@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -37,8 +37,9 @@ from harnessa.db.review import (
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview, SpecificationQuestion
 from harnessa.services.github_webhooks import DeliveryEnvelope, DeliveryOutcome
+from harnessa.services.post_integration import complete_task_if_ready
 from harnessa.services.specifications import answer_question, create_interview
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 _ANSWER_COMMAND = re.compile(
@@ -90,8 +91,16 @@ class GitHubWebhookProcessor:
         async with self.session_factory() as db:
             rows = (
                 await db.execute(
-                    select(GitHubRepositoryLink, GitHubInstallation, GitHubAppConfiguration, GitHubSyncObject)
-                    .join(GitHubInstallation, GitHubInstallation.id == GitHubRepositoryLink.installation_id)
+                    select(
+                        GitHubRepositoryLink,
+                        GitHubInstallation,
+                        GitHubAppConfiguration,
+                        GitHubSyncObject,
+                    )
+                    .join(
+                        GitHubInstallation,
+                        GitHubInstallation.id == GitHubRepositoryLink.installation_id,
+                    )
                     .join(
                         GitHubAppConfiguration,
                         GitHubAppConfiguration.id == GitHubInstallation.app_configuration_id,
@@ -103,10 +112,22 @@ class GitHubWebhookProcessor:
                     .where(
                         GitHubRepositoryLink.opted_in.is_(True),
                         GitHubRepositoryLink.setup_status == "ready",
+                        or_(
+                            GitHubRepositoryLink.retry_after_at.is_(None),
+                            GitHubRepositoryLink.retry_after_at <= datetime.now(UTC),
+                        ),
                         GitHubInstallation.active.is_(True),
+                        or_(
+                            GitHubInstallation.retry_after_at.is_(None),
+                            GitHubInstallation.retry_after_at <= datetime.now(UTC),
+                        ),
                         GitHubAppConfiguration.enabled.is_(True),
                         GitHubSyncObject.object_kind == "pull_request",
                         GitHubSyncObject.object_number.is_not(None),
+                        or_(
+                            GitHubSyncObject.retry_after_at.is_(None),
+                            GitHubSyncObject.retry_after_at <= datetime.now(UTC),
+                        ),
                     )
                     .order_by(GitHubSyncObject.reconciled_at.asc().nulls_first())
                     .limit(limit)
@@ -118,13 +139,22 @@ class GitHubWebhookProcessor:
                     app.id,
                     installation.installation_id,
                     link.github_repository_id,
+                    sync.id,
                     sync.github_object_id,
                     sync.object_number,
                 )
                 for link, installation, app, sync in rows
             ]
         reconciled = 0
-        for organization_id, app_id, installation_number, repository_id, object_id, number in snapshots:
+        for (
+            organization_id,
+            app_id,
+            installation_number,
+            repository_id,
+            sync_id,
+            object_id,
+            number,
+        ) in snapshots:
             try:
                 if not object_id.isdecimal():
                     continue
@@ -239,15 +269,14 @@ class GitHubWebhookProcessor:
                                     pending_reviews.append((review, action))
                             pending_reviews.sort(
                                 key=lambda item: str(
-                                    item[0].get("submitted_at")
-                                    or item[0].get("created_at")
-                                    or ""
+                                    item[0].get("submitted_at") or item[0].get("created_at") or ""
                                 ),
                                 reverse=True,
                             )
                             for review, action in pending_reviews[:10]:
                                 review_payload = {
                                     **payload,
+                                    "sender": review.get("user"),
                                     "review": review,
                                 }
                                 await self._review_changed(
@@ -264,6 +293,27 @@ class GitHubWebhookProcessor:
                                     )
                                 )
                 reconciled += 1
+            except GitHubAppError as exc:
+                if exc.rate_limited:
+                    async with self.session_factory() as db:
+                        sync = await db.get(GitHubSyncObject, sync_id)
+                        if sync is not None:
+                            sync.retry_after_at = datetime.now(UTC) + timedelta(
+                                seconds=exc.retry_after_seconds or 300
+                            )
+                            await db.commit()
+                    logger.info(
+                        "GitHub PR reconciliation rate limited for repository %s PR %s",
+                        repository_id,
+                        number,
+                    )
+                    continue
+                logger.exception(
+                    "GitHub pull request reconciliation failed for repository %s PR %s",
+                    repository_id,
+                    number,
+                )
+                continue
             except Exception:
                 # A failed remote read remains eligible for the next bounded pass.
                 logger.exception(
@@ -288,18 +338,35 @@ class GitHubWebhookProcessor:
                     )
                     .where(
                         GitHubAppConfiguration.enabled.is_(True),
+                        or_(
+                            GitHubInstallation.retry_after_at.is_(None),
+                            GitHubInstallation.retry_after_at <= datetime.now(UTC),
+                        ),
                     )
                     .order_by(GitHubInstallation.checked_at.asc().nulls_first())
                     .limit(limit)
                 )
             ).all()
             snapshots = [
-                (installation.id, installation.installation_id, app.id, app.app_id,
-                 app.private_key_secret_ref, installation.organization_id)
+                (
+                    installation.id,
+                    installation.installation_id,
+                    app.id,
+                    app.app_id,
+                    app.private_key_secret_ref,
+                    installation.organization_id,
+                )
                 for installation, app in rows
             ]
         reconciled = 0
-        for installation_uuid, installation_number, app_uuid, app_id, key_ref, organization_id in snapshots:
+        for (
+            installation_uuid,
+            installation_number,
+            app_uuid,
+            app_id,
+            key_ref,
+            organization_id,
+        ) in snapshots:
             client = GitHubAppClient()
             try:
                 remote = await client.get_installation(
@@ -308,6 +375,18 @@ class GitHubWebhookProcessor:
                     installation_id=installation_number,
                 )
             except GitHubAppError as exc:
+                if exc.rate_limited:
+                    async with self.session_factory() as db:
+                        installation = await db.get(GitHubInstallation, installation_uuid)
+                        if installation is not None:
+                            installation.retry_after_at = datetime.now(UTC) + timedelta(
+                                seconds=exc.retry_after_seconds or 300
+                            )
+                            installation.last_error = (
+                                "GitHub API rate limit reached; retry scheduled"
+                            )
+                            await db.commit()
+                    continue
                 async with self.session_factory() as db:
                     installation = await db.get(GitHubInstallation, installation_uuid)
                     if exc.status_code == 404 and installation is not None:
@@ -337,7 +416,11 @@ class GitHubWebhookProcessor:
                 continue
             permissions_raw = remote.get("permissions")
             permissions = (
-                {str(key): str(value) for key, value in permissions_raw.items() if isinstance(key, str)}
+                {
+                    str(key): str(value)
+                    for key, value in permissions_raw.items()
+                    if isinstance(key, str)
+                }
                 if isinstance(permissions_raw, dict)
                 else {}
             )
@@ -356,9 +439,10 @@ class GitHubWebhookProcessor:
                 installation.granted_permissions = permissions
                 installation.active = not unavailable
                 installation.checked_at = datetime.now(UTC)
+                installation.retry_after_at = None
                 installation.last_error = issue
-                app.connection_status = "permission_missing" if missing else (
-                    "suspended" if unavailable else "ready"
+                app.connection_status = (
+                    "permission_missing" if missing else ("suspended" if unavailable else "ready")
                 )
                 app.checked_at = datetime.now(UTC)
                 app.last_error = issue
@@ -378,7 +462,11 @@ class GitHubWebhookProcessor:
                     reconciled += 1
                     continue
                 await db.commit()
-                link_snapshots = [(row.id, row.github_repository_id, row.owner, row.name) for row in links]
+                link_snapshots = [
+                    (row.id, row.github_repository_id, row.owner, row.name)
+                    for row in links
+                    if row.retry_after_at is None or row.retry_after_at <= datetime.now(UTC)
+                ]
             for link_uuid, repository_id, owner, name in link_snapshots:
                 try:
                     remote_repository = await client.request_installation(
@@ -391,6 +479,18 @@ class GitHubWebhookProcessor:
                         permissions={"metadata": "read"},
                     )
                 except GitHubAppError as exc:
+                    if exc.rate_limited:
+                        async with self.session_factory() as db:
+                            link_row = await db.get(GitHubRepositoryLink, link_uuid)
+                            if link_row is not None:
+                                link_row.retry_after_at = datetime.now(UTC) + timedelta(
+                                    seconds=exc.retry_after_seconds or 300
+                                )
+                                link_row.last_error = (
+                                    "GitHub API rate limit reached; repository retry scheduled"
+                                )
+                                await db.commit()
+                        continue
                     if exc.status_code not in {403, 404}:
                         logger.warning(
                             "GitHub repository access reconciliation failed for repository %s",
@@ -412,12 +512,16 @@ class GitHubWebhookProcessor:
                             await db.commit()
                     reconciled += 1
                     continue
-                if not isinstance(remote_repository, dict) or remote_repository.get("id") != repository_id:
+                if (
+                    not isinstance(remote_repository, dict)
+                    or remote_repository.get("id") != repository_id
+                ):
                     continue
                 async with self.session_factory() as db:
                     link_row = await db.get(GitHubRepositoryLink, link_uuid)
                     if link_row is not None and link_row.opted_in:
                         link_row.setup_status = "ready"
+                        link_row.retry_after_at = None
                         link_row.last_error = None
                         link_row.last_synced_at = datetime.now(UTC)
                         await db.commit()
@@ -763,7 +867,6 @@ class GitHubWebhookProcessor:
         text = comment or f"Harnessa created an interview for this issue. Task: `{task_id}`."
         db.add(
             EffectIntent(
-                organization_id=link.organization_id,
                 project_id=link.project_id,
                 task_id=task_id,
                 kind="github.issue.comment",
@@ -844,18 +947,24 @@ class GitHubWebhookProcessor:
             sync.head_sha = head_sha
             sync.base_sha = base_sha
             sync.reconciled_at = datetime.now(UTC)
+            sync.retry_after_at = None
             if isinstance(remote.get("html_url"), str):
                 sync.url = remote["html_url"]
             merge_result = None
             if state == "merged":
-                merge_result = await self._record_github_merge(
-                    db,
-                    installation=installation,
-                    link=link,
-                    sync=sync,
-                    remote_pull_request=remote,
-                    app_configuration=app_config,
-                )
+                if sync.object_purpose == "maintenance_archive":
+                    merge_result = await self._record_archive_maintenance_merge(
+                        db, sync=sync, remote_pull_request=remote
+                    )
+                else:
+                    merge_result = await self._record_github_merge(
+                        db,
+                        installation=installation,
+                        link=link,
+                        sync=sync,
+                        remote_pull_request=remote,
+                        app_configuration=app_config,
+                    )
                 if merge_result is None:
                     state = "merged_unverified"
                     sync.state = state
@@ -867,20 +976,21 @@ class GitHubWebhookProcessor:
                     "merge_head_sha_mismatch": head_sha,
                 }
             elif state in {"head_drift", "base_drift", "closed_unmerged"}:
-                await self._recover_unmerged_review(
-                    db,
-                    sync=sync,
-                    reason=(
-                        "GitHub pull request was closed without merging"
-                        if state == "closed_unmerged"
-                        else (
-                            "GitHub pull request base changed after review publication"
-                            if state == "base_drift"
-                            else "GitHub pull request head changed after review publication"
-                        )
-                    ),
-                    reason_code=state,
+                reason = (
+                    "GitHub pull request was closed without merging"
+                    if state == "closed_unmerged"
+                    else (
+                        "GitHub pull request base changed after review publication"
+                        if state == "base_drift"
+                        else "GitHub pull request head changed after review publication"
+                    )
                 )
+                if sync.object_purpose == "maintenance_archive":
+                    await self._fail_archive_maintenance(db, sync=sync, reason=reason)
+                else:
+                    await self._recover_unmerged_review(
+                        db, sync=sync, reason=reason, reason_code=state
+                    )
             await db.commit()
             return DeliveryOutcome(
                 "processed",
@@ -891,6 +1001,94 @@ class GitHubWebhookProcessor:
                     "integration_id": str(merge_result) if merge_result else None,
                 },
             )
+
+    async def _record_archive_maintenance_merge(
+        self,
+        db: AsyncSession,
+        *,
+        sync: GitHubSyncObject,
+        remote_pull_request: dict[str, Any],
+    ) -> UUID | None:
+        baseline = sync.field_baseline
+        integration_value = baseline.get("integration_evidence_id")
+        published_sha = baseline.get("published_branch_sha")
+        archive_digest = baseline.get("archive_diff_sha256")
+        merge_sha = remote_pull_request.get("merge_commit_sha")
+        head = remote_pull_request.get("head")
+        if (
+            not isinstance(integration_value, str)
+            or not isinstance(published_sha, str)
+            or not isinstance(archive_digest, str)
+            or not isinstance(head, dict)
+            or head.get("sha") != published_sha
+            or not isinstance(merge_sha, str)
+            or not re.fullmatch(r"[0-9a-f]{40,64}", merge_sha)
+            or sync.check_results.get("head_sha") != published_sha
+            or sync.check_results.get("all_required_passed") is not True
+        ):
+            return None
+        try:
+            integration_id = UUID(integration_value)
+        except ValueError:
+            return None
+        step = await db.scalar(
+            select(PostIntegrationStep)
+            .where(
+                PostIntegrationStep.integration_evidence_id == integration_id,
+                PostIntegrationStep.kind == "archive",
+            )
+            .with_for_update()
+        )
+        if (
+            step is None
+            or step.status != "awaiting_merge"
+            or step.result.get("archive_diff_sha256") != archive_digest
+        ):
+            return None
+        step.status = "succeeded"
+        step.result = {
+            **step.result,
+            "outcome": "succeeded",
+            "policy": "post_merge_maintenance_pr",
+            "maintenance_pull_request_id": remote_pull_request.get("id"),
+            "maintenance_pull_request_number": remote_pull_request.get("number"),
+            "maintenance_merge_commit_sha": merge_sha,
+            "published_branch_sha": published_sha,
+            "required_checks": sync.check_results.get("required", {}),
+        }
+        await complete_task_if_ready(db, integration_id)
+        return integration_id
+
+    async def _fail_archive_maintenance(
+        self, db: AsyncSession, *, sync: GitHubSyncObject, reason: str
+    ) -> None:
+        integration_value = sync.field_baseline.get("integration_evidence_id")
+        if not isinstance(integration_value, str):
+            return
+        try:
+            integration_id = UUID(integration_value)
+        except ValueError:
+            return
+        step = await db.scalar(
+            select(PostIntegrationStep)
+            .where(
+                PostIntegrationStep.integration_evidence_id == integration_id,
+                PostIntegrationStep.kind == "archive",
+            )
+            .with_for_update()
+        )
+        if step is None or step.status != "awaiting_merge":
+            return
+        step.status = "failed"
+        step.attempts = max(step.attempts, 12)
+        step.last_error = reason[:2000]
+        step.result = {
+            **step.result,
+            "outcome": "failed",
+            "reason": "maintenance_pull_request_requires_operator_repair",
+            "pull_request_number": sync.object_number,
+            "pull_request_url": sync.url,
+        }
 
     async def _recover_unmerged_review(
         self,
@@ -996,7 +1194,11 @@ class GitHubWebhookProcessor:
         if not isinstance(run_rows, list):
             return None
         actual_checks = {
-            row["name"]: {"status": row.get("status"), "conclusion": row.get("conclusion"), "id": row.get("id")}
+            row["name"]: {
+                "status": row.get("status"),
+                "conclusion": row.get("conclusion"),
+                "id": row.get("id"),
+            }
             for row in run_rows
             if isinstance(row, dict)
             and isinstance(row.get("name"), str)
@@ -1036,17 +1238,19 @@ class GitHubWebhookProcessor:
                 and review.get("commit_id") == published_sha
             }
             mappings = (
-                await db.scalars(
-                    select(GitHubActorMapping).where(
-                        GitHubActorMapping.installation_id == installation.id,
-                        GitHubActorMapping.github_user_id.in_(github_user_ids),
-                        GitHubActorMapping.active.is_(True),
+                (
+                    await db.scalars(
+                        select(GitHubActorMapping).where(
+                            GitHubActorMapping.installation_id == installation.id,
+                            GitHubActorMapping.github_user_id.in_(github_user_ids),
+                            GitHubActorMapping.active.is_(True),
+                        )
                     )
-                )
-            ).all() if github_user_ids else []
-            actor_by_github_id = {
-                row.github_user_id: row.user_id for row in mappings
-            }
+                ).all()
+                if github_user_ids
+                else []
+            )
+            actor_by_github_id = {row.github_user_id: row.user_id for row in mappings}
             latest_by_actor = _latest_review_state_by_actor(
                 remote_reviews, actor_by_github_id, published_sha
             )
@@ -1103,7 +1307,9 @@ class GitHubWebhookProcessor:
         if (
             verification is None
             or verification.outcome != "passed"
-            or any(item.get("outcome") != "passed" for item in verification.result.get("criteria", []))
+            or any(
+                item.get("outcome") != "passed" for item in verification.result.get("criteria", [])
+            )
         ):
             return None
         task = await db.scalar(select(Task).where(Task.id == sync.task_id).with_for_update())
@@ -1131,6 +1337,7 @@ class GitHubWebhookProcessor:
             "bundle_digest": bundle.bundle_digest,
             "verified_source_head_sha": bundle.head_sha,
             "github_head_sha": published_sha,
+            "published_branch_sha": published_sha,
             "base_sha": bundle.base_sha,
             "merge_commit_sha": merge_sha,
             "review_decision_id": str(approval.id),
@@ -1291,7 +1498,9 @@ class GitHubWebhookProcessor:
                     task = await db.scalar(
                         select(Task).where(Task.id == sync.task_id).with_for_update()
                     )
-                    already_retried = sync.sync_conflicts.get("check_remediated_head_sha") == head_sha
+                    already_retried = (
+                        sync.sync_conflicts.get("check_remediated_head_sha") == head_sha
+                    )
                     if task is not None and task.stage == "HUMAN_REVIEW" and not already_retried:
                         run_count = int(
                             await db.scalar(
@@ -1310,7 +1519,9 @@ class GitHubWebhookProcessor:
                                 failed_bundle = await db.get(ReviewBundle, UUID(bundle_id_value))
                                 if failed_bundle is not None:
                                     failed_bundle.status = "invalidated"
-                                    failed_bundle.invalidated_reason = "A required GitHub check failed on the published head"
+                                    failed_bundle.invalidated_reason = (
+                                        "A required GitHub check failed on the published head"
+                                    )
                             db.add(
                                 TaskTransition(
                                     task_id=task.id,
