@@ -68,12 +68,20 @@ class HarnessOverview(BaseModel):
 
 def _promotion_gates_passed(result: dict[str, Any], candidate_digest: str) -> bool:
     evidence = result.get("promotion_gates")
+    holdout = result.get("holdout_evaluation")
+    manifest = result.get("holdout_manifest")
     return (
         isinstance(evidence, dict)
         and evidence.get("candidate_digest") == candidate_digest
         and evidence.get("regression") == "passed"
         and evidence.get("security") == "passed"
         and evidence.get("cost") == "passed"
+        and isinstance(manifest, dict)
+        and isinstance(holdout, dict)
+        and holdout.get("status") == "passed"
+        and holdout.get("manifest_digest") == manifest.get("digest")
+        and isinstance(holdout.get("judge_revision"), str)
+        and bool(holdout["judge_revision"])
     )
 
 

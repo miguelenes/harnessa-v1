@@ -221,6 +221,8 @@ async def test_finish_honors_cancellation_committed_after_persistence(
 ) -> None:
     from harnessa.services import harness_experiments as module
 
+    monkeypatch.setattr(module.settings, "artifact_root", str(tmp_path))
+
     experiment_id = uuid4()
     row = type(
         "CancelledExperiment",
@@ -385,6 +387,8 @@ async def test_worker_run_persists_success_and_keeps_cancelled_attempts_unpublis
 ) -> None:
     from harnessa.services import harness_experiments as module
 
+    monkeypatch.setattr(module.settings, "artifact_root", str(tmp_path))
+
     base = tmp_path / "base"
     base.mkdir()
     (base / "systemprompt.md").write_text("base", encoding="utf-8")
@@ -431,6 +435,7 @@ async def test_worker_run_persists_success_and_keeps_cancelled_attempts_unpublis
     persisted: list[dict[str, Any]] = []
 
     async def persist(_self: Any, _frozen: Any, _adapter: Any, result: dict[str, Any]) -> None:
+        result["holdout_manifest"] = {"schema_version": 1, "digest": "d" * 64, "artifacts": []}
         persisted.append(result)
 
     monkeypatch.setattr(HarnessExperimentWorker, "_persist", persist)
@@ -449,13 +454,30 @@ async def test_worker_run_persists_success_and_keeps_cancelled_attempts_unpublis
     source = tmp_path / "repository"
     source.mkdir()
     execution = SimpleNamespace(repository_sources={str(frozen.project_id): source})
-    worker = HarnessExperimentWorker(execution)  # type: ignore[arg-type]
+    class Evaluator:
+        async def evaluate(self, candidate: Any) -> dict[str, str]:
+            assert persisted and candidate["digest"] == "d" * 64
+            return {
+                "status": "passed",
+                "manifest_digest": candidate["digest"],
+                "judge_revision": "deterministic-fixture-v1",
+                "score": "hidden-score-must-not-be-copied",
+            }
+
+    worker = HarnessExperimentWorker(execution, evaluator=Evaluator())  # type: ignore[arg-type]
     monkeypatch.setattr(worker, "_cancelled", lambda *_: asyncio.sleep(0, result=False))
+
+    async def persist_grade(_frozen: Any, result: dict[str, Any]) -> None:
+        assert result["holdout_evaluation"]["status"] == "passed"
+        assert "score" not in result["holdout_evaluation"]
+
+    monkeypatch.setattr(worker, "_persist_holdout_evaluation", persist_grade)
 
     await worker._run(frozen.experiment_id, 1)
 
     assert composed and persisted
     assert finished == [("succeeded", None)]
+    assert persisted[0]["holdout_evaluation"]["judge_revision"] == "deterministic-fixture-v1"
 
     persisted.clear()
     finished.clear()
@@ -463,6 +485,68 @@ async def test_worker_run_persists_success_and_keeps_cancelled_attempts_unpublis
     await worker._run(frozen.experiment_id, 1)
     assert persisted == []
     assert finished == [("cancelled", "Cancellation requested during probe execution")]
+
+
+@pytest.mark.anyio
+async def test_unconfigured_holdout_evaluator_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    frozen = FrozenExperiment(
+        experiment_id=uuid4(), task_id=uuid4(), project_id=uuid4(), organization_id=uuid4(),
+        base_sha="a" * 40, specification_hash="b" * 64, specification_revision=1,
+        policy_revision=1, mode="parallel", k=1, route_alias="probe", image_revision="image",
+        tool_revision="tools", root=tmp_path, claim_attempt=2,
+    )
+    worker = HarnessExperimentWorker(None)
+    persisted: list[dict[str, Any]] = []
+
+    async def persist(_frozen: Any, result: dict[str, Any]) -> None:
+        persisted.append(result)
+
+    monkeypatch.setattr(worker, "_persist_holdout_evaluation", persist)
+    result: dict[str, Any] = {
+        "holdout_manifest": {"schema_version": 1, "digest": "c" * 64, "artifacts": []}
+    }
+
+    grade = await worker._grade_holdout(frozen, result)
+
+    assert grade["status"] == "unavailable"
+    assert grade["reason_code"] == "evaluator_not_configured"
+    assert persisted == [result]
+    assert "judge_revision" not in grade
+
+
+@pytest.mark.anyio
+async def test_holdout_evaluator_timeout_stays_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from harnessa.services import harness_experiments as module
+
+    monkeypatch.setattr(module.settings, "harness2_holdout_timeout_seconds", 0.01)
+
+    class SlowEvaluator:
+        async def evaluate(self, _candidate: Any) -> dict[str, str]:
+            await asyncio.sleep(1)
+            return {"status": "passed", "manifest_digest": "c" * 64, "judge_revision": "late"}
+
+    worker = HarnessExperimentWorker(None, evaluator=SlowEvaluator())  # type: ignore[arg-type]
+
+    async def persist(_frozen: Any, _result: dict[str, Any]) -> None:
+        return None
+
+    monkeypatch.setattr(worker, "_persist_holdout_evaluation", persist)
+    result: dict[str, Any] = {
+        "holdout_manifest": {"schema_version": 1, "digest": "c" * 64, "artifacts": []}
+    }
+
+    grade = await worker._grade_holdout(
+        FrozenExperiment(
+            experiment_id=uuid4(), task_id=uuid4(), project_id=uuid4(), organization_id=uuid4(),
+            base_sha="a" * 40, specification_hash="b" * 64, specification_revision=1,
+            policy_revision=1, mode="parallel", k=1, route_alias="probe", image_revision="image",
+            tool_revision="tools", root=tmp_path, claim_attempt=1,
+        ),
+        result,
+    )
+
+    assert grade["status"] == "unknown"
+    assert grade["reason_code"] == "evaluator_timeout"
 
 
 def test_experiment_preflight_rejects_holdout_paths_in_frozen_repository(tmp_path: Path) -> None:

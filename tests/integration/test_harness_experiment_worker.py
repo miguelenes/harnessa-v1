@@ -191,7 +191,20 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
 
     monkeypatch.setattr(worker_module, "specification_workspace_manager", lambda: SpecificationManager())
     monkeypatch.setattr(worker_module.settings, "artifact_root", str(tmp_path))
-    worker = HarnessExperimentWorker(object())  # type: ignore[arg-type]
+    class Evaluator:
+        async def evaluate(self, candidate: dict[str, object]) -> dict[str, str]:
+            artifacts = candidate["artifacts"]
+            assert isinstance(artifacts, list) and artifacts
+            assert artifacts[0]["trace"]["sha256"]
+            assert artifacts[0]["artifacts"][0]["media_type"] == "text/plain"
+            return {
+                "status": "passed",
+                "manifest_digest": str(candidate["digest"]),
+                "judge_revision": "offline-holdout-fixture-v1",
+                "private_feedback": "fixture answer must never enter experiment result",
+            }
+
+    worker = HarnessExperimentWorker(object(), evaluator=Evaluator())  # type: ignore[arg-type]
     frozen, task_input, organization_id, scope, base_harness, experiences, concurrency = await worker._inputs(
         experiment_id, 1
     )
@@ -237,7 +250,7 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
     trace_root = tmp_path / "trace"
     trace_root.mkdir()
     (trace_root / "trajectory.txt").write_text('{"status":"completed"}', encoding="utf-8")
-    probe_run_id = uuid4()
+    probe_run_id = rollout_id
     tree = {"systemprompt.md": "# Visible base harness\n"}
     adapter = type(
         "EvidenceAdapter",
@@ -261,6 +274,9 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
     adapter.base_harness = lambda: base_harness
     result = {"comparison_successful": True, "composed_successful": True}
     await worker._persist(frozen, adapter, result)  # type: ignore[arg-type]
+    holdout = await worker._grade_holdout(frozen, result)
+    assert holdout["status"] == "passed"
+    assert "private_feedback" not in holdout
 
     async with SessionLocal() as db:
         probe = await db.scalar(select(HarnessProbeRun).where(
@@ -272,6 +288,10 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
         assert probe.trace_digest
         assert persisted.result["comparison_successful"] is True
         assert persisted.result_digest
+        assert persisted.result["holdout_evaluation"]["judge_revision"] == "offline-holdout-fixture-v1"
+        assert "private_feedback" not in persisted.result["holdout_evaluation"]
+        assert persisted.result["holdout_manifest"]["artifacts"][0]["artifacts"][0]["sha256"]
+        assert "storage_key" not in persisted.result["holdout_manifest"]["artifacts"][0]["artifacts"][0]
 
 
 @pytest.mark.anyio
@@ -457,9 +477,15 @@ async def test_reviewed_experience_promotion_and_rollback_are_idempotent(
             mode="parallel", k=1, status="succeeded", phase="complete", attempts=1,
             base_sha="c" * 40, specification_hash="d" * 64, specification_revision=1,
             policy_revision=4, harness2_revision="e" * 40,
-            result={"promotion_gates": {
-                "candidate_digest": digest, "regression": "passed", "security": "passed", "cost": "passed",
-            }},
+            result={
+                "promotion_gates": {
+                    "candidate_digest": digest, "regression": "passed", "security": "passed", "cost": "passed",
+                },
+                "holdout_manifest": {"digest": "c" * 64},
+                "holdout_evaluation": {
+                    "status": "passed", "manifest_digest": "c" * 64, "judge_revision": "fixture-v1",
+                },
+            },
         )
         db.add_all([policy, experiment])
         await db.flush()

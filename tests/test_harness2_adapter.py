@@ -241,16 +241,24 @@ def test_candidate_delete_rejects_symlink_escape(tmp_path) -> None:
 
 def test_promotion_requires_exact_candidate_and_all_fixed_gates() -> None:
     digest = "a" * 64
+    manifest_digest = "b" * 64
     result = {
         "promotion_gates": {
             "candidate_digest": digest,
             "regression": "passed",
             "security": "passed",
             "cost": "passed",
-        }
+        },
+        "holdout_manifest": {"digest": manifest_digest},
+        "holdout_evaluation": {
+            "status": "passed", "manifest_digest": manifest_digest, "judge_revision": "judge-v1"
+        },
     }
     assert _promotion_gates_passed(result, digest)
     assert not _promotion_gates_passed(result, "b" * 64)
+    assert not _promotion_gates_passed(
+        {**result, "holdout_evaluation": {"status": "unknown"}}, digest
+    )
     assert not _promotion_gates_passed(
         {"promotion_gates": {**result["promotion_gates"], "security": "unknown"}}, digest
     )

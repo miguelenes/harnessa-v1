@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     openspec_require_signoff: bool = False
     harness2_max_output_tokens: int = Field(default=4096, ge=256, le=16_384)
     harness2_max_probe_concurrency: int = Field(default=3, ge=1, le=3)
+    harness2_holdout_timeout_seconds: int = Field(default=300, ge=1, le=3600)
 
 
 settings = Settings()

@@ -23,6 +23,7 @@ from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.async_bridge import call_on_event_loop
 from harnessa.adapters.execution import RunInput, TaskInput
 from harnessa.adapters.harness2 import component_diff, validate_product_tree
+from harnessa.adapters.protocols import HarnessEvaluator
 from harnessa.adapters.specification_workspace import SpecificationWorkspaceError
 from harnessa.config import settings
 from harnessa.contracts import ModelPoolKind
@@ -336,10 +337,12 @@ class HarnessExperimentWorker:
         self, execution: ACPExecutionAdapter | None, *,
         sessions: async_sessionmaker[AsyncSession] = SessionLocal,
         worker_id: str = "harness-experiment-worker",
+        evaluator: HarnessEvaluator | None = None,
     ) -> None:
         self.execution = execution
         self._sessions = sessions
         self.worker_id = worker_id[:200]
+        self.evaluator = evaluator
 
     async def run_once(self) -> bool:
         if self.execution is None or not self.execution.available:
@@ -453,8 +456,21 @@ class HarnessExperimentWorker:
                 return
             await self._execute_composed(frozen, adapter, result)
             await self._persist(frozen, adapter, result)
-            successful = result.get("comparison_successful") is True and result.get("composed_successful") is True
-            await self._finish(experiment_id, attempt, "succeeded" if successful else "failed", None if successful else "Baseline, candidate, or composed execution did not complete")
+            holdout = await self._grade_holdout(frozen, result)
+            successful = (
+                result.get("comparison_successful") is True
+                and result.get("composed_successful") is True
+                and holdout.get("status") == "passed"
+            )
+            terminal_status = "succeeded" if successful else (
+                "blocked" if holdout.get("status") in {"unavailable", "unknown"} else "failed"
+            )
+            error = None if successful else (
+                "Independent holdout grading is unavailable"
+                if terminal_status == "blocked"
+                else "Baseline, candidate, composed execution, or holdout gate failed"
+            )
+            await self._finish(experiment_id, attempt, terminal_status, error)
         finally:
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
@@ -581,6 +597,7 @@ class HarnessExperimentWorker:
             ):
                 return
             base_tree = harness_tree.read_tree(adapter.substrate.surface(), adapter.base_harness())
+            holdout_artifacts: list[dict[str, Any]] = []
             for record in adapter.records:
                 trace = (Path(record["run_dir"]) / "trajectory.txt").read_bytes()[:200_000]
                 store = LocalArtifactStore(Path(settings.artifact_root))
@@ -593,6 +610,29 @@ class HarnessExperimentWorker:
                 known_tokens = [int(x.input_tokens) + int(x.output_tokens) for x in attempts
                                 if x.usage_known and x.input_tokens is not None and x.output_tokens is not None]
                 known_cost = [(x.billed_usd or 0) + (x.estimated_usd or 0) for x in metrics if x.usage_known]
+                run_id = UUID(record["run_uuid"])
+                run_artifacts = list(await db.scalars(select(RunArtifact).where(
+                    RunArtifact.run_id == run_id,
+                    RunArtifact.fencing_token == frozen.claim_attempt,
+                )))
+                holdout_artifacts.append({
+                    "phase": record["phase"],
+                    "run_id": str(run_id),
+                    "harness_digest": record["harness_digest"],
+                    "trace": {
+                        "sha256": stored.digest,
+                        "size_bytes": stored.size_bytes,
+                    },
+                    "deliverable": record["delivered"],
+                    "artifacts": [
+                        {
+                            "sha256": item.digest,
+                            "media_type": item.media_type,
+                            "size_bytes": item.size_bytes,
+                        }
+                        for item in run_artifacts
+                    ],
+                })
                 db.add(HarnessProbeRun(
                     organization_id=frozen.organization_id, project_id=frozen.project_id, task_id=frozen.task_id,
                     experiment_id=frozen.experiment_id, label=record["label"][:100], phase=record["phase"], status=record["status"],
@@ -634,11 +674,129 @@ class HarnessExperimentWorker:
                     and len(known_proposer_tokens) == len(proposer_metrics)
                     and len(known_proposer_cost) == len(proposer_metrics),
                 }
+                manifest = {
+                    "schema_version": 1,
+                    "experiment_id": str(frozen.experiment_id),
+                    "task_id": str(frozen.task_id),
+                    "project_id": str(frozen.project_id),
+                    "attempt": frozen.claim_attempt,
+                    "base_sha": frozen.base_sha,
+                    "specification_hash": frozen.specification_hash,
+                    "specification_revision": frozen.specification_revision,
+                    "policy_revision": frozen.policy_revision,
+                    "harness2_revision": frozen.tool_revision,
+                    "mode": frozen.mode,
+                    "k": frozen.k,
+                    "route_alias": frozen.route_alias,
+                    "image_revision": frozen.image_revision,
+                    "artifacts": holdout_artifacts,
+                }
+                manifest_bytes = json.dumps(
+                    manifest, sort_keys=True, separators=(",", ":")
+                ).encode()
+                result["holdout_manifest"] = {
+                    **manifest,
+                    "digest": hashlib.sha256(manifest_bytes).hexdigest(),
+                }
                 exp.baseline_digest = next((r["harness_digest"] for r in adapter.records if r["phase"] == "baseline"), None)
                 exp.result = result
                 result_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
                 stored_result = await asyncio.to_thread(LocalArtifactStore(Path(settings.artifact_root)).put_bytes, result_bytes, media_type="application/vnd.harnessa.harness-experiment+json")
                 exp.result_digest, exp.result_storage_key, exp.result_size_bytes = stored_result.digest, stored_result.storage_key, stored_result.size_bytes
+            await db.commit()
+
+    async def _grade_holdout(
+        self, frozen: FrozenExperiment, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Grade only finalized CAS references; never return grader feedback to an agent."""
+        manifest = result.get("holdout_manifest")
+        manifest_digest = manifest.get("digest") if isinstance(manifest, dict) else None
+        safe: dict[str, Any] = {
+            "status": "unavailable",
+            "reason_code": "evaluator_not_configured",
+            "manifest_digest": manifest_digest,
+        }
+        if self.evaluator is not None and isinstance(manifest, dict) and isinstance(manifest_digest, str):
+            try:
+                async with asyncio.timeout(settings.harness2_holdout_timeout_seconds):
+                    raw = await self.evaluator.evaluate(manifest)
+                if isinstance(raw, Mapping):
+                    raw_bytes = json.dumps(
+                        dict(raw), sort_keys=True, separators=(",", ":"), default=str
+                    ).encode()
+                    if len(raw_bytes) <= 64_000:
+                        status = raw.get("status")
+                        judge_revision = raw.get("judge_revision")
+                        if (
+                            status in {"passed", "failed"}
+                            and raw.get("manifest_digest") == manifest_digest
+                            and isinstance(judge_revision, str) and judge_revision
+                        ):
+                            stored = await asyncio.to_thread(
+                                LocalArtifactStore(Path(settings.artifact_root)).put_bytes,
+                                raw_bytes,
+                                media_type="application/vnd.harnessa.holdout-evaluation+json",
+                            )
+                            safe = {
+                                "status": status,
+                                "manifest_digest": manifest_digest,
+                                "judge_revision": judge_revision[:120],
+                                "result_digest": stored.digest,
+                                "result_size_bytes": stored.size_bytes,
+                            }
+                        else:
+                            safe = {
+                                "status": "unknown",
+                                "reason_code": "invalid_evaluator_receipt",
+                                "manifest_digest": manifest_digest,
+                            }
+                    else:
+                        safe = {
+                            "status": "unknown",
+                            "reason_code": "evaluator_receipt_too_large",
+                            "manifest_digest": manifest_digest,
+                        }
+                else:
+                    safe["status"], safe["reason_code"] = "unknown", "invalid_evaluator_receipt"
+            except TimeoutError:
+                safe["status"], safe["reason_code"] = "unknown", "evaluator_timeout"
+            except Exception as exc:  # noqa: BLE001 - evaluator outage must not bypass the gate
+                safe["status"], safe["reason_code"] = "unknown", f"evaluator_error_{type(exc).__name__}"
+        result["holdout_evaluation"] = safe
+        await self._persist_holdout_evaluation(frozen, result)
+        return safe
+
+    async def _persist_holdout_evaluation(
+        self, frozen: FrozenExperiment, result: dict[str, Any]
+    ) -> None:
+        async with self._sessions() as db:
+            exp = await db.scalar(select(HarnessExperiment).where(
+                HarnessExperiment.id == frozen.experiment_id
+            ).with_for_update())
+            policy = await db.scalar(select(HarnessPolicy).where(
+                HarnessPolicy.project_id == frozen.project_id
+            ))
+            interview = await db.scalar(select(SpecificationInterview).where(
+                SpecificationInterview.task_id == frozen.task_id
+            ))
+            if (
+                exp is None or not _experiment_current(exp, frozen)
+                or policy is None or policy.revision != frozen.policy_revision
+                or interview is None or interview.readiness_state != "READY"
+                or (interview.base_sha, interview.artifact_hash, interview.revision)
+                != (frozen.base_sha, frozen.specification_hash, frozen.specification_revision)
+            ):
+                return
+            exp.result = dict(result)
+            result_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+            stored = await asyncio.to_thread(
+                LocalArtifactStore(Path(settings.artifact_root)).put_bytes,
+                result_bytes,
+                media_type="application/vnd.harnessa.harness-experiment+json",
+            )
+            exp.result_digest = stored.digest
+            exp.result_storage_key = stored.storage_key
+            exp.result_size_bytes = stored.size_bytes
             await db.commit()
 
     async def _cancelled(self, experiment_id: UUID, attempt: int) -> bool:

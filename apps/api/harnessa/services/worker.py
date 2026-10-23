@@ -15,6 +15,7 @@ from harnessa.adapters.acp_execution import ACPExecutionAdapter
 from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.execution import ExecutionAdapter, UnconfiguredExecutionAdapter
 from harnessa.adapters.github_effects import GitHubEffectReconciler
+from harnessa.adapters.protocols import HarnessEvaluator
 from harnessa.adapters.sandbox_policy import SandboxLimits
 from harnessa.config import settings
 from harnessa.db.session import SessionLocal
@@ -72,7 +73,7 @@ def _configured_execution_adapter() -> ExecutionAdapter:
     )
 
 
-async def run() -> None:
+async def run(*, harness_evaluator: HarnessEvaluator | None = None) -> None:
     """Run dispatch and recovery loops; no fake or simulated production executor exists."""
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     owner = f"{socket.gethostname()}:{os.getpid()}:{uuid4()}"
@@ -81,7 +82,9 @@ async def run() -> None:
     scheduler = Scheduler()
     adapter = _configured_execution_adapter()
     harness_execution = adapter if isinstance(adapter, ACPExecutionAdapter) else None
-    harness_worker = HarnessExperimentWorker(harness_execution, worker_id=owner)
+    harness_worker = HarnessExperimentWorker(
+        harness_execution, worker_id=owner, evaluator=harness_evaluator
+    )
 
     async def current_execution_fence(run_id: UUID, fencing_token: int) -> bool:
         return await scheduler.is_current_fence(run_id, fencing_token) or await harness_worker.is_current_fence(
