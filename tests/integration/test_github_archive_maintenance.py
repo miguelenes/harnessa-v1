@@ -610,6 +610,27 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
             )
         )
         assert outcome.state == "ignored"
+    remote_issue_states = {
+        "/repos/fixture/specifications/issues/19": {
+            "id": 888,
+            "number": 19,
+            "title": issue_payload["issue"]["title"],
+            "body": issue_payload["issue"]["body"],
+            "html_url": issue_payload["issue"]["html_url"],
+            "state": "open",
+            "labels": [{"name": "harnessa"}],
+        }
+    }
+
+    class CurrentIssueClient:
+        async def request_installation(self, **kwargs: object) -> dict[str, object]:
+            assert kwargs["method"] == "GET"
+            path = kwargs["path"]
+            assert isinstance(path, str)
+            assert kwargs["permissions"] == {"issues": "read"}
+            return remote_issue_states[path]
+
+    monkeypatch.setattr(github_processor, "GitHubAppClient", CurrentIssueClient)
     unchanged = await issue_processor.process(
         DeliveryEnvelope(
             id=uuid4(),
@@ -640,11 +661,116 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
             action="edited",
             installation_number=456,
             github_repository_id=4321,
-            payload={"repository": {"id": 4321}, "issue": {"id": 902}},
+            payload={"repository": {"id": 4321}, "issue": {"id": 902, "number": 21}},
             delivery_id="issue-edit-untracked",
         )
     )
-    assert untracked_edit.result["reason"] == "untracked_issue"
+    assert untracked_edit.result["reason"] == "sender_not_mapped"
+    current_issue = {
+        "id": 902,
+        "number": 21,
+        "title": "Current title after an early edit",
+        "body": "Authoritative current issue body.",
+        "html_url": "https://github.test/fixture/specifications/issues/21",
+        "state": "open",
+        "labels": [{"name": "harnessa"}],
+    }
+    remote_issue_states["/repos/fixture/specifications/issues/21"] = current_issue
+    reordered_edit_payload = {
+        "action": "edited",
+        "installation": {"id": 456},
+        "repository": {"id": 4321, "full_name": "fixture/specifications"},
+        "sender": {"id": 789},
+        "issue": {
+            "id": 902,
+            "number": 21,
+            "title": "Stale edit delivery title",
+            "body": "Stale edit delivery body.",
+        },
+    }
+    reordered_edit_body = json.dumps(reordered_edit_payload).encode()
+    reordered_edit_signature = (
+        "sha256="
+        + hmac.new(b"fixture-webhook-secret", reordered_edit_body, hashlib.sha256).hexdigest()
+    )
+    async with SessionLocal() as db:
+        reordered_edit_receipt = await github_routes.receive_github_webhook(
+            webhook_request(reordered_edit_body),
+            Response(),
+            "123",
+            "a902-0001",
+            "issues",
+            reordered_edit_signature,
+            db,
+        )
+    assert reordered_edit_receipt.duplicate is False
+    assert await process_github_webhook_outbox(
+        GitHubWebhookProcessor(), owner_id="github-reordered-edit-first"
+    ) == 1
+    async with SessionLocal() as db:
+        reordered_edit_delivery = await db.scalar(
+            select(GitHubWebhookDelivery).where(
+                GitHubWebhookDelivery.delivery_id == "a902-0001"
+            )
+        )
+        assert reordered_edit_delivery is not None
+        assert reordered_edit_delivery.status == "processed"
+        assert reordered_edit_delivery.result["created_from_current_state"] is True
+    stale_open_payload = {
+        "action": "opened",
+        "installation": {"id": 456},
+        "repository": {"id": 4321, "full_name": "fixture/specifications"},
+        "sender": {"id": 789},
+        "issue": {
+            "id": 902,
+            "number": 21,
+            "title": "Older open payload title",
+            "body": "Older open payload body.",
+            "html_url": current_issue["html_url"],
+            "labels": [{"name": "harnessa"}],
+        },
+    }
+    stale_open_body = json.dumps(stale_open_payload).encode()
+    stale_open_signature = (
+        "sha256="
+        + hmac.new(b"fixture-webhook-secret", stale_open_body, hashlib.sha256).hexdigest()
+    )
+    async with SessionLocal() as db:
+        stale_open_receipt = await github_routes.receive_github_webhook(
+            webhook_request(stale_open_body),
+            Response(),
+            "123",
+            "a902-0002",
+            "issues",
+            stale_open_signature,
+            db,
+        )
+    assert stale_open_receipt.duplicate is False
+    assert await process_github_webhook_outbox(
+        GitHubWebhookProcessor(), owner_id="github-open-after-edit"
+    ) == 1
+    async with SessionLocal() as db:
+        reordered_sync = await db.scalar(
+            select(GitHubSyncObject).where(
+                GitHubSyncObject.repository_link_id == link.id,
+                GitHubSyncObject.object_kind == "issue",
+                GitHubSyncObject.github_object_id == "902",
+            )
+        )
+        assert reordered_sync is not None
+        assert reordered_sync.field_baseline == {
+            "title": current_issue["title"],
+            "body": current_issue["body"],
+        }
+        interview = await db.scalar(
+            select(SpecificationInterview).where(
+                SpecificationInterview.task_id == reordered_sync.task_id
+            )
+        )
+        assert interview is not None
+        assert interview.topic == (
+            "Current title after an early edit\n\nAuthoritative current issue body."
+        )
     edit_delivery = DeliveryEnvelope(
         id=uuid4(),
         organization_id=organization_id,
@@ -660,6 +786,9 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
         },
         delivery_id="issue-edit-delivery",
     )
+    issue_888 = remote_issue_states["/repos/fixture/specifications/issues/19"]
+    assert isinstance(issue_888, dict)
+    issue_888["body"] = "human edit"
     edited = await issue_processor.process(edit_delivery)
     assert edited.result["conflict_fields"] == ["body"]
 
@@ -901,7 +1030,10 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
             )
         if path == "/repos/fixture/specifications/pulls" and request.method == "GET":
             return httpx.Response(200, json=[])
-        if path == "/repos/fixture/specifications/issues/19/comments":
+        if path in {
+            "/repos/fixture/specifications/issues/19/comments",
+            "/repos/fixture/specifications/issues/21/comments",
+        }:
             if request.method == "GET":
                 return httpx.Response(200, json=[])
             assert request.method == "POST" and body is not None
@@ -1110,10 +1242,10 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
     effects_processed = await reconcile_effect_intents(
         github_effects.GitHubEffectReconciler(workspace_manager=manager)
     )
-    assert effects_processed == 3
+    assert effects_processed == 4
     async with SessionLocal() as db:
         effect_intents = (await db.scalars(select(EffectIntent))).all()
-        assert len(effect_intents) == 3
+        assert len(effect_intents) == 4
         assert all(intent.status == "completed" for intent in effect_intents)
         review_sync = await db.scalar(
             select(GitHubSyncObject).where(
@@ -1362,7 +1494,7 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
     assert outbound_effects == 2
     async with SessionLocal() as db:
         effects = (await db.scalars(select(EffectIntent))).all()
-        assert len(effects) == 5
+        assert len(effects) == 6
         assert all(effect.status == "completed" for effect in effects)
     assert any(
         method == "POST" and path == "/repos/fixture/specifications/issues"

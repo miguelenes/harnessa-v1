@@ -592,6 +592,14 @@ class GitHubWebhookProcessor:
             if scope is None:
                 return DeliveryOutcome("ignored", {"reason": "repository_not_opted_in"})
             installation, link = scope
+            locked_link = await db.scalar(
+                select(GitHubRepositoryLink)
+                .where(GitHubRepositoryLink.id == link.id)
+                .with_for_update()
+            )
+            if locked_link is None or not locked_link.opted_in or locked_link.setup_status != "ready":
+                return DeliveryOutcome("ignored", {"reason": "repository_not_opted_in"})
+            link = locked_link
             if not any(
                 isinstance(label, dict)
                 and isinstance(label.get("name"), str)
@@ -681,7 +689,68 @@ class GitHubWebhookProcessor:
             scope = await self._scope(db, delivery, delivery.payload)
             if scope is None:
                 return DeliveryOutcome("ignored", {"reason": "repository_not_opted_in"})
-            _, link = scope
+            installation, link = scope
+            row = await db.scalar(
+                select(GitHubSyncObject).where(
+                    GitHubSyncObject.repository_link_id == link.id,
+                    GitHubSyncObject.object_kind == "issue",
+                    GitHubSyncObject.github_object_id == str(issue["id"]),
+                )
+            )
+            event_number = issue.get("number")
+            issue_number = (
+                event_number
+                if isinstance(event_number, int) and event_number > 0
+                else (row.object_number if row is not None else None)
+            )
+            if issue_number is None:
+                return DeliveryOutcome("ignored", {"reason": "issue_identity_missing"})
+            app = await db.get(GitHubAppConfiguration, installation.app_configuration_id)
+            if app is None:
+                return DeliveryOutcome("ignored", {"reason": "app_configuration_missing"})
+            # An edit may be the first delivery claimed after a concurrent/out-of-order
+            # webhook. Read GitHub's current state before creating a task or comparing
+            # fields, so an older opened payload cannot win that race.
+            actor_pair = (
+                await self._mapped_actor(db, installation.id, delivery.payload.get("sender"))
+                if row is None
+                else None
+            )
+            if row is None and actor_pair is None:
+                return DeliveryOutcome("ignored", {"reason": "sender_not_mapped"})
+            app_snapshot = (app.app_id, app.private_key_secret_ref)
+            installation_number = installation.installation_id
+            repository_id = link.github_repository_id
+            owner, name = link.owner, link.name
+        current_issue = await GitHubAppClient().request_installation(
+            app_id=app_snapshot[0],
+            private_key_reference=app_snapshot[1],
+            installation_id=installation_number,
+            repository_id=repository_id,
+            method="GET",
+            path=f"/repos/{owner}/{name}/issues/{issue_number}",
+            permissions={"issues": "read"},
+        )
+        if (
+            not isinstance(current_issue, dict)
+            or current_issue.get("id") != issue["id"]
+            or current_issue.get("number") != issue_number
+            or "pull_request" in current_issue
+        ):
+            return DeliveryOutcome("ignored", {"reason": "current_issue_identity_mismatch"})
+        async with self.session_factory() as db:
+            scope = await self._scope(db, delivery, delivery.payload)
+            if scope is None:
+                return DeliveryOutcome("ignored", {"reason": "repository_not_opted_in"})
+            installation, link = scope
+            locked_link = await db.scalar(
+                select(GitHubRepositoryLink)
+                .where(GitHubRepositoryLink.id == link.id)
+                .with_for_update()
+            )
+            if locked_link is None or not locked_link.opted_in or locked_link.setup_status != "ready":
+                return DeliveryOutcome("ignored", {"reason": "repository_not_opted_in"})
+            link = locked_link
             row = await db.scalar(
                 select(GitHubSyncObject)
                 .where(
@@ -692,11 +761,87 @@ class GitHubWebhookProcessor:
                 .with_for_update()
             )
             if row is None:
-                return DeliveryOutcome("ignored", {"reason": "untracked_issue"})
+                actor_pair = await self._mapped_actor(
+                    db, installation.id, delivery.payload.get("sender")
+                )
+                if actor_pair is None:
+                    return DeliveryOutcome("ignored", {"reason": "sender_not_mapped"})
+                if not any(
+                    isinstance(label, dict)
+                    and isinstance(label.get("name"), str)
+                    and label["name"].casefold() == link.topic_label.casefold()
+                    for label in current_issue.get("labels", [])
+                    if isinstance(current_issue.get("labels"), list)
+                ):
+                    return DeliveryOutcome("ignored", {"reason": "topic_label_missing"})
+                if current_issue.get("state") != "open":
+                    return DeliveryOutcome("ignored", {"reason": "issue_not_open"})
+                title = current_issue.get("title")
+                if not isinstance(title, str) or not title.strip():
+                    return DeliveryOutcome("ignored", {"reason": "issue_title_missing"})
+                actor, _ = actor_pair
+                body = current_issue.get("body")
+                topic = title.strip()[:300]
+                if isinstance(body, str) and body.strip():
+                    topic += "\n\n" + body.strip()[:12000]
+                interview, _ = await create_interview(
+                    db,
+                    project_id=link.project_id,
+                    repository_id=link.repository_id,
+                    actor=actor,
+                    topic=topic,
+                    idempotency_key=(
+                        f"github-issue:{installation.installation_id}:{issue['id']}"
+                    ),
+                )
+                row = GitHubSyncObject(
+                    organization_id=link.organization_id,
+                    project_id=link.project_id,
+                    repository_link_id=link.id,
+                    task_id=interview.task_id,
+                    object_kind="issue",
+                    github_object_id=str(issue["id"]),
+                    object_number=issue_number,
+                    stable_key=(
+                        f"github-issue:{installation.installation_id}:{issue['id']}"
+                    ),
+                    url=(
+                        current_issue.get("html_url")
+                        if isinstance(current_issue.get("html_url"), str)
+                        else None
+                    ),
+                    state="open",
+                    field_baseline={
+                        "title": title,
+                        "body": body if isinstance(body, str) else "",
+                    },
+                )
+                db.add(row)
+                link.last_synced_at = datetime.now(UTC)
+                await self._ensure_issue_comment(
+                    db,
+                    link.id,
+                    issue_number,
+                    interview.task_id,
+                    f"github-issue-open:{installation.installation_id}:{issue['id']}",
+                )
+                await db.commit()
+                return DeliveryOutcome(
+                    "processed",
+                    {
+                        "created_from_current_state": True,
+                        "task_id": str(interview.task_id),
+                        "interview_id": str(interview.id),
+                    },
+                )
             baseline = row.field_baseline
             changes: dict[str, Any] = {}
             for field in ("title", "body"):
-                current = issue.get(field) if isinstance(issue.get(field), str) else ""
+                current = (
+                    current_issue.get(field)
+                    if isinstance(current_issue.get(field), str)
+                    else ""
+                )
                 if current != baseline.get(field):
                     changes[field] = {"synchronized": baseline.get(field), "remote": current}
             if changes:
