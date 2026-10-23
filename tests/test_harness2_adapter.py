@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from harnessa.adapters.harness2 import (
@@ -11,13 +15,19 @@ from harnessa.adapters.harness2 import (
     UPSTREAM_REVISION,
     validate_product_tree,
 )
-from harnessa.api.harness_routes import _promotion_gates_passed
+from harnessa.api.harness_routes import (
+    _promotion_gates_passed,
+    apply_reviewed_experience_transition,
+)
 from harnessa.services.harness_adaptation import (
+    FrozenExperiment,
+    GatewayHarness2Proposer,
     HarnessAdaptationError,
     _context_payload,
     _parse_edit_response,
     apply_candidate_edits,
 )
+from harnessa.services.verification_workflow import _harness_learning_hook
 
 
 def test_manifest_maps_all_upstream_component_categories() -> None:
@@ -107,6 +117,62 @@ def test_promotion_requires_exact_candidate_and_all_fixed_gates() -> None:
     assert not _promotion_gates_passed(
         {"promotion_gates": {**result["promotion_gates"], "security": "unknown"}}, digest
     )
+
+
+def test_learning_hook_requires_successful_matched_probe_evidence() -> None:
+    experiment = SimpleNamespace(
+        id=uuid4(),
+        status="succeeded",
+        result={"experience_candidate": {"cue": "specific cue", "lesson": "bounded lesson"}},
+    )
+    probes = [
+        SimpleNamespace(phase=phase, status="succeeded", trace_digest=str(index) * 64, label=phase)
+        for index, phase in enumerate(("baseline", "candidate", "composed"), 1)
+    ]
+    hook = _harness_learning_hook(experiment, probes)
+    assert hook["triggered"] is True
+    assert len(hook["evidence_refs"]) == 3
+    assert _harness_learning_hook(experiment, probes[:2])["triggered"] is False
+
+
+def test_reviewed_rollback_restores_previous_version_and_supersedes_current() -> None:
+    previous = SimpleNamespace(status="superseded")
+    current = SimpleNamespace(status="active")
+    apply_reviewed_experience_transition(previous, current, "rollback")
+    assert previous.status == "active"
+    assert current.status == "superseded"
+    with pytest.raises(ValueError, match="invalid target state"):
+        apply_reviewed_experience_transition(
+            SimpleNamespace(status="candidate"), current, "rollback"
+        )
+
+
+def test_cancelled_probe_stops_before_gateway_dispatch(tmp_path: Path) -> None:
+    cancelled = threading.Event()
+    cancelled.set()
+    proposer = GatewayHarness2Proposer(
+        FrozenExperiment(
+            experiment_id=uuid4(),
+            task_id=uuid4(),
+            project_id=uuid4(),
+            organization_id=uuid4(),
+            base_sha="a" * 40,
+            specification_hash="b" * 64,
+            specification_revision=1,
+            policy_revision=1,
+            mode="both",
+            k=1,
+            route_alias="not-used",
+            image_revision="image@test",
+            tool_revision="tools@test",
+            root=tmp_path,
+        ),
+        is_cancelled=cancelled,
+    )
+    from harness2.core.proposer import ProposerError
+
+    with pytest.raises(ProposerError, match="cancelled before probe dispatch"):
+        proposer.call("bounded task", tmp_path, "candidate.1")
 
 
 def test_pinned_upstream_demo_runs_both_modes_without_credentials(tmp_path) -> None:

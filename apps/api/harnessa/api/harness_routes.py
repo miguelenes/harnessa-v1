@@ -77,6 +77,18 @@ def _promotion_gates_passed(result: dict[str, Any], candidate_digest: str) -> bo
     )
 
 
+def apply_reviewed_experience_transition(target: Any, current: Any | None, action: str) -> None:
+    """Switch active experience versions only for a valid reviewed promote/rollback."""
+    valid_target = target.status == ("candidate" if action == "promote" else "superseded")
+    if action not in {"promote", "rollback"} or not valid_target:
+        raise ValueError("Reviewed experience transition has an invalid target state")
+    if action == "rollback" and (current is None or current.status != "active"):
+        raise ValueError("Rollback requires a current active version")
+    if current is not None:
+        current.status = "superseded"
+    target.status = "active"
+
+
 def _experiment_read(row: HarnessExperiment) -> ExperimentRead:
     return ExperimentRead(
         id=row.id,
@@ -352,9 +364,7 @@ async def promote_harness_experience(
         )
         .with_for_update()
     )
-    if active:
-        active.status = "superseded"
-    candidate.status = "active"
+    apply_reviewed_experience_transition(candidate, active, "promote")
     candidate.revalidated_at = datetime.now(UTC)
     decision = HarnessPromotion(
         organization_id=candidate.organization_id,
@@ -430,8 +440,7 @@ async def rollback_harness_experience(
     )
     if current is None or policy is None or policy.reviewed_promotion is not True:
         raise HTTPException(409, "Active version or reviewed rollback policy is unavailable")
-    current.status = "superseded"
-    target.status = "active"
+    apply_reviewed_experience_transition(target, current, "rollback")
     target.revalidated_at = datetime.now(UTC)
     db.add(
         HarnessPromotion(
