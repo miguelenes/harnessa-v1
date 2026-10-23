@@ -13,7 +13,7 @@ vi.mock("@dnd-kit/core", () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   KeyboardSensor: function KeyboardSensor() {},
   PointerSensor: function PointerSensor() {},
-  useDraggable: () => ({ attributes: {}, listeners: {}, setNodeRef: () => {}, isDragging: false }),
+  useDraggable: () => ({ attributes: { "aria-describedby": "DndDescribedBy-0" }, listeners: {}, setNodeRef: () => {}, isDragging: false }),
   useDroppable: () => ({ setNodeRef: () => {}, isOver: false }),
   useSensor: () => ({}),
   useSensors: (...sensors: unknown[]) => sensors,
@@ -90,6 +90,9 @@ describe("workspace routes and task board", () => {
     }
     expect(screen.getByText("QUEUED")).toBeTruthy();
     expect(screen.getByText("Spec READY · r2")).toBeTruthy();
+    const dragHandle = screen.getByRole("button", { name: "Drag task card task-1" });
+    expect(dragHandle.getAttribute("aria-describedby")).toContain("DndDescribedBy-0");
+    expect(dragHandle.getAttribute("aria-describedby")).toContain("task-title-task-1");
 
     fireEvent.click(screen.getByRole("button", { name: /Prepare release/ }));
     expect(await screen.findByRole("dialog", { name: "Prepare release" })).toBeTruthy();
@@ -259,7 +262,8 @@ describe("workspace routes and task board", () => {
     });
     render(<Workspace section="events" />);
     expect(await screen.findByText("Assistant update")).toBeTruthy();
-    await screen.findByText("Resume cursor: 17. Reconnect resumes persisted events; it does not start or cancel a run.");
+    await screen.findByText("Reconnect resumes persisted events; it does not start or cancel a run.");
+    expect(screen.queryByText(/Resume cursor|Update \d+/)).toBeNull();
     for (const summary of ["Run started", "Run finished", "Run failed", "Workflow step started", "Workflow step finished", "Tool started", "Tool finished", "Task state updated", "Task progress updated", "Workspace update"]) {
       expect(screen.getAllByText(summary).length).toBeGreaterThan(0);
     }
@@ -326,7 +330,8 @@ describe("workspace routes and task board", () => {
     });
     render(<Workspace section="events" />);
     expect(await screen.findByText("Task state updated")).toBeTruthy();
-    await screen.findByText("Resume cursor: 11. Reconnect resumes persisted events; it does not start or cancel a run.");
+    await screen.findByText("Reconnect resumes persisted events; it does not start or cancel a run.");
+    expect(screen.queryByText(/Resume cursor|Update \d+/)).toBeNull();
     expect(sessionStorage.getItem("harnessa.cursor.project-1")).toBe("11");
     expect(streamRequests).toBeGreaterThanOrEqual(2);
   });

@@ -107,6 +107,13 @@ async def test_project_event_stream_replays_heartbeats_and_recovers_expired_curs
         replay = "".join(replay_chunks)
         assert replay.startswith("retry: 3000")
         assert "id: " in replay and "data: " in replay
+        replay_ids = [
+            int(line.split(":", 1)[1])
+            for line in replay.splitlines()
+            if line.startswith("id:")
+        ]
+        assert replay_ids
+        assert all(left < right for left, right in zip(replay_ids, replay_ids[1:]))
 
         polls = 0
         heartbeat_request = SimpleNamespace(is_disconnected=disconnect_after_one_poll)
@@ -169,12 +176,15 @@ async def test_stream_disconnect_and_reconnect_do_not_create_or_cancel_runs() ->
             db,
         )
         first_chunks = [chunk async for chunk in first.body_iterator]
-        resume_cursor = max(
+        first_replay_ids = [
             int(line.split(":", 1)[1])
             for chunk in first_chunks
             for line in (chunk.decode() if isinstance(chunk, bytes) else chunk).splitlines()
             if line.startswith("id:")
-        )
+        ]
+        assert first_replay_ids
+        assert all(left < right for left, right in zip(first_replay_ids, first_replay_ids[1:]))
+        resume_cursor = first_replay_ids[-1]
 
         polls = 0
         second = await task_routes.stream_project_events(

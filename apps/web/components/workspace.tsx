@@ -56,6 +56,7 @@ function eventSummary(event: AgUiEvent): string {
 
 function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, isDragging } = useDraggable({ id: task.id, data: { task } });
+  const dragDescription = [attributes["aria-describedby"], `task-title-${task.id}`].filter(Boolean).join(" ");
   return <div ref={setNodeRef} className={`relative w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] ${isDragging ? "opacity-50" : ""}`} style={transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined}>
     <button type="button" onClick={onOpen} className="w-full rounded-lg p-3 pr-10 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]" aria-label={`${task.title}, ${LABELS[task.stage]}; open task details for authorized transition actions`}>
       <span id={`task-title-${task.id}`} className="block font-medium leading-5">{task.title}</span>
@@ -64,7 +65,7 @@ function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
       {task.blocked_reason && <span className="mt-2 block text-xs text-[var(--danger)]">Blocked: {task.blocked_reason}</span>}
       <span className="mt-2 block font-mono text-[11px] text-[var(--muted-foreground)]">v{task.version}</span>
     </button>
-    <button type="button" ref={setActivatorNodeRef} {...listeners} {...attributes} aria-label={`Drag task card ${task.id.slice(0, 8)}`} aria-describedby={`task-title-${task.id}`} className="absolute right-2 top-2 rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]"><GripVertical size={16} aria-hidden="true" /></button>
+    <button type="button" ref={setActivatorNodeRef} {...listeners} {...attributes} aria-label={`Drag task card ${task.id.slice(0, 8)}`} aria-describedby={dragDescription} className="absolute right-2 top-2 rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]"><GripVertical size={16} aria-hidden="true" /></button>
   </div>;
 }
 
@@ -90,7 +91,6 @@ export function Workspace({ section: rawSection }: { section: string }) {
   const [loading, setLoading] = useState(true);
   const [live, setLive] = useState(false);
   const [projectEvents, setProjectEvents] = useState<ProjectEvent[]>([]);
-  const [eventCursor, setEventCursor] = useState(0);
   const dark = useSyncExternalStore(subscribeTheme, readTheme, () => false);
   const sensors = useDnd();
   const activeTaskId = useRef<string | undefined>(undefined);
@@ -125,7 +125,6 @@ export function Workspace({ section: rawSection }: { section: string }) {
     const key = `harnessa.cursor.${projectId}`;
     async function connect() {
       let cursor = Number(sessionStorage.getItem(key) ?? "0");
-      setEventCursor(cursor);
       setProjectEvents([]);
       while (!stopped) {
         controller = new AbortController();
@@ -136,7 +135,6 @@ export function Workspace({ section: rawSection }: { section: string }) {
             await loadTasks(projectId);
             cursor = Number(detail?.detail?.oldest_available_cursor ?? 0);
             sessionStorage.setItem(key, String(cursor));
-            setEventCursor(cursor);
             setProjectEvents([]);
             continue;
           }
@@ -162,7 +160,6 @@ export function Workspace({ section: rawSection }: { section: string }) {
               // Advance even when the encoded event is malformed or from a future extension.
               cursor = sequence;
               sessionStorage.setItem(key, String(cursor));
-              setEventCursor(cursor);
               if (!data) continue;
               try {
                 const candidate = JSON.parse(data) as UnrecognizedEvent;
@@ -269,7 +266,7 @@ export function Workspace({ section: rawSection }: { section: string }) {
           {loading ? <div role="status" className="flex items-center gap-2 py-12 text-sm"><LoaderCircle className="animate-spin" size={18} />Loading tasks…</div> : tasks.length === 0 ? <Card><CardHeader><CardTitle>No tasks yet</CardTitle><CardDescription>Create a task to start a governed workflow.</CardDescription></CardHeader></Card> : <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragTask(null)}><div className="flex gap-3 overflow-x-auto pb-4" aria-label="Ten-column task board">{COLUMNS.map((stage) => <BoardColumn key={stage} stage={stage} tasks={tasks.filter((task) => task.stage === stage)} open={setActive} disabled={dragTask ? !(dragTask.allowed_transitions ?? []).includes(stage) : false} />)}</div></DndContext>}
           {!loading && tasks.some((task) => ["REJECTED", "CANCELLED", "RETRY_EXHAUSTED"].includes(task.stage)) && <section aria-label="Terminal tasks" className="mt-5"><h2 className="mb-2 text-sm font-semibold">Terminal tasks</h2><ul className="space-y-2">{tasks.filter((task) => ["REJECTED", "CANCELLED", "RETRY_EXHAUSTED"].includes(task.stage)).map((task) => <li key={task.id}><button className="flex w-full flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]" onClick={() => setActive(task)}><span className="font-medium">{task.title}</span><span className="flex flex-wrap gap-1.5"><Badge variant="outline">{LABELS[task.stage]}</Badge><Badge variant={task.run_status === "FAILED" ? "destructive" : "secondary"}>{task.run_status}</Badge>{task.specification_readiness_state && <Badge variant="outline">Spec {task.specification_readiness_state} · r{task.specification_revision}</Badge>}</span></button></li>)}</ul></section>}
           {active && <TaskInspector task={active} onClose={closeInspector} onMove={(target) => move(active, target)} onRefresh={() => refreshTask(active.id)} onError={setError} />}
-        </> : section === "events" ? <EventsView events={projectEvents} connected={live} cursor={eventCursor} /> : section === "openspec" ? <OpenSpecView projectId={projectId} /> : section === "harness" ? <HarnessStudioView projectId={projectId} tasks={tasks} /> : section === "evals" ? <EvaluationsView tasks={tasks} /> : <RoutingView projectId={projectId} />}
+        </> : section === "events" ? <EventsView events={projectEvents} connected={live} /> : section === "openspec" ? <OpenSpecView projectId={projectId} /> : section === "harness" ? <HarnessStudioView projectId={projectId} tasks={tasks} /> : section === "evals" ? <EvaluationsView tasks={tasks} /> : <RoutingView projectId={projectId} />}
       </section>
     </div>
   </main>;
@@ -480,6 +477,6 @@ function RoutingView({ projectId }: { projectId: string }) {
   return <div className="space-y-4"><Card><CardHeader><CardTitle>Model routing</CardTitle><CardDescription>Project-scoped usage, budgets, and redacted request ledger from authorized backend APIs. Provider credentials and endpoint secrets are never displayed.</CardDescription></CardHeader>{loading && <CardContent><p role="status">Loading routing status…</p></CardContent>}</Card>{error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}{usage && <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{[["Billed spend", `$${usage.billed_usd}`], ["Estimated spend", `$${usage.estimated_usd}`], ["Input tokens", usage.input_tokens.toLocaleString()], ["Output tokens", usage.output_tokens.toLocaleString()], ["Unknown usage", usage.unknown_usage_requests], ["Pending reservations", usage.pending_reservations]].map(([label, value]) => <Card key={label}><CardContent className="pt-5"><p className="text-xs text-[var(--muted-foreground)]">{label}</p><p className="mt-1 text-xl font-semibold">{value}</p></CardContent></Card>)}</div>}{budget ? <Card><CardHeader><CardTitle>Project budget policy</CardTitle><CardDescription>Per-project, task, and run limits · maximum {budget.max_attempts} attempts</CardDescription></CardHeader><CardContent><p>Project limit ${budget.project_limit_usd} · task limit ${budget.task_limit_usd} · run limit ${budget.run_limit_usd}</p></CardContent></Card> : !loading && <Card><CardHeader><CardTitle>No project budget configured</CardTitle><CardDescription>An administrator must configure a budget before paid routing actions can run.</CardDescription></CardHeader></Card>}{requests.length > 0 && <Card><CardHeader><CardTitle>Recent model requests</CardTitle><CardDescription>Ledger entries are read-only in this workspace.</CardDescription></CardHeader><CardContent><ul className="space-y-2">{requests.map((request) => <li key={request.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] p-3"><span>{request.model_alias}</span><span className="text-xs text-[var(--muted-foreground)]">{request.pool_name} · {request.event_type} · attempt {request.attempt}</span></li>)}</ul></CardContent></Card>}</div>;
 }
 
-function EventsView({ events, connected, cursor }: { events: ProjectEvent[]; connected: boolean; cursor: number }) {
-  return <div className="space-y-4"><Card><CardHeader><CardTitle>Durable project events</CardTitle><CardDescription>{connected ? "Connected. Replaying durable events and following new updates." : "Connecting or reconnecting to durable event replay…"}</CardDescription></CardHeader><CardContent><p className="font-mono text-xs text-[var(--muted-foreground)]">Resume cursor: {cursor}. Reconnect resumes persisted events; it does not start or cancel a run.</p></CardContent></Card>{events.length === 0 ? <Card><CardContent className="pt-5 text-sm text-[var(--muted-foreground)]">No retained events have arrived for this project.</CardContent></Card> : events.map(({ cursor: sequence, event }) => <Card key={sequence}><CardContent className="flex items-start gap-3 pt-4"><Activity size={17} className="mt-0.5 shrink-0 text-[var(--primary)]" aria-hidden="true" /><div className="min-w-0"><p className="text-sm font-medium">{eventSummary(event)}</p><p className="mt-1 font-mono text-xs text-[var(--muted-foreground)]">Update {sequence}</p></div></CardContent></Card>)}</div>;
+function EventsView({ events, connected }: { events: ProjectEvent[]; connected: boolean }) {
+  return <div className="space-y-4"><Card><CardHeader><CardTitle>Durable project events</CardTitle><CardDescription>{connected ? "Connected. Replaying durable events and following new updates." : "Connecting or reconnecting to durable event replay…"}</CardDescription></CardHeader><CardContent><p className="text-xs text-[var(--muted-foreground)]">Reconnect resumes persisted events; it does not start or cancel a run.</p></CardContent></Card>{events.length === 0 ? <Card><CardContent className="pt-5 text-sm text-[var(--muted-foreground)]">No retained events have arrived for this project.</CardContent></Card> : events.map(({ cursor: sequence, event }) => <Card key={sequence}><CardContent className="flex items-start gap-3 pt-4"><Activity size={17} className="mt-0.5 shrink-0 text-[var(--primary)]" aria-hidden="true" /><div className="min-w-0"><p className="text-sm font-medium">{eventSummary(event)}</p></div></CardContent></Card>)}</div>;
 }
