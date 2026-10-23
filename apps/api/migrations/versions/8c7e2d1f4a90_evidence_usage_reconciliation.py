@@ -90,5 +90,6 @@ def downgrade() -> None:
     op.create_check_constraint(
         "ck_model_ledger_event",
         "model_request_ledger",
-        "event_type IN ('reserved', 'attempt_started', 'attempt_failed', 'fallback_selected', 'attempt_succeeded', 'settled', 'stale_reconciled')",
+        # Keep this additive event valid so downgrade succeeds after usage has been reconciled.
+        "event_type IN ('reserved', 'attempt_started', 'attempt_failed', 'fallback_selected', 'attempt_succeeded', 'settled', 'stale_reconciled', 'usage_reconciled')",
     )

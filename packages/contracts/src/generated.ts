@@ -1132,7 +1132,7 @@ export interface paths {
         put?: never;
         /**
          * Reconcile Gateway Usage
-         * @description Import bounded, metadata-only LiteLLM observations without replaying requests.
+         * @description Import bounded gateway usage metadata from an authorized operator.
          */
         post: operations["reconcile_gateway_usage_projects__project_id__evidence_gateway_usage_reconcile_post"];
         delete?: never;
@@ -3623,6 +3623,12 @@ export interface components {
             /** Evidence Kind */
             evidence_kind: string;
         };
+        /** Harness2ComponentEvidence */
+        Harness2ComponentEvidence: {
+            component_id?: components["schemas"]["EvidenceTextValue"];
+            revision?: components["schemas"]["EvidenceTextValue"];
+            parent_component_id?: components["schemas"]["EvidenceTextValue"];
+        };
         /**
          * Harness2ImportFixture
          * @description Minimized, untrusted manifest contract for the M12 Harness² adapter.
@@ -3638,6 +3644,7 @@ export interface components {
             benchmark_task_id: string;
             /** Executor */
             executor: string;
+            executor_substrate?: components["schemas"]["EvidenceTextValue"];
             /** Recursion Mode */
             recursion_mode: string;
             /** K */
@@ -3651,6 +3658,12 @@ export interface components {
             result: string;
             candidate_revision: components["schemas"]["EvidenceTextValue"];
             judge_revision: components["schemas"]["EvidenceTextValue"];
+            /** Candidate Components */
+            candidate_components?: components["schemas"]["Harness2ComponentEvidence"][];
+            /** Probe Executions */
+            probe_executions?: components["schemas"]["Harness2ProbeEvidence"][];
+            composition?: components["schemas"]["EvidenceTextValue"];
+            adoption?: components["schemas"]["EvidenceTextValue"];
             /** Artifacts */
             artifacts: components["schemas"]["Harness2ArtifactEvidence"][];
             /**
@@ -3658,6 +3671,12 @@ export interface components {
              * @default untrusted_import
              */
             trust: string;
+        };
+        /** Harness2ProbeEvidence */
+        Harness2ProbeEvidence: {
+            probe_id?: components["schemas"]["EvidenceTextValue"];
+            result?: components["schemas"]["EvidenceTextValue"];
+            artifact_path?: components["schemas"]["EvidenceTextValue"];
         };
         /**
          * OrchestrationOperation

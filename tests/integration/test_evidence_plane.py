@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from harnessa.adapters.artifacts import LocalArtifactStore
+from harnessa.api import evidence_routes as evidence_routes_module
 from harnessa.api.evidence_routes import (
     list_project_evidence,
     reconcile_artifact_integrity,
@@ -68,6 +69,36 @@ async def test_gateway_usage_import_requires_operator_or_administrator():
                 actor,
                 db,
             )
+
+
+@pytest.mark.anyio
+async def test_evidence_projection_rechecks_membership_before_return(monkeypatch: pytest.MonkeyPatch):
+    fixture = await gateway_fixture()
+    original = evidence_routes_module.require_membership
+    calls = 0
+
+    async def revoke_after_read(db, actor, project_id):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise HTTPException(403, "Project access was revoked")
+        return await original(db, actor, project_id)
+
+    monkeypatch.setattr(evidence_routes_module, "require_membership", revoke_after_read)
+    async with SessionLocal() as db:
+        actor = await db.get(User, fixture["user_id"])
+        assert actor is not None
+        with pytest.raises(HTTPException, match="revoked"):
+            await list_project_evidence(
+                fixture["project_id"],
+                source=None,
+                revision=None,
+                cursor=None,
+                limit=50,
+                actor=actor,
+                db=db,
+            )
+    assert calls == 2
 
 
 @pytest.mark.anyio
@@ -165,6 +196,21 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
             created_by=first["user_id"],
         )
         db.add(spec_artifact)
+        db.add_all(
+            [
+                SpecificationArtifactRevision(
+                    interview_id=interview.id,
+                    revision=revision,
+                    base_sha="a" * 40,
+                    commit_sha=f"{revision:040x}",
+                    content_hash=f"{revision:064x}",
+                    paths=[f"openspec/specs/evidence/revision-{revision}.md"],
+                    change_summary=f"Revision {revision}",
+                    created_by=first["user_id"],
+                )
+                for revision in range(2, 107)
+            ]
+        )
         manifest = VerificationManifestRevision(
             organization_id=first["organization_id"],
             project_id=first["project_id"],
@@ -424,7 +470,10 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
         assert imported_event.gateway_usage_source_observation_id == "litellm-export-row-001"
 
         concurrent_observation = usage_observation.model_copy(
-            update={"source_observation_id": "litellm-export-row-concurrent"}
+            update={
+                "source_observation_id": "litellm-export-row-concurrent",
+                "input_tokens": None,
+            }
         )
 
         async def submit_usage():
@@ -448,6 +497,8 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
                 == "litellm-export-row-concurrent"
             )
         ) == 1
+        concurrent_event = await db.get(ModelRequestLedger, concurrent_results[0][0].ledger_event_id)
+        assert concurrent_event is not None and not concurrent_event.usage_known
         project_evidence = await list_project_evidence(
             first["project_id"],
             source="harnessa.operator_gateway_usage_import",
@@ -504,17 +555,43 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
             if sparse_matches or filtered_cursor is None:
                 break
         assert len(sparse_matches) == 1
-        page = await list_project_evidence(
-            first["project_id"],
-            task_id=first["task_id"],
-            source=None,
-            revision=None,
-            cursor=None,
-            limit=50,
-            actor=actor,
-            db=db,
-        )
-        assert {item.kind for item in page.items} >= {
+        spec_cursor = None
+        spec_ids: list[str] = []
+        while True:
+            spec_page = await list_project_evidence(
+                first["project_id"],
+                task_id=first["task_id"],
+                source="harnessa.specification",
+                revision=None,
+                cursor=spec_cursor,
+                limit=50,
+                actor=actor,
+                db=db,
+            )
+            spec_ids.extend(item.envelope.source_record_id.value for item in spec_page.items)
+            spec_cursor = spec_page.next_cursor
+            if spec_cursor is None:
+                break
+        assert len(spec_ids) == 106
+        assert len(set(spec_ids)) == 106
+        page_cursor = None
+        page_items = []
+        while True:
+            page = await list_project_evidence(
+                first["project_id"],
+                task_id=first["task_id"],
+                source=None,
+                revision=None,
+                cursor=page_cursor,
+                limit=50,
+                actor=actor,
+                db=db,
+            )
+            page_items.extend(page.items)
+            page_cursor = page.next_cursor
+            if page_cursor is None:
+                break
+        assert {item.kind for item in page_items} >= {
             "run",
             "domain_event",
             "model_request",
@@ -525,27 +602,31 @@ async def test_provenance_joins_sources_and_enforces_project_isolation(
             "git_effect",
             "artifact",
         }
-        specification = next(item for item in page.items if item.kind == "specification_revision")
+        specification = next(
+            item
+            for item in page_items
+            if item.kind == "specification_revision" and item.envelope.revision.value == "1"
+        )
         assert "readiness=READY" in specification.summary
         assert "base SHA=" + "a" * 40 in specification.summary
         verification = next(
             item
-            for item in page.items
+            for item in page_items
             if item.kind == "evaluation" and item.envelope.source_system == "harnessa.verification"
         )
         assert verification.summary == "verification passed"
-        github_object = next(item for item in page.items if item.kind == "github_object")
+        github_object = next(item for item in page_items if item.kind == "github_object")
         assert github_object.envelope.revision.value == "b" * 40
-        webhook = next(item for item in page.items if item.kind == "webhook_delivery")
+        webhook = next(item for item in page_items if item.kind == "webhook_delivery")
         assert webhook.envelope.webhook_delivery_id.value == "fixture-delivery-17"
-        stream = next(item for item in page.items if item.kind == "domain_event")
+        stream = next(item for item in page_items if item.kind == "domain_event")
         assert stream.envelope.stream_cursor.status.value == "known"
-        tool = next(item for item in page.items if item.envelope.tool_invocation_id.value)
+        tool = next(item for item in page_items if item.envelope.tool_invocation_id.value)
         assert tool.envelope.tool_invocation_id.value == "tool-call-a"
-        model_item = next(item for item in page.items if item.kind == "model_request")
+        model_item = next(item for item in page_items if item.kind == "model_request")
         assert "provider_reported=unknown" in model_item.summary
         assert "gateway_billed=unknown" in model_item.summary
-        assert "prompt-secret-fixture" not in str(page.model_dump())
+        assert "prompt-secret-fixture" not in str([item.model_dump() for item in page_items])
         with pytest.raises(HTTPException) as unauthorized:
             await list_project_evidence(
                 second["project_id"],

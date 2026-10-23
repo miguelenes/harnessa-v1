@@ -23,6 +23,8 @@ def test_evidence_cursor_round_trips_and_rejects_invalid_values():
     assert _cursor(_cursor_text(timestamp, identifier)) == (timestamp, identifier)
     with pytest.raises(HTTPException, match="Invalid evidence cursor"):
         _cursor("not-a-cursor")
+    with pytest.raises(HTTPException, match="Invalid evidence cursor"):
+        _cursor("a")
 
 
 def test_evidence_endpoint_requires_authenticated_project_membership():
@@ -74,6 +76,9 @@ def _fixture(content: bytes) -> Harness2ImportFixture:
 def test_harness2_fixture_checks_exact_file_set_and_content_digest():
     content = b'{"score": 0.75}'
     fixture = _fixture(content)
+    assert fixture.executor_substrate.status.value == "unknown"
+    assert fixture.composition.status.value == "unknown"
+    assert fixture.adoption.status.value == "unknown"
     assert validate_harness2_fixture(fixture, {"runs/lab/result.json": content}) == {
         "runs/lab/result.json": hashlib.sha256(content).hexdigest()
     }
@@ -87,6 +92,10 @@ def test_harness2_fixture_rejects_traversal_and_trust_elevation():
     content = b"x"
     fixture = _fixture(content).model_dump()
     fixture["artifacts"][0]["path"] = "../outside.json"
+    with pytest.raises(ValueError, match="relative"):
+        Harness2ImportFixture.model_validate(fixture)
+    fixture = _fixture(content).model_dump()
+    fixture["artifacts"][0]["path"] = r"..\outside.json"
     with pytest.raises(ValueError, match="relative"):
         Harness2ImportFixture.model_validate(fixture)
     fixture = _fixture(content).model_dump()

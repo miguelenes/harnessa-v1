@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from pathlib import PureWindowsPath
 from typing import Any, Literal
 from uuid import UUID
 
@@ -782,6 +783,30 @@ class Harness2ArtifactEvidence(BaseModel):
     evidence_kind: str = Field(min_length=1, max_length=80)
 
 
+class Harness2ComponentEvidence(BaseModel):
+    component_id: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    revision: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    parent_component_id: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+
+
+class Harness2ProbeEvidence(BaseModel):
+    probe_id: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    result: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    artifact_path: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+
+
 class Harness2ImportFixture(BaseModel):
     """Minimized, untrusted manifest contract for the M12 Harness² adapter."""
 
@@ -790,12 +815,23 @@ class Harness2ImportFixture(BaseModel):
     benchmark: str = Field(min_length=1, max_length=80)
     benchmark_task_id: str = Field(min_length=1, max_length=200)
     executor: str = Field(min_length=1, max_length=80)
+    executor_substrate: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
     recursion_mode: str = Field(min_length=1, max_length=40)
     k: int = Field(ge=1, le=1000)
     seed: int | None = None
     result: str = Field(pattern=r"^(passed|failed|unknown)$")
     candidate_revision: EvidenceTextValue
     judge_revision: EvidenceTextValue
+    candidate_components: list[Harness2ComponentEvidence] = Field(default_factory=list, max_length=500)
+    probe_executions: list[Harness2ProbeEvidence] = Field(default_factory=list, max_length=1000)
+    composition: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
+    adoption: EvidenceTextValue = Field(
+        default_factory=lambda: EvidenceTextValue(status=EvidenceValueStatus.UNKNOWN)
+    )
     artifacts: list[Harness2ArtifactEvidence] = Field(max_length=500)
     trust: str = "untrusted_import"
 
@@ -803,7 +839,11 @@ class Harness2ImportFixture(BaseModel):
     def validate_paths(self) -> Harness2ImportFixture:
         paths = [item.path for item in self.artifacts]
         if len(set(paths)) != len(paths) or any(
-            path.startswith("/") or ".." in path.split("/") for path in paths
+            path.startswith(("/", "\\"))
+            or ".." in path.replace("\\", "/").split("/")
+            or PureWindowsPath(path).is_absolute()
+            or PureWindowsPath(path).drive
+            for path in paths
         ):
             raise ValueError("Harness² artifact paths must be unique and relative")
         if self.trust != "untrusted_import":

@@ -365,6 +365,24 @@ async def list_project_evidence(
         task_id = selected_run.task_id
     boundary = _cursor(cursor)
     scan_boundaries: list[tuple[datetime, UUID]] = []
+    source_scan_models: dict[str, set[type[Any]]] = {
+        "harnessa.domain_event": {DomainEvent},
+        "harnessa.run": {Run},
+        "harnessa.task_transition": {TaskTransition},
+        "harnessa.specification": {SpecificationArtifactRevision},
+        "harnessa.specification_readiness": {SpecificationReadinessEvaluation},
+        "litellm.gateway_ledger": {ModelRequestLedger},
+        "harnessa.operator_gateway_usage_import": {ModelRequestLedger, GatewayUsageImport},
+        "harnessa.artifact_store": {RunArtifact},
+        "harnessa.verification": {VerificationExecution},
+        "harnessa.github_effect": {EffectIntent},
+        "github.reconciled_object": {GitHubSyncObject},
+        "harnessa.mcp_audit": {MCPToolAudit},
+        "github.webhook_delivery": {GitHubWebhookDelivery},
+    }
+    requested_source_models: set[type[Any]] | None = (
+        source_scan_models.get(source) if source else None
+    )
 
     async def fetch(model: Any, *filters: Any) -> list[Any]:
         conditions = [model.project_id == project_id, *filters]
@@ -388,7 +406,40 @@ async def list_project_evidence(
             .scalars()
             .all()
         )
-        if len(fetched) > limit:
+        if len(fetched) > limit and (
+            requested_source_models is None or model in requested_source_models
+        ):
+            scan_boundaries.append((fetched[-1].created_at, fetched[-1].id))
+        return fetched
+
+    async def fetch_specification_child(model: Any) -> list[Any]:
+        conditions = [SpecificationInterview.project_id == project_id]
+        if task_id:
+            conditions.append(SpecificationInterview.task_id == task_id)
+        if boundary:
+            timestamp, identifier = boundary
+            conditions.append(
+                or_(
+                    model.created_at > timestamp,
+                    (model.created_at == timestamp) & (model.id > identifier),
+                )
+            )
+        fetched = list(
+            (
+                await db.execute(
+                    select(model)
+                    .join(SpecificationInterview, model.interview_id == SpecificationInterview.id)
+                    .where(*conditions)
+                    .order_by(model.created_at, model.id)
+                    .limit(limit + 1)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if len(fetched) > limit and (
+            requested_source_models is None or model in requested_source_models
+        ):
             scan_boundaries.append((fetched[-1].created_at, fetched[-1].id))
         return fetched
 
@@ -489,71 +540,72 @@ async def list_project_evidence(
                 idempotency_key=row.command_key,
             )
         )
-    interviews = await fetch(SpecificationInterview, *task_filters(SpecificationInterview))
-    for interview in interviews:
-        artifact_revisions = list(
-            (
-                await db.execute(
-                    select(SpecificationArtifactRevision)
-                    .where(SpecificationArtifactRevision.interview_id == interview.id)
-                    .order_by(SpecificationArtifactRevision.revision)
-                    .limit(100)
+    artifact_revisions = await fetch_specification_child(SpecificationArtifactRevision)
+    readiness_rows = await fetch_specification_child(SpecificationReadinessEvaluation)
+    interview_ids = {row.interview_id for row in (*artifact_revisions, *readiness_rows)}
+    interviews_by_id = {}
+    if interview_ids:
+        interviews = (
+            await db.execute(
+                select(SpecificationInterview).where(
+                    SpecificationInterview.project_id == project_id,
+                    SpecificationInterview.id.in_(interview_ids),
                 )
             )
-            .scalars()
-            .all()
+        ).scalars()
+        interviews_by_id = {row.id: row for row in interviews}
+    for artifact in artifact_revisions:
+        interview = interviews_by_id.get(artifact.interview_id)
+        if interview is None:
+            continue
+        rows.append(
+            _record(
+                source="harnessa.specification",
+                source_id=str(artifact.id),
+                kind="specification_revision",
+                summary=f"revision {artifact.revision}; readiness={interview.readiness_state if artifact.revision == interview.artifact_revision else 'stale'}; base SHA={artifact.base_sha}; commit SHA={artifact.commit_sha}",
+                recorded_at=artifact.created_at,
+                organization_id=interview.organization_id,
+                project_id=interview.project_id,
+                task_id=interview.task_id,
+                revision=str(artifact.revision),
+                content_hash=artifact.content_hash,
+                repository_id=interview.repository_id,
+                artifact_id=artifact.id,
+                stale=artifact.revision != interview.artifact_revision,
+            )
         )
-        for artifact in artifact_revisions:
-            rows.append(
-                _record(
-                    source="harnessa.specification",
-                    source_id=str(artifact.id),
-                    kind="specification_revision",
-                    summary=f"revision {artifact.revision}; readiness={interview.readiness_state if artifact.revision == interview.artifact_revision else 'stale'}; base SHA={artifact.base_sha}; commit SHA={artifact.commit_sha}",
-                    recorded_at=artifact.created_at,
-                    organization_id=interview.organization_id,
-                    project_id=interview.project_id,
-                    task_id=interview.task_id,
-                    revision=str(artifact.revision),
-                    content_hash=artifact.content_hash,
-                    repository_id=interview.repository_id,
-                    artifact_id=artifact.id,
-                    stale=artifact.revision != interview.artifact_revision,
-                )
+    for readiness in readiness_rows:
+        interview = interviews_by_id.get(readiness.interview_id)
+        if interview is None:
+            continue
+        rows.append(
+            _record(
+                source="harnessa.specification_readiness",
+                source_id=str(readiness.id),
+                kind="evaluation",
+                summary=f"specification readiness {readiness.state}; base SHA={readiness.base_sha}; policy={readiness.policy_revision}",
+                recorded_at=readiness.created_at,
+                organization_id=interview.organization_id,
+                project_id=interview.project_id,
+                task_id=interview.task_id,
+                revision=str(readiness.artifact_revision),
+                content_hash=readiness.content_hash,
+                evaluation_id=readiness.id,
+                repository_id=interview.repository_id,
             )
-        readiness_rows = list(
-            (
-                await db.execute(
-                    select(SpecificationReadinessEvaluation)
-                    .where(SpecificationReadinessEvaluation.interview_id == interview.id)
-                    .order_by(SpecificationReadinessEvaluation.created_at)
-                    .limit(100)
-                )
-            )
-            .scalars()
-            .all()
         )
-        for readiness in readiness_rows:
-            rows.append(
-                _record(
-                    source="harnessa.specification_readiness",
-                    source_id=str(readiness.id),
-                    kind="evaluation",
-                    summary=f"specification readiness {readiness.state}; base SHA={readiness.base_sha}; policy={readiness.policy_revision}",
-                    recorded_at=readiness.created_at,
-                    organization_id=interview.organization_id,
-                    project_id=interview.project_id,
-                    task_id=interview.task_id,
-                    revision=str(readiness.artifact_revision),
-                    content_hash=readiness.content_hash,
-                    evaluation_id=readiness.id,
-                    repository_id=interview.repository_id,
-                )
-            )
     ledger = await fetch(
         ModelRequestLedger,
         *task_filters(ModelRequestLedger),
         *([ModelRequestLedger.run_id == run_id] if run_id else []),
+        *(
+            [ModelRequestLedger.event_type == "usage_reconciled"]
+            if source == "harnessa.operator_gateway_usage_import"
+            else [ModelRequestLedger.event_type != "usage_reconciled"]
+            if source == "litellm.gateway_ledger"
+            else []
+        ),
     )
     for row in ledger:
         imported_usage = row.event_type == "usage_reconciled"
@@ -841,4 +893,5 @@ async def list_project_evidence(
                 page[-1].envelope.recorded_at,
                 UUID(page[-1].envelope.source_record_id.value),
             )
+    await require_membership(db, actor, project_id)
     return EvidencePage(items=page, next_cursor=next_cursor, limit=limit)

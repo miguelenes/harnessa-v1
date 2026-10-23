@@ -64,7 +64,7 @@ async def reconcile_gateway_usage_receipt(
             price_revision=matched.price_revision,
             input_tokens=receipt.input_tokens,
             output_tokens=receipt.output_tokens,
-            usage_known=receipt.input_tokens is not None or receipt.output_tokens is not None,
+            usage_known=receipt.input_tokens is not None and receipt.output_tokens is not None,
             billed_usd=receipt.gateway_billed_usd,
             provider_reported_usd=receipt.provider_reported_usd,
             http_status=matched.http_status,
