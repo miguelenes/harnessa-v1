@@ -1,5 +1,8 @@
 # Getting started
 
+For local provider routing, secret handling, and credential-free gateway
+readiness checks, see [Local model gateway](development/model-gateway-local.md).
+
 ## Requirements
 
 - Podman with `podman compose`, or Docker with Docker Compose
@@ -10,10 +13,10 @@
 
 ## Start the local stack
 
-1. Copy the sample environment and replace every placeholder. Use a unique database password, a random `SECRET_KEY` with at least 32 bytes, and a one-time `BOOTSTRAP_TOKEN`.
+1. On a fresh checkout, copy the sample environment and replace every placeholder. Use a unique database password, a random `SECRET_KEY` with at least 32 bytes, and a one-time `BOOTSTRAP_TOKEN`. If `.env` already exists, edit it in place; do not overwrite configured provider keys.
 
    ```sh
-   cp .env.example .env
+   test -f .env || cp .env.example .env
    set -a && . ./.env && set +a
    ```
 

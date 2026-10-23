@@ -1,6 +1,22 @@
 # Register one unique LiteLLM model_name per deployment. The application selects
 # one registered deployment per HTTP attempt; proxy-level retries/fallbacks stay off.
-model_list: []
+model_list:
+  - model_name: harnessa-deepseek-flash
+    litellm_params:
+      model: deepseek/deepseek-flash
+      api_base: https://api.deepseek.com
+      api_key: os.environ/DEEPSEEK_API_KEY
+      timeout: 60
+
+  - model_name: harnessa-openrouter-deepseek-flash
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4.1-flash-1017
+      api_base: https://openrouter.ai/api/v1
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 60
+      provider:
+        order: [deepseek]
+        allow_fallbacks: false
 
 router_settings:
   num_retries: 0
@@ -12,10 +28,5 @@ litellm_settings:
   set_verbose: false
   turn_off_message_logging: true
 
-# Example deployment (add one entry per deployment and map its secret into only
-# the LiteLLM service in infra/compose.yaml):
-# model_list:
-#   - model_name: harnessa-openai-coding
-#     litellm_params:
-#       model: openai/gpt-4.1
-#       api_key: os.environ/OPENAI_API_KEY
+# Provider keys are mapped only to the LiteLLM service in infra/compose.yaml.
+# They are intentionally not passed to the API, worker, web, or agent containers.
