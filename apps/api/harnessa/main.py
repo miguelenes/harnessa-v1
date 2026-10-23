@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
+from harnessa.api.evidence_routes import router as evidence_router
 from harnessa.api.github_routes import router as github_router
 from harnessa.api.model_routes import router as model_router
 from harnessa.api.retrieval_routes import router as retrieval_router
@@ -33,9 +34,14 @@ from harnessa.contracts import (
     EventReplayItem,
     EventReplayPage,
     EvidenceIntegerValue,
+    EvidenceIntegrityRead,
+    EvidencePage,
+    EvidenceRecordRead,
     EvidenceTextValue,
     EvidenceTimestampValue,
     EvidenceUuidValue,
+    GatewayUsageImportBatch,
+    GatewayUsageImportResult,
     GitHubActorMappingCreate,
     GitHubActorMappingRead,
     GitHubAppConfigurationCreate,
@@ -49,6 +55,8 @@ from harnessa.contracts import (
     GitHubRepositoryLinkRead,
     GitHubRepositoryOptIn,
     GitHubWebhookReceipt,
+    Harness2ArtifactEvidence,
+    Harness2ImportFixture,
     Identity,
     MCPGrantCreate,
     MCPGrantRead,
@@ -169,6 +177,13 @@ CONTRACT_MODELS = (
     EvidenceIntegerValue,
     EvidenceTimestampValue,
     CoreEvidenceEnvelope,
+    EvidencePage,
+    EvidenceRecordRead,
+    EvidenceIntegrityRead,
+    GatewayUsageImportBatch,
+    GatewayUsageImportResult,
+    Harness2ArtifactEvidence,
+    Harness2ImportFixture,
     VerificationManifestApprovalRequest,
     VerificationManifestRevisionRead,
     RunOrchestrationIdentity,
@@ -359,6 +374,7 @@ app.include_router(specification_router)
 app.include_router(retrieval_router)
 app.include_router(review_router)
 app.include_router(github_router)
+app.include_router(evidence_router)
 
 
 @app.get("/health/live", tags=["health"])

@@ -19,7 +19,7 @@
     "lint:web": "pnpm --filter @harnessa/web lint",
     "typecheck:web": "pnpm --filter @harnessa/web typecheck",
     "typecheck:contracts": "pnpm --filter @harnessa/contracts typecheck",
-    "typecheck:api": "uv run mypy --follow-imports=silent apps/api/harnessa/contracts.py apps/api/harnessa/services apps/api/harnessa/domain apps/api/harnessa/adapters apps/api/harnessa/db/orchestration.py apps/api/harnessa/db/model_gateway.py apps/api/harnessa/db/models.py apps/api/harnessa/db/session.py apps/api/harnessa/api/task_routes.py apps/api/harnessa/api/model_routes.py apps/api/harnessa/healthcheck.py apps/api/harnessa/worker.py",
+    "typecheck:api": "uv run mypy --follow-imports=silent apps/api/harnessa/contracts.py apps/api/harnessa/services apps/api/harnessa/domain apps/api/harnessa/adapters apps/api/harnessa/db/orchestration.py apps/api/harnessa/db/model_gateway.py apps/api/harnessa/db/models.py apps/api/harnessa/db/session.py apps/api/harnessa/api/task_routes.py apps/api/harnessa/api/model_routes.py apps/api/harnessa/api/evidence_routes.py apps/api/harnessa/healthcheck.py apps/api/harnessa/worker.py",
     "lint:api": "uv run ruff check apps/api tests scripts",
     "test:api": "COVERAGE_FILE=coverage/python/.coverage uv run coverage erase && COVERAGE_FILE=coverage/python/.coverage uv run pytest -n 4 -m 'not integration' --cov=harnessa --cov-report=",
     "test:integration": "HARNESSA_REQUIRE_INTEGRATION=1 COVERAGE_FILE=coverage/python/.coverage uv run pytest tests/integration -m integration --cov=harnessa --cov-append --cov-report=",

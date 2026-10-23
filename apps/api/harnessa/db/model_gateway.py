@@ -267,7 +267,8 @@ class ModelRequestLedger(Base):
 
     __tablename__ = "model_request_ledger"
     __table_args__ = (
-        CheckConstraint("event_type IN ('reserved', 'attempt_started', 'attempt_failed', 'fallback_selected', 'attempt_succeeded', 'settled', 'stale_reconciled')", name="ck_model_ledger_event"),
+        CheckConstraint("event_type IN ('reserved', 'attempt_started', 'attempt_failed', 'fallback_selected', 'attempt_succeeded', 'settled', 'stale_reconciled', 'usage_reconciled')", name="ck_model_ledger_event"),
+        UniqueConstraint("project_id", "gateway_usage_source_observation_id", name="uq_model_ledger_gateway_usage_source"),
         Index("ix_model_ledger_project_created", "project_id", "created_at"),
         Index("ix_model_ledger_request_attempt", "request_id", "attempt"),
     )
@@ -293,6 +294,8 @@ class ModelRequestLedger(Base):
     usage_known: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     latency_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     billed_usd: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    provider_reported_usd: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    gateway_usage_source_observation_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     estimated_usd: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -300,3 +303,29 @@ class ModelRequestLedger(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class GatewayUsageImport(Scoped, Base):
+    """Durable, metadata-only receipt for late or unmatched gateway usage."""
+
+    __tablename__ = "gateway_usage_imports"
+    __table_args__ = (
+        UniqueConstraint("project_id", "source_observation_id", name="uq_gateway_usage_source_observation"),
+        CheckConstraint("status IN ('matched', 'retryable', 'ambiguous', 'failed')", name="ck_gateway_usage_import_status"),
+        Index("ix_gateway_usage_retry", "status", "next_retry_at"),
+    )
+
+    organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    submitted_by: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    source_observation_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_identifier: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    gateway_billed_usd: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    provider_reported_usd: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    usage_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="retryable")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ledger_event_id: Mapped[UUID | None] = mapped_column(nullable=True)

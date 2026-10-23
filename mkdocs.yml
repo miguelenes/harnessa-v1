@@ -51,6 +51,7 @@ nav:
   - Development MCPs: development/mcp-servers.md
   - Retrieval and MCP integration: integrations/retrieval-mcp.md
   - GitHub App integration: integrations/github-app.md
+  - Evidence provenance: integrations/evidence-plane.md
   - Design system: design-system.md
   - Architecture decision:
       - Orchestration: adr/0004-run-orchestration.md
@@ -65,6 +66,7 @@ nav:
       - Milestone 8: milestones/08.md
       - Milestone 9: milestones/09.md
       - Milestone 10: milestones/10.md
+      - Milestone 11: milestones/11.md
       - Web foundation: milestones/parallel-web-foundation.md
   - Contributing: contributing.md
   - Security: security.md

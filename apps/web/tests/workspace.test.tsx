@@ -195,6 +195,55 @@ describe("workspace routes and task board", () => {
     expect(document.activeElement).toBe(card);
   });
 
+  it("filters and pages provenance and records a bounded artifact integrity check", async () => {
+    const run = { id: "run-1", task_id: task.id, project_id: project.id, attempt: 1, status: "SUCCEEDED", adapter_name: "fixture", fencing_token: 1, created_at: "2026-10-23T00:00:00Z" };
+    const evidenceItem = {
+      kind: "artifact", summary: "text/plain; 4 bytes", import_status: "native", reconciliation_status: "checksum_unverified", stale: false,
+      envelope: {
+        source_system: "harnessa.artifact_store", source_record_id: { status: "known", value: "record-1" },
+        recorded_at: "2026-10-23T00:00:00Z", revision: { status: "known", value: "1" },
+        content_sha256: { status: "known", value: "a".repeat(64) }, artifact_id: { status: "known", value: "artifact-1" },
+      },
+    };
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/projects")) return response([project]);
+      if (url.includes("/events/stream")) return response({}, 403);
+      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks/task-1/runs")) return response([run]);
+      if (url.endsWith("/tasks/task-1/capabilities")) return response({ allowed_commands: [], allowed_transitions: [] });
+      if (url.endsWith("/tasks/task-1/specification-interview")) return response({}, 404);
+      if (url.includes("/evidence/artifacts/artifact-1/reconcile") && init?.method === "POST") return response({ status: "verified" });
+      if (url.includes("/evidence?")) {
+        if (!url.includes("cursor=") && !url.includes("source=")) return response({ items: [evidenceItem], next_cursor: "cursor-next", limit: 100 });
+        return response({ items: [{ ...evidenceItem, kind: "model_request", envelope: { ...evidenceItem.envelope, source_system: "litellm.gateway_ledger", artifact_id: { status: "unknown" } } }], next_cursor: null, limit: 100 });
+      }
+      return response({}, 404);
+    });
+    render(<Workspace section="board" />);
+    fireEvent.click(await screen.findByRole("button", { name: /Prepare release/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Provenance" }));
+    expect(await screen.findByText("text/plain; 4 bytes")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Check artifact SHA-256" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/evidence/artifacts/artifact-1/reconcile"),
+      expect.objectContaining({ method: "POST" }),
+    ));
+    fireEvent.click(await screen.findByRole("button", { name: "Load more evidence" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("cursor=cursor-next"),
+      expect.anything(),
+    ));
+    fireEvent.change(screen.getByLabelText("Run"), { target: { value: "run-1" } });
+    fireEvent.change(screen.getByLabelText("Source"), { target: { value: "litellm.gateway_ledger" } });
+    fireEvent.change(screen.getByLabelText("Revision or SHA"), { target: { value: "rev-7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply filters" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringMatching(/run_id=run-1.*source=litellm.gateway_ledger.*revision=rev-7/),
+      expect.anything(),
+    ));
+  });
+
   it("renders denied commands and submits an authorized specification answer", async () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
