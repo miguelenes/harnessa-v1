@@ -28,6 +28,7 @@ from harnessa.db.github import (
 from harnessa.db.models import Task
 from harnessa.services.github_processor import (
     GitHubWebhookProcessor,
+    _authorized_latest_review_states,
     _latest_review_state_by_actor,
     _pull_request_state,
 )
@@ -137,6 +138,19 @@ def test_latest_review_state_overrides_a_historical_approval() -> None:
     )
 
     assert latest[reviewer_id]["state"] == "CHANGES_REQUESTED"
+
+
+def test_unauthorized_changes_request_cannot_veto_merge_verification() -> None:
+    authorized_reviewer = uuid4()
+    unauthorized_reviewer = uuid4()
+    latest = {
+        authorized_reviewer: {"state": "APPROVED"},
+        unauthorized_reviewer: {"state": "CHANGES_REQUESTED"},
+    }
+
+    filtered = _authorized_latest_review_states(latest, {authorized_reviewer})
+
+    assert filtered == {authorized_reviewer: {"state": "APPROVED"}}
 
 
 def test_pull_request_reconciliation_classifies_base_and_merged_head_drift() -> None:

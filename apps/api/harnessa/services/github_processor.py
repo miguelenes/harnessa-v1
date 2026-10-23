@@ -1050,7 +1050,8 @@ class GitHubWebhookProcessor:
             latest_by_actor = _latest_review_state_by_actor(
                 remote_reviews, actor_by_github_id, published_sha
             )
-            for actor_id, remote_review in latest_by_actor.items():
+            authorized_actor_ids: set[UUID] = set()
+            for actor_id in latest_by_actor:
                 user = await db.get(User, actor_id)
                 if user is None or not user.is_active:
                     continue
@@ -1071,12 +1072,16 @@ class GitHubWebhookProcessor:
                     or (project_membership is not None and project_membership.role == "reviewer")
                 ):
                     continue
+                authorized_actor_ids.add(actor_id)
+            authorized_latest_by_actor = _authorized_latest_review_states(
+                latest_by_actor, authorized_actor_ids
+            )
             if any(
                 str(review.get("state", "")).casefold() == "changes_requested"
-                for review in latest_by_actor.values()
+                for review in authorized_latest_by_actor.values()
             ):
                 return None
-            for actor_id, remote_review in latest_by_actor.items():
+            for actor_id, remote_review in authorized_latest_by_actor.items():
                 if str(remote_review.get("state", "")).casefold() != "approved":
                     continue
                 approval = await db.scalar(
@@ -1552,6 +1557,17 @@ def _latest_review_state_by_actor(
         github_user_id = review["user"]["id"]
         latest[actor_by_github_id[github_user_id]] = review
     return latest
+
+
+def _authorized_latest_review_states(
+    latest_by_actor: dict[UUID, dict[str, Any]], authorized_actor_ids: set[UUID]
+) -> dict[UUID, dict[str, Any]]:
+    """Keep only current review dispositions from authorized local reviewers."""
+    return {
+        actor_id: review
+        for actor_id, review in latest_by_actor.items()
+        if actor_id in authorized_actor_ids
+    }
 
 
 def _pull_request_state(
