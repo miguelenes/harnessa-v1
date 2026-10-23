@@ -16,6 +16,7 @@ dependencies = [
   "pwdlib[argon2]==0.3.0",
   "python-multipart==0.0.32",
   "agent-client-protocol==0.12.1",
+  "ag-ui-protocol==1.0.0",
 ]
 
 [project.optional-dependencies]

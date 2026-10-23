@@ -1,6 +1,6 @@
 # Harnessa Design System
 
-**Status:** initial shared foundation for the marketing site, static cloud portal shell, and future adoption by the Next.js control plane.
+**Status:** shared foundation used by the marketing site, static cloud portal shell, and the Next.js Harnessa workspace.
 
 ## Product character
 
@@ -57,7 +57,8 @@ Buttons have `primary`, `secondary`, `outline`, `ghost`, and `destructive` varia
 
 - The Astro marketing site explains what Harnessa does without implying that the public cloud service is ready. Keep calls to action honest: read the project, request access only if a real contact path is configured, or open the setup-status portal.
 - The separate SvelteKit portal is a static shell. Label provisioning as not yet available, explain that the offering is being prepared, and provide the public marketing-site link. Do not display invented organizations, usage, billing, resources, or user identities.
-- The existing Next.js app may adopt the React package after the milestone 8 workstream begins. This work does not change its routes, API calls, or backend contracts.
+- The Next.js workspace imports `@harnessa/ui-react` and `@harnessa/design-tokens`, with Tailwind CSS v4 for layout and semantic token utilities. Route-specific controls must use server-returned capabilities; shared visual components do not grant backend permission.
+- Board task stage, run status, and specification readiness are separate signals. Green indicates verified or ready state only; unavailable routes must say when their backend workflow is not yet available.
 - Astro can render standalone Svelte components through `@astrojs/svelte`; it does not embed or replace the separate SvelteKit app.
 
 ## References

@@ -1,2 +1,5 @@
 import Link from "next/link";
-export default function Home() { return <main className="min-h-screen px-8 py-16"><div className="mx-auto max-w-5xl"><p className="text-sm font-semibold uppercase tracking-[.24em] text-emerald-800">Harnessa</p><h1 className="mt-5 max-w-3xl text-5xl font-semibold leading-tight">A control plane for repository change, from specification to review.</h1><p className="mt-6 max-w-2xl text-lg text-stone-600">Self-hosted, project-scoped orchestration. Milestone 1 provides identity, access control, project setup, and repository configuration.</p><Link className="mt-8 inline-flex rounded-lg bg-emerald-800 px-5 py-3 font-medium text-white hover:bg-emerald-900" href="/login">Sign in</Link></div></main>; }
+
+export default function Home() {
+  return <main className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center p-8"><h1 className="text-3xl font-semibold">Harnessa workspace</h1><p className="mt-3 text-muted-foreground">Sign in or open an authorized project.</p><Link className="mt-6 w-fit rounded-lg bg-primary px-4 py-2 text-primary-foreground" href="/projects">Open projects</Link></main>;
+}

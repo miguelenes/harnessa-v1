@@ -177,6 +177,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/{task_id}/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Task Capabilities */
+        get: operations["task_capabilities_tasks__task_id__capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/specification-interview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Task Specification Interview */
+        get: operations["task_specification_interview_tasks__task_id__specification_interview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tasks/{task_id}/transition": {
         parameters: {
             query?: never;
@@ -254,6 +288,26 @@ export interface paths {
         };
         /** Replay Events */
         get: operations["replay_events_projects__project_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/events/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Project Events
+         * @description Authenticated durable replay + tail. Closing the response only ends this reader.
+         */
+        get: operations["stream_project_events_projects__project_id__events_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2368,6 +2422,27 @@ export interface components {
             expected_artifact_revision: number;
         };
         /**
+         * TaskCapabilitiesRead
+         * @description Actions the current actor may attempt; transition guards remain authoritative.
+         */
+        TaskCapabilitiesRead: {
+            role: components["schemas"]["Role"];
+            /** Allowed Transitions */
+            allowed_transitions?: components["schemas"]["TaskStage"][];
+            /** Allowed Commands */
+            allowed_commands?: components["schemas"]["TaskCommand"][];
+            /**
+             * Can Answer Questions
+             * @default false
+             */
+            can_answer_questions: boolean;
+            /**
+             * Can Edit Artifacts
+             * @default false
+             */
+            can_edit_artifacts: boolean;
+        };
+        /**
          * TaskCommand
          * @enum {string}
          */
@@ -2438,6 +2513,18 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Specification Readiness State
+             * @default null
+             */
+            specification_readiness_state: string | null;
+            /**
+             * Specification Revision
+             * @default null
+             */
+            specification_revision: number | null;
+            /** Allowed Transitions */
+            allowed_transitions?: components["schemas"]["TaskStage"][];
         };
         /**
          * TaskStage
@@ -3303,6 +3390,68 @@ export interface operations {
             };
         };
     };
+    task_capabilities_tasks__task_id__capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskCapabilitiesRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    task_specification_interview_tasks__task_id__specification_interview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecificationInterviewRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     transition_tasks__task_id__transition_post: {
         parameters: {
             query?: never;
@@ -3462,6 +3611,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EventReplayPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_project_events_projects__project_id__events_stream_get: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
