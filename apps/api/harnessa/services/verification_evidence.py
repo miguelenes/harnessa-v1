@@ -19,7 +19,7 @@ from harnessa.db.orchestration import Run, RunArtifact
 from harnessa.db.retrieval import VerificationEvidence
 from harnessa.db.specification import SpecificationInterview
 from harnessa.services.retrieval_governance import safe_retrieval_content
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -88,8 +88,25 @@ async def bind_run_source_revision(
     if run.source_revision is not None and run.source_revision != source_revision:
         raise HTTPException(409, "Run source revision is already bound to a different commit")
     if run.source_revision is None:
-        run.source_revision = source_revision
-        await db.flush()
+        bound_id = await db.scalar(
+            update(Run)
+            .where(
+                Run.id == run_id,
+                Run.project_id == project_id,
+                Run.task_id == task_id,
+                Run.attempt == attempt,
+                Run.fencing_token == fencing_token,
+                Run.source_revision.is_(None),
+            )
+            .values(source_revision=source_revision)
+            .returning(Run.id)
+        )
+        if bound_id is not None:
+            run.source_revision = source_revision
+        else:
+            await db.refresh(run, attribute_names=["source_revision"])
+            if run.source_revision != source_revision:
+                raise HTTPException(409, "Run source revision was concurrently bound to a different commit")
     return run
 
 

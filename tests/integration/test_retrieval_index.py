@@ -533,18 +533,36 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
         )
         db.add(run)
         await db.flush()
-        await bind_run_source_revision(
-            db,
-            organization_id=project.organization_id,
-            project_id=project_id,
-            repository_id=repository_id,
-            task_id=task.id,
-            run_id=run.id,
-            attempt=1,
-            fencing_token=7,
-            source_revision=source_revision,
-            workspace_manager=manager,
+        await db.commit()
+
+        async def bind_revision(revision: str) -> bool:
+            async with SessionLocal() as competing_db:
+                try:
+                    await bind_run_source_revision(
+                        competing_db,
+                        organization_id=project.organization_id,
+                        project_id=project_id,
+                        repository_id=repository_id,
+                        task_id=task.id,
+                        run_id=run.id,
+                        attempt=1,
+                        fencing_token=7,
+                        source_revision=revision,
+                        workspace_manager=manager,
+                    )
+                    await competing_db.commit()
+                    return True
+                except HTTPException:
+                    await competing_db.rollback()
+                    return False
+
+        binding_results = await asyncio.gather(
+            bind_revision(source_revision), bind_revision(other_valid_revision)
         )
+        assert binding_results.count(True) == 1
+        await db.refresh(run)
+        bound_revision = run.source_revision
+        assert bound_revision in {source_revision, other_valid_revision}
         evidence = VerificationEvidenceInput(
             organization_id=project.organization_id,
             project_id=project_id,
@@ -554,7 +572,7 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
             attempt=1,
             fencing_token=7,
             source_record_id="fixture-verifier-001",
-            source_revision=source_revision,
+            source_revision=bound_revision,
             outcome="passed",
             summary="Verified lexical fixture isolation and authorization revocation.",
             criteria=(
@@ -595,7 +613,15 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
         with pytest.raises(HTTPException) as different_valid_revision:
             await record_verification_evidence(
                 db,
-                replace(evidence, source_record_id="fixture-verifier-other-revision", source_revision=other_valid_revision),
+                replace(
+                    evidence,
+                    source_record_id="fixture-verifier-other-revision",
+                    source_revision=(
+                        source_revision
+                        if bound_revision == other_valid_revision
+                        else other_valid_revision
+                    ),
+                ),
                 workspace_manager=manager,
             )
         assert different_valid_revision.value.status_code == 409
@@ -616,7 +642,7 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
             limit=5,
         )
         citation = next(item for item in result.citations if "/verification/" in item.path)
-        assert citation.revision == source_revision
+        assert citation.revision == bound_revision
         assert citation.content_hash == recorded.content_hash
         assert result.context_manifest is not None
         assert any(uri.startswith("verified-runs://") for uri in result.context_manifest.sources_considered)
