@@ -38,6 +38,7 @@ from harnessa.db.session import get_db
 from harnessa.db.specification import SpecificationInterview
 from harnessa.services.authorization import require_membership
 from harnessa.services.model_gateway import budget_policy_digest
+from harnessa.services.post_integration import complete_task_if_ready
 from harnessa.services.review_publication import LocalReviewPublicationPort
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -541,40 +542,6 @@ async def update_post_integration_step(
     step.attempts += 1
     step.result = body.result
     step.last_error = body.error
-    await db.flush()
-    steps = list(
-        (
-            await db.scalars(
-                select(PostIntegrationStep).where(
-                    PostIntegrationStep.integration_evidence_id == integration_id
-                )
-            )
-        ).all()
-    )
-    task = await db.scalar(select(Task).where(Task.id == integration.task_id).with_for_update())
-    if (
-        task is not None
-        and task.stage == "LEARNING"
-        and steps
-        and all(item.status == "succeeded" for item in steps)
-    ):
-        before = task.version
-        task.stage = "DONE"
-        task.version += 1
-        db.add(
-            TaskTransition(
-                task_id=task.id,
-                project_id=task.project_id,
-                actor_id=actor.id,
-                from_stage="LEARNING",
-                to_stage="DONE",
-                from_run_status=task.run_status,
-                to_run_status=task.run_status,
-                reason="All durable post-integration steps succeeded",
-                command="post_integration_complete",
-                version_before=before,
-                version_after=task.version,
-            )
-        )
+    await complete_task_if_ready(db, integration_id)
     await db.commit()
     return {"kind": step.kind, "status": step.status, "attempts": step.attempts}

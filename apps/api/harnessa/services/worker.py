@@ -22,6 +22,7 @@ from harnessa.services.effects import EffectResult, ReconcileOutcome, reconcile_
 from harnessa.services.github_processor import GitHubWebhookProcessor
 from harnessa.services.github_webhooks import process_github_webhook_outbox
 from harnessa.services.model_gateway import reconcile_stale_model_reservations
+from harnessa.services.post_integration import process_post_integration_steps
 from harnessa.services.scheduler import Scheduler
 from harnessa.services.streams import OutboxPublisher, StreamConsumer, prune_retained_events
 from harnessa.services.verification_workflow import VerificationDispatcher
@@ -89,6 +90,7 @@ async def run() -> None:
     last_model_reconcile = 0.0
     last_acp_reconcile = 0.0
     last_github_reconcile = 0.0
+    last_post_integration_reconcile = 0.0
     await consumer.ensure_group()
     if isinstance(adapter, ACPExecutionAdapter) and adapter.enabled:
         try:
@@ -127,6 +129,12 @@ async def run() -> None:
                 await reconcile_effect_intents(_UnconfiguredEffectReconciler())
                 await process_github_webhook_outbox(GitHubWebhookProcessor(), owner_id=owner)
                 now = asyncio.get_running_loop().time()
+                if now - last_post_integration_reconcile >= 30:
+                    try:
+                        await process_post_integration_steps(limit=20)
+                    except Exception:
+                        logger.exception("Post-integration finalization failed")
+                    last_post_integration_reconcile = now
                 if now - last_github_reconcile >= 300:
                     try:
                         github_processor = GitHubWebhookProcessor()

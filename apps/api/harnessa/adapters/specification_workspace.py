@@ -292,6 +292,22 @@ class SpecificationWorkspaceManager:
     async def remove(self, workspace: SpecificationWorkspace) -> None:
         await asyncio.to_thread(self._remove, workspace)
 
+    async def remove_candidate_ref(
+        self, repository: Repository, reference: str, expected_sha: str
+    ) -> str:
+        if (
+            not re.fullmatch(r"refs/harnessa/review-candidates/[0-9a-f]{32}-f[1-9][0-9]*", reference)
+            or not re.fullmatch(r"[0-9a-f]{40,64}", expected_sha)
+        ):
+            raise SpecificationWorkspaceError("Review candidate cleanup identity is invalid")
+        source = await self.source_path(repository)
+        return await asyncio.to_thread(
+            self._remove_candidate_ref, source, reference, expected_sha
+        )
+
+    async def remove_interview_workspace(self, interview_id: UUID) -> bool:
+        return await asyncio.to_thread(self._remove_interview_workspace, interview_id)
+
     def _source_path(self, target_id: str) -> Path:
         try:
             mapping = json.loads(settings.openspec_repository_sources_json)
@@ -1025,6 +1041,48 @@ class SpecificationWorkspaceManager:
                 "Refusing to remove a symlinked specification workspace"
             )
         shutil.rmtree(workspace.workspace_path, ignore_errors=False)
+
+    def _remove_candidate_ref(self, source: Path, reference: str, expected_sha: str) -> str:
+        current = self._git(source, "for-each-ref", "--format=%(objectname)", reference).strip()
+        if not current:
+            return "already_absent"
+        if current != expected_sha:
+            raise SpecificationWorkspaceError(
+                "Review candidate ref no longer points to the integrated candidate"
+            )
+        self._git(source, "update-ref", "-d", reference, expected_sha)
+        return "removed"
+
+    def _remove_interview_workspace(self, interview_id: UUID) -> bool:
+        resolved_root = self.root.resolve()
+        workspace_path = self.root / interview_id.hex
+        if workspace_path.is_symlink():
+            raise SpecificationWorkspaceError(
+                "Refusing to remove a symlinked specification workspace"
+            )
+        if not workspace_path.exists():
+            return False
+        resolved_workspace = workspace_path.resolve()
+        if (
+            resolved_workspace.parent != resolved_root
+            or resolved_workspace.name != interview_id.hex
+            or not resolved_workspace.is_dir()
+        ):
+            raise SpecificationWorkspaceError(
+                "Refusing to remove an unowned specification workspace"
+            )
+        top = Path(self._git(resolved_workspace, "rev-parse", "--show-toplevel").strip()).resolve()
+        branch = self._git(resolved_workspace, "branch", "--show-current").strip()
+        if top != resolved_workspace or branch != f"harnessa/spec-{interview_id.hex}":
+            raise SpecificationWorkspaceError(
+                "Specification workspace ownership could not be verified"
+            )
+        if self._git(resolved_workspace, "remote").strip():
+            raise SpecificationWorkspaceError(
+                "Refusing to remove a specification workspace with a Git remote"
+            )
+        shutil.rmtree(resolved_workspace, ignore_errors=False)
+        return True
 
     @staticmethod
     def _bundle_paths(change_id: str) -> list[str]:

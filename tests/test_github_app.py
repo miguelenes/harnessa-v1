@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -19,6 +21,7 @@ from harnessa.adapters.github_app import (
     verify_webhook_signature,
 )
 from harnessa.adapters.github_effects import GitHubEffectReconciler, _review_tree_entries
+from harnessa.adapters.specification_workspace import SpecificationWorkspaceError
 from harnessa.db.github import (
     GitHubAppConfiguration,
     GitHubInstallation,
@@ -32,6 +35,7 @@ from harnessa.services.github_processor import (
     _latest_review_state_by_actor,
     _pull_request_state,
 )
+from harnessa.services.post_integration import _archive_result
 
 
 def test_secret_reference_and_raw_body_signature_are_narrow_and_exact() -> None:
@@ -172,6 +176,43 @@ def test_pull_request_reconciliation_classifies_base_and_merged_head_drift() -> 
         )
         == "merged_head_drift"
     )
+
+
+def test_archive_finalization_binds_the_verified_bundle_and_merge_revision() -> None:
+    head = "a" * 40
+    merge = "b" * 40
+    archive_diff = "diff --git a/openspec/specs/x/spec.md b/openspec/specs/x/spec.md\n"
+    digest = hashlib.sha256(archive_diff.encode()).hexdigest()
+    integration = SimpleNamespace(
+        mode="github",
+        evidence={"github_head_sha": head, "merge_commit_sha": merge},
+        integration_revision=merge,
+    )
+    bundle = SimpleNamespace(
+        head_sha=head,
+        bundle={
+            "openspec_sync_preview": {
+                "archive_preview_ready": True,
+                "final_head_verified": True,
+                "proposed_final_review_head": head,
+                "archive_diff": archive_diff,
+                "diff_sha256": digest,
+            }
+        },
+    )
+
+    result = _archive_result(integration, bundle)
+
+    assert result == {
+        "outcome": "succeeded",
+        "policy": "pre_merge_archive",
+        "archive_diff_sha256": digest,
+        "review_head_sha": head,
+        "integration_revision": merge,
+    }
+    bundle.bundle["openspec_sync_preview"]["diff_sha256"] = "0" * 64
+    with pytest.raises(SpecificationWorkspaceError, match="stale or invalid"):
+        _archive_result(integration, bundle)
 
 
 @pytest.mark.anyio

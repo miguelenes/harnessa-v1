@@ -188,6 +188,47 @@ async def test_one_sentence_topic_creates_validated_private_openspec_bundle(
 
 
 @pytest.mark.anyio
+async def test_post_integration_cleanup_removes_only_exact_owned_refs_and_workspaces(
+    specification_repository,
+):
+    manager, repository, source = specification_repository
+    interview_id = uuid4()
+    change_id = "post-integration-cleanup-01234567"
+    _workspace, _head, _digest = await manager.create(
+        interview_id, repository, change_id, _initial_bundle("Clean up after merge.", change_id)
+    )
+    source_sha = (
+        await asyncio.to_thread(
+            subprocess.run,
+            ["git", "-C", str(source), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    ).stdout.strip()
+    reference = f"refs/harnessa/review-candidates/{uuid4().hex}-f1"
+    await asyncio.to_thread(
+        subprocess.run,
+        ["git", "-C", str(source), "update-ref", reference, source_sha],
+        check=True,
+    )
+
+    wrong_sha = "f" * 40 if source_sha != "f" * 40 else "e" * 40
+    with pytest.raises(SpecificationWorkspaceError, match="no longer points"):
+        await manager.remove_candidate_ref(repository, reference, wrong_sha)
+    assert await manager.remove_candidate_ref(repository, reference, source_sha) == "removed"
+    assert await manager.remove_candidate_ref(repository, reference, source_sha) == "already_absent"
+    unowned_id = uuid4()
+    unowned = manager.root / unowned_id.hex
+    unowned.symlink_to(source, target_is_directory=True)
+    with pytest.raises(SpecificationWorkspaceError, match="symlinked"):
+        await manager.remove_interview_workspace(unowned_id)
+    unowned.unlink()
+    assert await manager.remove_interview_workspace(interview_id)
+    assert not await manager.remove_interview_workspace(interview_id)
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("separator", ["", "<br>"])
 async def test_flattened_architect_markdown_reflows_to_valid_openspec_bundle(
     specification_repository, separator: str
