@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import subprocess
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
@@ -14,6 +15,7 @@ from fastapi import HTTPException
 from harnessa.adapters.acp_execution import _latest_specification_context, _task_prompt
 from harnessa.adapters.specification_architect import ArchitectDraft
 from harnessa.adapters.specification_workspace import SpecificationWorkspaceManager
+from harnessa.adapters.verification import VerificationManifest
 from harnessa.config import settings
 from harnessa.contracts import ModelProtocol, RunStatus, TaskStage
 from harnessa.db.model_gateway import (
@@ -35,6 +37,7 @@ from harnessa.db.models import (
     User,
 )
 from harnessa.db.orchestration import DomainEvent, Run, TaskLease
+from harnessa.db.review import VerificationManifestRevision
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import (
     SpecificationAnswer,
@@ -77,10 +80,43 @@ async def _specification_fixture(
 ) -> tuple[UUID, UUID, User, Repository, SpecificationWorkspaceManager]:
     source = tmp_path / "repository"
     source.mkdir()
-    await asyncio.to_thread(subprocess.run, ["git", "init", "--quiet", "--initial-branch=main", str(source)], check=True)
+    await asyncio.to_thread(
+        subprocess.run, ["git", "init", "--quiet", "--initial-branch=main", str(source)], check=True
+    )
     (source / "openspec/specs/access").mkdir(parents=True)
     (source / "openspec/specs/access/spec.md").write_text(
         "# Access\n\nCheck permissions before creating tasks.\n", encoding="utf-8"
+    )
+    (source / "verification.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "criteria": [
+                    {
+                        "id": "dispatch-ready",
+                        "requirement": "The implementation passes the approved check.",
+                        "scenario": "Run the repository verification command.",
+                    },
+                    {
+                        "id": "operator-review",
+                        "requirement": "An operator reviews the result.",
+                        "scenario": "Review the recorded evidence.",
+                        "manual_review": True,
+                    },
+                ],
+                "commands": [
+                    {
+                        "id": "fixture-check",
+                        "argv": ["true"],
+                        "image": "localhost/fixture@sha256:" + "0" * 64,
+                        "criteria": ["dispatch-ready"],
+                        "timeout_seconds": 1,
+                        "output_limit_bytes": 1024,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
     )
     await asyncio.to_thread(_git, source, "add", "--all")
     await asyncio.to_thread(
@@ -162,11 +198,41 @@ async def _create_ready_interview(
             idempotency_key=idempotency_key,
         )
         assert replayed is False
-        interview, evaluation = await evaluate_readiness(
-            db, interview_id=interview.id, actor=actor
-        )
+        interview, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
         assert evaluation.state == "READY"
         assert evaluation.score == 1
+        repository = await db.get(Repository, repository_id)
+        assert repository is not None
+        source = await specification_service._workspace_manager.read_file_at_revision(
+            repository, interview.base_sha, "verification.json"
+        )
+        manifest = VerificationManifest.model_validate({**json.loads(source), "revision": 1})
+        existing_manifest = await db.scalar(
+            select(VerificationManifestRevision).where(
+                VerificationManifestRevision.repository_id == repository_id,
+                VerificationManifestRevision.source_revision == interview.base_sha,
+                VerificationManifestRevision.source_path == "verification.json",
+            )
+        )
+        if existing_manifest is None:
+            db.add(
+                VerificationManifestRevision(
+                    organization_id=interview.organization_id,
+                    project_id=interview.project_id,
+                    repository_id=repository_id,
+                    revision=1,
+                    source_path="verification.json",
+                    source_revision=interview.base_sha,
+                    source_digest=hashlib.sha256(source).hexdigest(),
+                    manifest=manifest.model_dump(mode="json"),
+                    manifest_digest=manifest.digest,
+                    protected_fixtures={},
+                    protected_fixture_digest=hashlib.sha256(b"{}").hexdigest(),
+                    approved_by=actor.id,
+                    approved_at=datetime.now(UTC),
+                )
+            )
+            await db.commit()
         return interview.id
 
 
@@ -181,6 +247,10 @@ async def _configure_acp_route(
     async with SessionLocal() as db:
         project = await db.get(Project, project_id)
         assert project is not None
+        if await db.scalar(
+            select(ModelBudgetPolicy).where(ModelBudgetPolicy.project_id == project_id)
+        ):
+            return
         pool = ModelPool(
             organization_id=project.organization_id,
             name="fixture-interactive",
@@ -217,8 +287,7 @@ async def _configure_acp_route(
             context_window=(
                 context_window
                 if context_window is not None
-                else settings.acp_model_max_request_bytes
-                + settings.acp_model_max_output_tokens
+                else settings.acp_model_max_request_bytes + settings.acp_model_max_output_tokens
             ),
             input_cost_per_million=Decimal(1),
             output_cost_per_million=Decimal(1),
@@ -227,25 +296,66 @@ async def _configure_acp_route(
         )
         db.add(deployment)
         await db.flush()
-        db.add_all([
-            AliasDeployment(alias_id=alias.id, deployment_id=deployment.id, priority=0),
-            PoolAlias(pool_id=pool.id, alias_id=alias.id, priority=0),
-            ModelBudgetPolicy(
-                organization_id=project.organization_id,
-                project_id=project.id,
-                project_limit_usd=Decimal(10),
-                task_limit_usd=Decimal(5),
-                run_limit_usd=Decimal(2),
-                project_token_limit=2_000_000,
-                task_token_limit=1_000_000,
-                run_token_limit=500_000,
-                max_steps=100,
-                max_wall_seconds=3600,
-                max_output_tokens=budget_max_output_tokens,
-                max_attempts=3,
-            ),
-        ])
+        db.add_all(
+            [
+                AliasDeployment(alias_id=alias.id, deployment_id=deployment.id, priority=0),
+                PoolAlias(pool_id=pool.id, alias_id=alias.id, priority=0),
+                ModelBudgetPolicy(
+                    organization_id=project.organization_id,
+                    project_id=project.id,
+                    project_limit_usd=Decimal(10),
+                    task_limit_usd=Decimal(5),
+                    run_limit_usd=Decimal(2),
+                    project_token_limit=2_000_000,
+                    task_token_limit=1_000_000,
+                    run_token_limit=500_000,
+                    max_steps=100,
+                    max_wall_seconds=3600,
+                    max_output_tokens=budget_max_output_tokens,
+                    max_attempts=3,
+                ),
+            ]
+        )
         await db.commit()
+
+
+@pytest.mark.anyio
+async def test_openspec_archive_preview_updates_specs_in_a_disposable_review_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, repository, manager = await _specification_fixture(
+        tmp_path, monkeypatch
+    )
+    interview_id = await _create_ready_interview(project_id, repository_id, actor)
+    async with SessionLocal() as db:
+        from harnessa.db.specification import SpecificationInterview
+
+        interview = await db.get(SpecificationInterview, interview_id)
+        assert interview is not None
+        base_sha = interview.base_sha
+        head_sha = interview.head_sha
+        change_id = interview.change_id
+    workspace = await manager.open(
+        interview_id,
+        repository,
+        change_id=change_id,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+    original_status = await asyncio.to_thread(
+        _git, workspace.workspace_path, "status", "--porcelain"
+    )
+
+    preview = await manager.archive_preview(workspace)
+
+    assert "openspec/changes/archive/" in preview["diff"]
+    assert f"openspec/changes/{change_id}/" in preview["diff"]
+    assert preview["command_output"]
+    assert (
+        await asyncio.to_thread(_git, workspace.workspace_path, "status", "--porcelain")
+        == original_status
+    )
+    assert await manager.current_base(repository) == base_sha
 
 
 @pytest.mark.anyio
@@ -265,9 +375,7 @@ async def test_readiness_stays_in_specifying_when_required_model_route_is_unavai
             idempotency_key="missing-model-route",
         )
         assert replayed is False
-        interview, evaluation = await evaluate_readiness(
-            db, interview_id=interview.id, actor=actor
-        )
+        interview, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
         task = await db.get(Task, interview.task_id, populate_existing=True)
 
         assert evaluation.state == "NOT_READY"
@@ -291,9 +399,7 @@ async def test_readiness_stays_in_specifying_without_an_interactive_model_pool(
             idempotency_key="missing-interactive-pool",
         )
         assert replayed is False
-        interview, evaluation = await evaluate_readiness(
-            db, interview_id=interview.id, actor=actor
-        )
+        interview, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
         task = await db.get(Task, interview.task_id, populate_existing=True)
 
         assert evaluation.state == "NOT_READY"
@@ -318,9 +424,7 @@ async def test_readiness_stays_in_specifying_without_a_compatible_enabled_route(
             idempotency_key="incompatible-interactive-route",
         )
         assert replayed is False
-        interview, evaluation = await evaluate_readiness(
-            db, interview_id=interview.id, actor=actor
-        )
+        interview, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
         task = await db.get(Task, interview.task_id, populate_existing=True)
 
         assert evaluation.state == "NOT_READY"
@@ -337,9 +441,7 @@ async def test_readiness_stays_in_specifying_when_route_cannot_fit_broker_reques
     await _configure_acp_route(
         project_id,
         context_window=(
-            settings.acp_model_max_request_bytes
-            + settings.acp_model_max_output_tokens
-            - 1
+            settings.acp_model_max_request_bytes + settings.acp_model_max_output_tokens - 1
         ),
     )
     async with SessionLocal() as db:
@@ -482,21 +584,25 @@ async def test_topic_replay_readiness_and_revisioned_answer_invalidate_execution
             )
         assert stale_answer.value.status_code == 409
 
-        revised, evaluation = await evaluate_readiness(
-            db, interview_id=interview.id, actor=actor
-        )
+        revised, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
         assert evaluation.state == "READY"
         assert revised.artifact_revision == 2
-        assert await db.scalar(
-            select(func.count()).select_from(SpecificationArtifactRevision).where(
-                SpecificationArtifactRevision.interview_id == interview_id
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(SpecificationArtifactRevision)
+                .where(SpecificationArtifactRevision.interview_id == interview_id)
             )
-        ) == 2
-        assert await db.scalar(
-            select(func.count()).select_from(SpecificationAnswer).where(
-                SpecificationAnswer.interview_id == interview_id
+            == 2
+        )
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(SpecificationAnswer)
+                .where(SpecificationAnswer.interview_id == interview_id)
             )
-        ) == 1
+            == 1
+        )
 
         with pytest.raises(HTTPException) as unauthorized_model:
             await generate_architect_draft(
@@ -518,9 +624,10 @@ async def test_changed_default_branch_invalidates_readiness_before_scheduler_cla
         tmp_path, monkeypatch
     )
     interview_id = await _create_ready_interview(project_id, repository_id, actor)
-    source = Path(settings.openspec_repository_sources_json and json.loads(
+    source = Path(
         settings.openspec_repository_sources_json
-    )[repository.target_id])
+        and json.loads(settings.openspec_repository_sources_json)[repository.target_id]
+    )
     (source / "openspec/specs/access/new.md").write_text(
         "# New baseline\n\nThe main branch changed.\n", encoding="utf-8"
     )
@@ -553,15 +660,21 @@ async def test_changed_default_branch_invalidates_readiness_before_scheduler_cla
         assert task is not None and task.stage == TaskStage.SPECIFYING.value
         scheduler = Scheduler(global_limit=1)
         assert await scheduler.claim("specification-test-worker", "fixture") is None
-        assert await db.scalar(
-            select(func.count()).select_from(Run).where(Run.task_id == task.id)
-        ) == 0
-        assert await db.scalar(
-            select(func.count()).select_from(SpecificationReadinessEvaluation).where(
-                SpecificationReadinessEvaluation.interview_id == interview_id,
-                SpecificationReadinessEvaluation.state == "STALE",
+        assert (
+            await db.scalar(select(func.count()).select_from(Run).where(Run.task_id == task.id))
+            == 0
+        )
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(SpecificationReadinessEvaluation)
+                .where(
+                    SpecificationReadinessEvaluation.interview_id == interview_id,
+                    SpecificationReadinessEvaluation.state == "STALE",
+                )
             )
-        ) == 1
+            == 1
+        )
 
 
 @pytest.mark.anyio
@@ -657,15 +770,21 @@ async def test_agent_clarification_is_durable_fenced_idempotent_and_scope_pausin
         assert task is not None and task.stage == TaskStage.SPECIFYING.value
         assert task.run_status == RunStatus.PAUSED.value
         assert run is not None and run.cancel_requested_at is not None
-        assert await db.scalar(
-            select(func.count()).select_from(Run).where(Run.task_id == job.task_id)
-        ) == 1
-        assert await db.scalar(
-            select(func.count()).select_from(DomainEvent).where(
-                DomainEvent.run_id == job.run_id,
-                DomainEvent.event_type == "task.clarification_resumed",
+        assert (
+            await db.scalar(select(func.count()).select_from(Run).where(Run.task_id == job.task_id))
+            == 1
+        )
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(DomainEvent)
+                .where(
+                    DomainEvent.run_id == job.run_id,
+                    DomainEvent.event_type == "task.clarification_resumed",
+                )
             )
-        ) == 1
+            == 1
+        )
 
 
 @pytest.mark.anyio
@@ -806,9 +925,7 @@ async def test_authenticated_specification_api_and_fake_architect_are_revision_b
             return ArchitectDraft.model_validate(
                 {
                     "proposal_md": files[proposal_path],
-                    "spec_md": files[
-                        f"openspec/changes/{change_id}/specs/{change_id}/spec.md"
-                    ],
+                    "spec_md": files[f"openspec/changes/{change_id}/specs/{change_id}/spec.md"],
                     "design_md": files[f"openspec/changes/{change_id}/design.md"],
                     "tasks_md": files[f"openspec/changes/{change_id}/tasks.md"],
                     "questions": [
@@ -987,9 +1104,7 @@ async def test_authenticated_specification_api_and_fake_architect_are_revision_b
 async def test_invalid_architect_openspec_bundle_is_persisted_but_not_ready(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    project_id, repository_id, actor, _, _ = await _specification_fixture(
-        tmp_path, monkeypatch
-    )
+    project_id, repository_id, actor, _, _ = await _specification_fixture(tmp_path, monkeypatch)
 
     class InvalidFixtureArchitect:
         async def generate(self, _db, **context):
@@ -999,9 +1114,7 @@ async def test_invalid_architect_openspec_bundle_is_persisted_but_not_ready(
             files[spec_path] = "# Incomplete specification\n"
             return ArchitectDraft.model_validate(
                 {
-                    "proposal_md": files[
-                        f"openspec/changes/{change_id}/proposal.md"
-                    ],
+                    "proposal_md": files[f"openspec/changes/{change_id}/proposal.md"],
                     "spec_md": files[spec_path],
                     "design_md": files[f"openspec/changes/{change_id}/design.md"],
                     "tasks_md": files[f"openspec/changes/{change_id}/tasks.md"],
@@ -1021,9 +1134,7 @@ async def test_invalid_architect_openspec_bundle_is_persisted_but_not_ready(
     origin = settings.allowed_origins.split(",")[0].strip()
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             csrf = (await client.get("/auth/csrf")).json()["csrf_token"]
             login = await client.post(
                 "/auth/cookie/login",

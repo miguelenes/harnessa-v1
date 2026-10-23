@@ -43,6 +43,7 @@ class Settings(BaseSettings):
         "ghcr.io/anomalyco/opencode:2.0.32@sha256:"
         "85986f556e985e377bd24cd68a5ccfbc647bb49e591194edda8a0e4542303319"
     )
+    acp_harness_revision: str = "repository-default-v1"
     acp_cpu_limit: float = 2.0
     acp_memory_limit_bytes: int = 2147483648
     acp_pids_limit: int = 256

@@ -14,6 +14,14 @@ class TaskInput:
     project_id: UUID
     title: str
     description: str
+    verification_feedback: Mapping[str, Any] | None = None
+    approved_base_sha: str | None = None
+    specification_files: Mapping[str, str] | None = None
+    specification_hash: str | None = None
+    specification_revision: int | None = None
+    harness_instructions: str | None = None
+    harness_revision: str | None = None
+    harness_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -24,7 +32,9 @@ class RunInput:
 
 
 class ExecutionFailure(Exception):
-    def __init__(self, retry_class: str, code: str, message: str, retry_after_seconds: float | None = None):
+    def __init__(
+        self, retry_class: str, code: str, message: str, retry_after_seconds: float | None = None
+    ):
         self.retry_class = retry_class
         self.code = code
         self.retry_after_seconds = retry_after_seconds

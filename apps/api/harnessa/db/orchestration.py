@@ -34,7 +34,9 @@ class TaskTransition(Scoped, Base):
     )
 
     task_id: Mapped[UUID] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
-    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
     actor_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     from_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     to_stage: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -62,14 +64,18 @@ class Run(Scoped, Base):
     )
 
     task_id: Mapped[UUID] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
-    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     retry_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     fencing_token: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -80,6 +86,19 @@ class Run(Scoped, Base):
     adapter_name: Mapped[str] = mapped_column(String(100), nullable=False)
     # Set once by a trusted execution adapter to identify the commit actually tested.
     source_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    base_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    specification_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    specification_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    specification_commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    policy_revision: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    budget_policy_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    harness_revision: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    harness_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_image: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    verification_manifest_revision_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("verification_manifest_revisions.id", ondelete="RESTRICT"), nullable=True
+    )
+    execution_result: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT, nullable=True)
 
 
 class RunCheckpoint(Scoped, Base):
@@ -88,7 +107,9 @@ class RunCheckpoint(Scoped, Base):
 
     run_id: Mapped[UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
     task_id: Mapped[UUID] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
-    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
     state: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
@@ -151,9 +172,15 @@ class DomainEvent(Scoped, Base):
     event_type: Mapped[str] = mapped_column(String(120), nullable=False)
     event_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
-    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    task_id: Mapped[UUID | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    task_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), index=True
+    )
     run_id: Mapped[UUID | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
     aggregate_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
     project_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -166,11 +193,11 @@ class DomainEvent(Scoped, Base):
 
 class OutboxMessage(Scoped, Base):
     __tablename__ = "outbox_messages"
-    __table_args__ = (
-        Index("ix_outbox_due", "published_at", "next_attempt_at", "created_at"),
-    )
+    __table_args__ = (Index("ix_outbox_due", "published_at", "next_attempt_at", "created_at"),)
 
-    event_id: Mapped[UUID] = mapped_column(ForeignKey("domain_events.id", ondelete="CASCADE"), unique=True)
+    event_id: Mapped[UUID] = mapped_column(
+        ForeignKey("domain_events.id", ondelete="CASCADE"), unique=True
+    )
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -184,7 +211,9 @@ class ConsumerInbox(Scoped, Base):
     __table_args__ = (UniqueConstraint("consumer", "event_id", name="uq_inbox_consumer_event"),)
 
     consumer: Mapped[str] = mapped_column(String(120), nullable=False)
-    event_id: Mapped[UUID] = mapped_column(ForeignKey("domain_events.id", ondelete="CASCADE"), index=True)
+    event_id: Mapped[UUID] = mapped_column(
+        ForeignKey("domain_events.id", ondelete="CASCADE"), index=True
+    )
     result: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
 
 
@@ -192,8 +221,12 @@ class EffectIntent(Scoped, Base):
     __tablename__ = "effect_intents"
     __table_args__ = (UniqueConstraint("stable_key", name="uq_effect_stable_key"),)
 
-    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    task_id: Mapped[UUID | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    task_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), index=True
+    )
     kind: Mapped[str] = mapped_column(String(100), nullable=False)
     stable_key: Mapped[str] = mapped_column(String(200), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
@@ -208,10 +241,14 @@ class DeadLetter(Scoped, Base):
     __tablename__ = "dead_letters"
     __table_args__ = (Index("ix_dead_letters_status_created", "status", "created_at"),)
 
-    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
     task_id: Mapped[UUID] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
     run_id: Mapped[UUID | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
-    event_id: Mapped[UUID | None] = mapped_column(ForeignKey("domain_events.id", ondelete="SET NULL"))
+    event_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("domain_events.id", ondelete="SET NULL")
+    )
     kind: Mapped[str] = mapped_column(String(100), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)

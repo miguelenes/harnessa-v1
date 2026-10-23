@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -21,10 +23,11 @@ from harnessa.adapters.execution import (
 )
 from harnessa.adapters.specification_workspace import (
     SpecificationWorkspaceError,
-    SpecificationWorkspaceManager,
 )
+from harnessa.adapters.verification import VerificationManifest
 from harnessa.config import settings
 from harnessa.contracts import RetryClass, RunStatus, TaskStage
+from harnessa.db.model_gateway import ModelBudgetCounter, ModelBudgetPolicy
 from harnessa.db.models import Project, Repository, Task
 from harnessa.db.orchestration import (
     DeadLetter,
@@ -34,6 +37,7 @@ from harnessa.db.orchestration import (
     TaskLease,
     TaskTransition,
 )
+from harnessa.db.review import VerificationExecution
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import (
     SpecificationInterview,
@@ -41,6 +45,8 @@ from harnessa.db.specification import (
     SpecificationReadinessEvaluation,
 )
 from harnessa.services.lifecycle import _record_event, record_system_transition
+from harnessa.services.model_gateway import budget_policy_digest
+from harnessa.services.specifications import specification_workspace_manager
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -53,6 +59,8 @@ class ClaimedRun:
     owner_id: str
     fencing_token: int
     attempt: int
+    max_attempts: int
+    max_wall_seconds: int
     task: TaskInput
     checkpoint: Mapping[str, Any] | None = None
 
@@ -91,9 +99,7 @@ class Scheduler:
         self.max_attempts = max_attempts or settings.run_max_attempts
         self.max_wall_seconds = max_wall_seconds or settings.run_max_wall_seconds
         self.rng = rng
-        self.artifact_store = artifact_store or LocalArtifactStore(
-            Path(settings.artifact_root)
-        )
+        self.artifact_store = artifact_store or LocalArtifactStore(Path(settings.artifact_root))
 
     async def claim(self, owner_id: str, adapter_name: str) -> ClaimedRun | None:
         await self.recover_expired_leases()
@@ -101,11 +107,14 @@ class Scheduler:
         async with self.sessions() as db:
             try:
                 await db.execute(text("SELECT pg_advisory_xact_lock(710203041)"))
-                global_active = await db.scalar(
-                    select(func.count(TaskLease.id)).where(
-                        TaskLease.owner_id.is_not(None), TaskLease.expires_at > now
+                global_active = (
+                    await db.scalar(
+                        select(func.count(TaskLease.id)).where(
+                            TaskLease.owner_id.is_not(None), TaskLease.expires_at > now
+                        )
                     )
-                ) or 0
+                    or 0
+                )
                 if global_active >= self.global_limit:
                     await db.rollback()
                     return None
@@ -135,16 +144,123 @@ class Scheduler:
                         .where(SpecificationInterview.task_id == task.id)
                         .with_for_update()
                     )
+                    evaluation = None
+                    repository = None
+                    manifest = None
                     if interview is not None:
                         evaluation = await db.scalar(
                             select(SpecificationReadinessEvaluation)
-                            .where(
-                                SpecificationReadinessEvaluation.interview_id == interview.id
-                            )
+                            .where(SpecificationReadinessEvaluation.interview_id == interview.id)
                             .order_by(SpecificationReadinessEvaluation.created_at.desc())
                             .limit(1)
                         )
                         repository = await db.get(Repository, interview.repository_id)
+                        from harnessa.db.review import VerificationManifestRevision
+
+                        manifest = await db.scalar(
+                            select(VerificationManifestRevision)
+                            .where(
+                                VerificationManifestRevision.repository_id
+                                == interview.repository_id
+                            )
+                            .order_by(VerificationManifestRevision.revision.desc())
+                            .limit(1)
+                        )
+                        manifest_snapshot_valid = False
+                        if manifest is not None and repository is not None:
+                            try:
+                                manifest_source = (
+                                    await specification_workspace_manager().read_file_at_revision(
+                                        repository, manifest.source_revision, manifest.source_path
+                                    )
+                                )
+                                manifest_document = json.loads(manifest_source)
+                                parsed_manifest = VerificationManifest.model_validate(
+                                    {**manifest_document, "revision": manifest.revision}
+                                )
+                                manifest_snapshot_valid = (
+                                    hashlib.sha256(manifest_source).hexdigest()
+                                    == manifest.source_digest
+                                    and parsed_manifest.digest == manifest.manifest_digest
+                                    and manifest.source_revision == interview.base_sha
+                                )
+                            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                                manifest_snapshot_valid = False
+                        policy = await db.scalar(
+                            select(ModelBudgetPolicy).where(
+                                ModelBudgetPolicy.project_id == project.id
+                            )
+                        )
+                        project_counter = await db.scalar(
+                            select(ModelBudgetCounter).where(
+                                ModelBudgetCounter.project_id == project.id,
+                                ModelBudgetCounter.scope == "project",
+                                ModelBudgetCounter.scope_id == project.id,
+                            )
+                        )
+                        task_counter = await db.scalar(
+                            select(ModelBudgetCounter).where(
+                                ModelBudgetCounter.project_id == project.id,
+                                ModelBudgetCounter.task_id == task.id,
+                                ModelBudgetCounter.scope == "task",
+                                ModelBudgetCounter.scope_id == task.id,
+                            )
+                        )
+                        from harnessa.contracts import (
+                            ModelPoolKind,
+                            ModelProtocol,
+                            RouteRequirements,
+                        )
+                        from harnessa.services.model_gateway import has_compatible_configured_route
+
+                        route_ready = bool(
+                            policy is not None
+                            and policy.max_output_tokens >= settings.acp_model_max_output_tokens
+                            and await has_compatible_configured_route(
+                                db,
+                                organization_id=project.organization_id,
+                                pool_kind=ModelPoolKind.INTERACTIVE.value,
+                                alias_name=settings.acp_model_alias,
+                                requirements=RouteRequirements(
+                                    protocol=ModelProtocol.CHAT_COMPLETIONS,
+                                    tools=True,
+                                    minimum_context=min(
+                                        2_000_000,
+                                        settings.acp_model_max_request_bytes
+                                        + settings.acp_model_max_output_tokens,
+                                    ),
+                                    usage_reporting=True,
+                                    cancellation=True,
+                                ),
+                            )
+                        )
+                        budget_current = bool(
+                            policy is not None
+                            and evaluation is not None
+                            and evaluation.gates.get("budget_policy_digest")
+                            == budget_policy_digest(policy)
+                            and (
+                                project_counter is None
+                                or (
+                                    project_counter.billed_usd + project_counter.reserved_usd
+                                    < policy.project_limit_usd
+                                    and project_counter.used_tokens
+                                    + project_counter.reserved_tokens
+                                    < policy.project_token_limit
+                                    and project_counter.used_steps < policy.max_steps
+                                )
+                            )
+                            and (
+                                task_counter is None
+                                or (
+                                    task_counter.billed_usd + task_counter.reserved_usd
+                                    < policy.task_limit_usd
+                                    and task_counter.used_tokens + task_counter.reserved_tokens
+                                    < policy.task_token_limit
+                                    and task_counter.used_steps < policy.max_steps
+                                )
+                            )
+                        )
                         frozen_ready = bool(
                             interview.readiness_state == "READY"
                             and evaluation is not None
@@ -154,10 +270,19 @@ class Scheduler:
                             and evaluation.content_hash == interview.artifact_hash
                             and evaluation.base_sha == interview.base_sha
                             and evaluation.policy_revision == interview.policy_revision
+                            and evaluation.gates.get("execution_capabilities", {}).get(
+                                "model_route_ready"
+                            )
+                            is True
+                            and route_ready
+                            and budget_current
+                            and manifest is not None
+                            and manifest_snapshot_valid
+                            and manifest.source_revision == interview.base_sha
                         )
                         try:
                             current_base = (
-                                await SpecificationWorkspaceManager().current_base(repository)
+                                await specification_workspace_manager().current_base(repository)
                                 if repository is not None
                                 else None
                             )
@@ -180,15 +305,43 @@ class Scheduler:
                                 },
                             )
                             continue
-                    project_active = await db.scalar(
-                        select(func.count(TaskLease.id))
-                        .join(Task, Task.id == TaskLease.task_id)
-                        .where(
-                            Task.project_id == project.id,
-                            TaskLease.owner_id.is_not(None),
-                            TaskLease.expires_at > now,
+                    if (
+                        interview is None
+                        or evaluation is None
+                        or manifest is None
+                        or repository is None
+                    ):
+                        reason = "readiness_or_manifest_required"
+                        should_record = task.blocked_reason != reason
+                        task.blocked_reason = reason
+                        readiness_invalidated = True
+                        if should_record:
+                            await _record_event(
+                                db,
+                                task=task,
+                                event_type="task.dispatch_blocked",
+                                actor_id=None,
+                                payload={
+                                    "reason": task.blocked_reason,
+                                    "requires": [
+                                        "ready_specification",
+                                        "current_approved_manifest",
+                                    ],
+                                },
+                            )
+                        continue
+                    project_active = (
+                        await db.scalar(
+                            select(func.count(TaskLease.id))
+                            .join(Task, Task.id == TaskLease.task_id)
+                            .where(
+                                Task.project_id == project.id,
+                                TaskLease.owner_id.is_not(None),
+                                TaskLease.expires_at > now,
+                            )
                         )
-                    ) or 0
+                        or 0
+                    )
                     lease = await db.scalar(
                         select(TaskLease).where(TaskLease.task_id == task.id).with_for_update()
                     )
@@ -206,6 +359,64 @@ class Scheduler:
                     return None
 
                 task, project = selected
+                if interview is None or manifest is None:
+                    raise RuntimeError(
+                        "Dispatch readiness fence lost its approved specification or manifest"
+                    )
+                assert repository is not None
+                if policy is None:
+                    raise RuntimeError("READY dispatch lost its current model budget policy")
+                attempt_limit = min(self.max_attempts, policy.max_attempts)
+                wall_limit = min(self.max_wall_seconds, policy.max_wall_seconds)
+                specification_manager = specification_workspace_manager()
+                approved_workspace = await specification_manager.open(
+                    interview.id,
+                    repository,
+                    change_id=interview.change_id,
+                    base_sha=interview.base_sha,
+                    head_sha=interview.head_sha,
+                )
+                specification_files = await specification_manager.read_bundle(
+                    approved_workspace, interview.head_sha
+                )
+                if sum(len(value.encode()) for value in specification_files.values()) > 512_000:
+                    raise RuntimeError("Approved specification exceeds the dispatch context limit")
+                try:
+                    harness_instructions = (
+                        await specification_manager.read_file_at_revision(
+                            repository, interview.base_sha, "AGENTS.md", limit_bytes=128_000
+                        )
+                    ).decode("utf-8")
+                except SpecificationWorkspaceError:
+                    harness_instructions = ""
+                harness_digest = hashlib.sha256(harness_instructions.encode("utf-8")).hexdigest()
+                if task.blocked_reason == "verification_repair":
+                    from harnessa.db.review import ReviewBundle
+
+                    stale_bundles = await db.scalars(
+                        select(ReviewBundle)
+                        .where(
+                            ReviewBundle.task_id == task.id,
+                            ReviewBundle.status.in_(["prepared", "published"]),
+                        )
+                        .with_for_update()
+                    )
+                    for stale_bundle in stale_bundles:
+                        stale_bundle.status = "invalidated"
+                        stale_bundle.invalidated_reason = (
+                            "A new repair run is changing the reviewed source revision"
+                        )
+                verification_feedback: Mapping[str, Any] | None = None
+                if task.blocked_reason == "verification_repair":
+                    prior = await db.scalar(
+                        select(VerificationExecution)
+                        .where(VerificationExecution.task_id == task.id)
+                        .order_by(VerificationExecution.created_at.desc())
+                        .limit(1)
+                    )
+                    if prior is None:
+                        raise RuntimeError("Verification repair was queued without prior evidence")
+                    verification_feedback = _repair_feedback(prior.result)
                 lease = await db.scalar(
                     select(TaskLease).where(TaskLease.task_id == task.id).with_for_update()
                 )
@@ -218,13 +429,16 @@ class Scheduler:
                 )
                 previous = previous_runs.scalars().first()
                 attempt = (previous.attempt + 1) if previous else 1
-                if attempt > self.max_attempts:
+                if attempt > attempt_limit:
                     task.blocked_reason = "attempt_limit_exhausted"
                     await record_system_transition(
-                        db, task=task, target=TaskStage.RETRY_EXHAUSTED,
+                        db,
+                        task=task,
+                        target=TaskStage.RETRY_EXHAUSTED,
                         reason="Attempt limit exhausted before dispatch",
-                        event_type="task.retry_exhausted", run_status=RunStatus.FAILED,
-                        payload={"attempt": attempt, "limit": self.max_attempts},
+                        event_type="task.retry_exhausted",
+                        run_status=RunStatus.FAILED,
+                        payload={"attempt": attempt, "limit": attempt_limit},
                     )
                     db.add(
                         DeadLetter(
@@ -233,7 +447,7 @@ class Scheduler:
                             run_id=previous.id if previous else None,
                             kind="attempt_limit_exhausted",
                             reason="Run attempt limit reached before dispatch",
-                            payload={"attempt": attempt, "limit": self.max_attempts},
+                            payload={"attempt": attempt, "limit": attempt_limit},
                         )
                     )
                     await db.commit()
@@ -242,13 +456,16 @@ class Scheduler:
                 first_started = await db.scalar(
                     select(func.min(Run.started_at)).where(Run.task_id == task.id)
                 )
-                if first_started and (now - first_started).total_seconds() >= self.max_wall_seconds:
+                if first_started and (now - first_started).total_seconds() >= wall_limit:
                     task.blocked_reason = "wall_time_limit_exhausted"
                     await record_system_transition(
-                        db, task=task, target=TaskStage.RETRY_EXHAUSTED,
+                        db,
+                        task=task,
+                        target=TaskStage.RETRY_EXHAUSTED,
                         reason="Wall time limit exhausted before dispatch",
-                        event_type="task.retry_exhausted", run_status=RunStatus.FAILED,
-                        payload={"limit_seconds": self.max_wall_seconds},
+                        event_type="task.retry_exhausted",
+                        run_status=RunStatus.FAILED,
+                        payload={"limit_seconds": wall_limit},
                     )
                     db.add(
                         DeadLetter(
@@ -257,7 +474,7 @@ class Scheduler:
                             run_id=previous.id if previous else None,
                             kind="wall_time_limit_exhausted",
                             reason="Run wall-time limit reached before dispatch",
-                            payload={"limit_seconds": self.max_wall_seconds},
+                            payload={"limit_seconds": wall_limit},
                         )
                     )
                     await db.commit()
@@ -281,10 +498,20 @@ class Scheduler:
                     fencing_token=token,
                     started_at=now,
                     heartbeat_at=now,
-                    deadline_at=now + timedelta(seconds=self.max_wall_seconds),
+                    deadline_at=now + timedelta(seconds=wall_limit),
                     adapter_name=adapter_name,
                     checkpoint_id=row.id if checkpoint and row else None,
                     resume_from_run_id=previous.id if checkpoint and previous else None,
+                    base_sha=interview.base_sha,
+                    specification_hash=interview.artifact_hash,
+                    specification_revision=interview.artifact_revision,
+                    specification_commit_sha=interview.head_sha,
+                    policy_revision=interview.policy_revision,
+                    budget_policy_digest=budget_policy_digest(policy),
+                    harness_revision=settings.acp_harness_revision,
+                    harness_digest=harness_digest,
+                    agent_image=settings.acp_agent_image,
+                    verification_manifest_revision_id=manifest.id,
                 )
                 db.add(run)
                 await db.flush()
@@ -313,7 +540,22 @@ class Scheduler:
                     owner_id=owner_id,
                     fencing_token=token,
                     attempt=attempt,
-                    task=TaskInput(task.id, project.id, task.title, task.description),
+                    max_attempts=attempt_limit,
+                    max_wall_seconds=wall_limit,
+                    task=TaskInput(
+                        task.id,
+                        project.id,
+                        task.title,
+                        task.description,
+                        verification_feedback=verification_feedback,
+                        approved_base_sha=interview.base_sha,
+                        specification_files=specification_files,
+                        specification_hash=interview.artifact_hash,
+                        specification_revision=interview.artifact_revision,
+                        harness_instructions=harness_instructions,
+                        harness_revision=settings.acp_harness_revision,
+                        harness_digest=harness_digest,
+                    ),
                     checkpoint=checkpoint,
                 )
             except Exception:
@@ -339,8 +581,11 @@ class Scheduler:
                 return False
             await db.execute(
                 update(Run)
-                .where(Run.id == job.run_id, Run.fencing_token == job.fencing_token,
-                       Run.status == RunStatus.RUNNING.value)
+                .where(
+                    Run.id == job.run_id,
+                    Run.fencing_token == job.fencing_token,
+                    Run.status == RunStatus.RUNNING.value,
+                )
                 .values(heartbeat_at=now)
             )
             await db.commit()
@@ -350,20 +595,18 @@ class Scheduler:
         async with self.sessions() as db:
             try:
                 lease = await db.scalar(
-                    select(TaskLease).where(
+                    select(TaskLease)
+                    .where(
                         TaskLease.task_id == job.task_id,
                         TaskLease.run_id == job.run_id,
                         TaskLease.owner_id == job.owner_id,
                         TaskLease.fencing_token == job.fencing_token,
                         TaskLease.expires_at > func.now(),
-                    ).with_for_update()
+                    )
+                    .with_for_update()
                 )
-                task = await db.scalar(
-                    select(Task).where(Task.id == job.task_id).with_for_update()
-                )
-                run = await db.scalar(
-                    select(Run).where(Run.id == job.run_id).with_for_update()
-                )
+                task = await db.scalar(select(Task).where(Task.id == job.task_id).with_for_update())
+                run = await db.scalar(select(Run).where(Run.id == job.run_id).with_for_update())
                 if (
                     lease is None
                     or task is None
@@ -385,6 +628,7 @@ class Scheduler:
                 )
                 import hashlib
                 import json
+
                 data = dict(state)
                 digest = hashlib.sha256(
                     json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
@@ -404,11 +648,15 @@ class Scheduler:
                 run.checkpoint_id = checkpoint.id
                 if state.get("phase") == "session_update":
                     counts = state.get("update_counts", {})
-                    safe_counts = {
-                        str(key)[:80]: int(value)
-                        for key, value in counts.items()
-                        if isinstance(key, str) and isinstance(value, int) and value >= 0
-                    } if isinstance(counts, Mapping) else {}
+                    safe_counts = (
+                        {
+                            str(key)[:80]: int(value)
+                            for key, value in counts.items()
+                            if isinstance(key, str) and isinstance(value, int) and value >= 0
+                        }
+                        if isinstance(counts, Mapping)
+                        else {}
+                    )
                     await _record_event(
                         db,
                         task=task,
@@ -437,20 +685,18 @@ class Scheduler:
         async with self.sessions() as db:
             try:
                 lease = await db.scalar(
-                    select(TaskLease).where(
+                    select(TaskLease)
+                    .where(
                         TaskLease.task_id == job.task_id,
                         TaskLease.run_id == job.run_id,
                         TaskLease.owner_id == job.owner_id,
                         TaskLease.fencing_token == job.fencing_token,
                         TaskLease.expires_at > func.now(),
-                    ).with_for_update()
+                    )
+                    .with_for_update()
                 )
-                task = await db.scalar(
-                    select(Task).where(Task.id == job.task_id).with_for_update()
-                )
-                run = await db.scalar(
-                    select(Run).where(Run.id == job.run_id).with_for_update()
-                )
+                task = await db.scalar(select(Task).where(Task.id == job.task_id).with_for_update())
+                run = await db.scalar(select(Run).where(Run.id == job.run_id).with_for_update())
                 project = await db.scalar(
                     select(Project).where(Project.id == job.project_id).with_for_update()
                 )
@@ -497,7 +743,9 @@ class Scheduler:
                 )
                 if previous is not None:
                     if previous.media_type != stored.media_type:
-                        raise ValueError("Artifact digest was already published with another media type")
+                        raise ValueError(
+                            "Artifact digest was already published with another media type"
+                        )
                     await db.commit()
                     return _artifact_summary(previous)
 
@@ -581,20 +829,23 @@ class Scheduler:
         async with self.sessions() as db:
             try:
                 lease = await db.scalar(
-                    select(TaskLease).where(
+                    select(TaskLease)
+                    .where(
                         TaskLease.task_id == job.task_id,
                         TaskLease.run_id == job.run_id,
                         TaskLease.owner_id == job.owner_id,
                         TaskLease.fencing_token == job.fencing_token,
                         TaskLease.expires_at > now,
-                    ).with_for_update()
+                    )
+                    .with_for_update()
                 )
                 task = await db.scalar(select(Task).where(Task.id == job.task_id).with_for_update())
                 run = await db.scalar(select(Run).where(Run.id == job.run_id).with_for_update())
                 if not lease or not task or not run or run.fencing_token != job.fencing_token:
                     raise StaleLease("Completion rejected because the lease is no longer current")
                 if task.cancel_requested_at or task.run_status in {
-                    RunStatus.CANCELLED.value, RunStatus.PAUSED.value
+                    RunStatus.CANCELLED.value,
+                    RunStatus.PAUSED.value,
                 }:
                     await self._finish_interrupted(db, task, run, lease, now)
                     await db.commit()
@@ -603,6 +854,17 @@ class Scheduler:
                 run.finished_at = now
                 run.error_code = None
                 run.error_message = None
+                run.execution_result = dict(result)
+                result_revision = result.get("source_revision")
+                if (
+                    isinstance(result_revision, str)
+                    and len(result_revision) in {40, 64}
+                    and all(character in "0123456789abcdef" for character in result_revision)
+                ):
+                    if run.source_revision not in {None, result_revision}:
+                        raise StaleLease("Execution result revision changed after it was bound")
+                    run.source_revision = result_revision
+                task.stage = TaskStage.VERIFYING.value
                 task.run_status = RunStatus.SUCCEEDED.value
                 task.version += 1
                 lease.owner_id = None
@@ -610,16 +872,30 @@ class Scheduler:
                 lease.heartbeat_at = now
                 db.add(
                     TaskTransition(
-                        task_id=task.id, project_id=task.project_id, actor_id=None,
-                        from_stage=task.stage, to_stage=task.stage,
-                        from_run_status=RunStatus.RUNNING.value, to_run_status=RunStatus.SUCCEEDED.value,
-                        reason="Execution adapter completed successfully", command="run_succeeded",
-                        version_before=task.version - 1, version_after=task.version,
+                        task_id=task.id,
+                        project_id=task.project_id,
+                        actor_id=None,
+                        from_stage=TaskStage.IN_PROGRESS.value,
+                        to_stage=TaskStage.VERIFYING.value,
+                        from_run_status=RunStatus.RUNNING.value,
+                        to_run_status=RunStatus.SUCCEEDED.value,
+                        reason="Implementation completed; independent verification is pending",
+                        command="implementation_succeeded",
+                        version_before=task.version - 1,
+                        version_after=task.version,
                     )
                 )
                 await _record_event(
-                    db, task=task, event_type="run.succeeded", actor_id=None,
-                    run_id=run.id, payload={"result": dict(result), "version": task.version}
+                    db,
+                    task=task,
+                    event_type="task.verification_started",
+                    actor_id=None,
+                    run_id=run.id,
+                    payload={
+                        "result": dict(result),
+                        "source_revision": run.source_revision,
+                        "version": task.version,
+                    },
                 )
                 await db.commit()
             except Exception:
@@ -631,18 +907,22 @@ class Scheduler:
         async with self.sessions() as db:
             try:
                 lease = await db.scalar(
-                    select(TaskLease).where(
+                    select(TaskLease)
+                    .where(
                         TaskLease.task_id == job.task_id,
                         TaskLease.run_id == job.run_id,
                         TaskLease.owner_id == job.owner_id,
                         TaskLease.fencing_token == job.fencing_token,
                         TaskLease.expires_at > now,
-                    ).with_for_update()
+                    )
+                    .with_for_update()
                 )
                 task = await db.scalar(select(Task).where(Task.id == job.task_id).with_for_update())
                 run = await db.scalar(select(Run).where(Run.id == job.run_id).with_for_update())
                 if not lease or not task or not run or run.fencing_token != job.fencing_token:
-                    raise StaleLease("Failure write rejected because the lease is no longer current")
+                    raise StaleLease(
+                        "Failure write rejected because the lease is no longer current"
+                    )
                 run.status = RunStatus.FAILED.value
                 run.retry_class = failure.retry_class
                 run.error_code = failure.code
@@ -650,12 +930,12 @@ class Scheduler:
                 run.finished_at = now
                 lease.owner_id = None
                 lease.expires_at = now
-                attempt_exhausted = job.attempt >= self.max_attempts
+                attempt_exhausted = job.attempt >= job.max_attempts
                 first_started = await db.scalar(
                     select(func.min(Run.started_at)).where(Run.task_id == task.id)
                 )
                 wall_exhausted = bool(
-                    first_started and (now - first_started).total_seconds() >= self.max_wall_seconds
+                    first_started and (now - first_started).total_seconds() >= job.max_wall_seconds
                 )
                 retryable = failure.retry_class in {
                     RetryClass.TRANSIENT.value,
@@ -663,14 +943,20 @@ class Scheduler:
                 }
                 if not retryable or attempt_exhausted or wall_exhausted:
                     task.blocked_reason = (
-                        "attempt_limit_exhausted" if attempt_exhausted else
-                        "wall_time_limit_exhausted" if wall_exhausted else failure.code
+                        "attempt_limit_exhausted"
+                        if attempt_exhausted
+                        else "wall_time_limit_exhausted"
+                        if wall_exhausted
+                        else failure.code
                     )
                     if retryable:
                         await record_system_transition(
-                            db, task=task, target=TaskStage.RETRY_EXHAUSTED,
+                            db,
+                            task=task,
+                            target=TaskStage.RETRY_EXHAUSTED,
                             reason=f"Retry policy stopped execution: {failure.code}",
-                            event_type="task.retry_exhausted", run_id=run.id,
+                            event_type="task.retry_exhausted",
+                            run_id=run.id,
                             run_status=RunStatus.FAILED,
                             payload={"retry_class": failure.retry_class, "attempt": job.attempt},
                         )
@@ -679,41 +965,64 @@ class Scheduler:
                         task.version += 1
                         db.add(
                             TaskTransition(
-                                task_id=task.id, project_id=task.project_id, actor_id=None,
-                                from_stage=task.stage, to_stage=task.stage,
-                                from_run_status=RunStatus.RUNNING.value, to_run_status=RunStatus.FAILED.value,
-                                reason=str(failure), command="run_failed",
-                                version_before=task.version - 1, version_after=task.version,
+                                task_id=task.id,
+                                project_id=task.project_id,
+                                actor_id=None,
+                                from_stage=task.stage,
+                                to_stage=task.stage,
+                                from_run_status=RunStatus.RUNNING.value,
+                                to_run_status=RunStatus.FAILED.value,
+                                reason=str(failure),
+                                command="run_failed",
+                                version_before=task.version - 1,
+                                version_after=task.version,
                             )
                         )
                         await _record_event(
-                            db, task=task, event_type="run.failed", actor_id=None,
-                            run_id=run.id, payload={"code": failure.code,
-                            "retry_class": failure.retry_class, "version": task.version}
+                            db,
+                            task=task,
+                            event_type="run.failed",
+                            actor_id=None,
+                            run_id=run.id,
+                            payload={
+                                "code": failure.code,
+                                "retry_class": failure.retry_class,
+                                "version": task.version,
+                            },
                         )
                     db.add(
                         DeadLetter(
-                            project_id=task.project_id, task_id=task.id, run_id=run.id,
-                            kind=failure.code, reason=str(failure),
+                            project_id=task.project_id,
+                            task_id=task.id,
+                            run_id=run.id,
+                            kind=failure.code,
+                            reason=str(failure),
                             payload={"retry_class": failure.retry_class, "attempt": job.attempt},
                         )
                     )
                 else:
                     delay = retry_delay_seconds(
-                        job.attempt, failure.retry_class,
+                        job.attempt,
+                        failure.retry_class,
                         retry_after_seconds=failure.retry_after_seconds,
                         random_value=self.rng(),
                     )
                     task.available_at = now + timedelta(seconds=delay)
                     task.blocked_reason = "retry_backoff"
                     await record_system_transition(
-                        db, task=task, target=TaskStage.READY,
+                        db,
+                        task=task,
+                        target=TaskStage.READY,
                         reason=f"Retrying {failure.retry_class} failure after bounded backoff",
-                        event_type="task.ready", run_id=run.id,
+                        event_type="task.ready",
+                        run_id=run.id,
                         run_status=RunStatus.QUEUED,
                         recovery=True,
-                        payload={"retry_class": failure.retry_class,
-                                 "attempt": job.attempt, "delay_seconds": delay},
+                        payload={
+                            "retry_class": failure.retry_class,
+                            "attempt": job.attempt,
+                            "delay_seconds": delay,
+                        },
                     )
                 await db.commit()
             except Exception:
@@ -731,17 +1040,25 @@ class Scheduler:
         task.version += 1
         db.add(
             TaskTransition(
-                task_id=task.id, project_id=task.project_id, actor_id=None,
-                from_stage=task.stage, to_stage=task.stage,
-                from_run_status=RunStatus.RUNNING.value, to_run_status=run.status,
+                task_id=task.id,
+                project_id=task.project_id,
+                actor_id=None,
+                from_stage=task.stage,
+                to_stage=task.stage,
+                from_run_status=RunStatus.RUNNING.value,
+                to_run_status=run.status,
                 reason="Execution acknowledged cancellation" if cancelled else "Execution paused",
                 command="run_cancelled" if cancelled else "run_paused",
-                version_before=task.version - 1, version_after=task.version,
+                version_before=task.version - 1,
+                version_after=task.version,
             )
         )
         await _record_event(
-            db, task=task, event_type="run.cancelled" if cancelled else "run.paused",
-            actor_id=None, run_id=run.id,
+            db,
+            task=task,
+            event_type="run.cancelled" if cancelled else "run.paused",
+            actor_id=None,
+            run_id=run.id,
             payload={"version": task.version, "run_status": run.status},
         )
 
@@ -751,16 +1068,22 @@ class Scheduler:
         async with self.sessions() as db:
             try:
                 leases = (
-                    await db.execute(
-                        select(TaskLease)
-                        .where(TaskLease.owner_id.is_not(None), TaskLease.expires_at <= now)
-                        .order_by(TaskLease.expires_at)
-                        .with_for_update(skip_locked=True)
-                        .limit(100)
+                    (
+                        await db.execute(
+                            select(TaskLease)
+                            .where(TaskLease.owner_id.is_not(None), TaskLease.expires_at <= now)
+                            .order_by(TaskLease.expires_at)
+                            .with_for_update(skip_locked=True)
+                            .limit(100)
+                        )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 for lease in leases:
-                    task = await db.scalar(select(Task).where(Task.id == lease.task_id).with_for_update())
+                    task = await db.scalar(
+                        select(Task).where(Task.id == lease.task_id).with_for_update()
+                    )
                     run = await db.get(Run, lease.run_id) if lease.run_id else None
                     lease.owner_id = None
                     lease.expires_at = now
@@ -829,58 +1152,106 @@ class Scheduler:
                         .order_by(RunCheckpoint.sequence.desc())
                         .limit(1)
                     )
+                    recovery_policy = await db.scalar(
+                        select(ModelBudgetPolicy).where(
+                            ModelBudgetPolicy.project_id == task.project_id
+                        )
+                    )
+                    attempt_limit = min(
+                        self.max_attempts,
+                        recovery_policy.max_attempts if recovery_policy else self.max_attempts,
+                    )
+                    wall_limit = min(
+                        self.max_wall_seconds,
+                        recovery_policy.max_wall_seconds
+                        if recovery_policy
+                        else self.max_wall_seconds,
+                    )
+                    first_started = await db.scalar(
+                        select(func.min(Run.started_at)).where(Run.task_id == task.id)
+                    )
+                    wall_exhausted = bool(
+                        first_started and (now - first_started).total_seconds() >= wall_limit
+                    )
                     run.status = RunStatus.FAILED.value
                     run.error_code = "worker_lost"
                     run.error_message = "Worker lease expired before run completion"
-                    run.retry_class = RetryClass.TRANSIENT.value if checkpoint else RetryClass.PERMANENT.value
+                    run.retry_class = (
+                        RetryClass.TRANSIENT.value if checkpoint else RetryClass.PERMANENT.value
+                    )
                     run.finished_at = now
                     task.version += 1
-                    if checkpoint and run.attempt < self.max_attempts:
+                    if checkpoint and run.attempt < attempt_limit and not wall_exhausted:
                         task.stage = TaskStage.READY.value
                         task.run_status = RunStatus.QUEUED.value
                         task.blocked_reason = "worker_lost_checkpoint"
                         task.available_at = now
                         db.add(
                             TaskTransition(
-                                task_id=task.id, project_id=task.project_id, actor_id=None,
-                                from_stage=TaskStage.IN_PROGRESS.value, to_stage=TaskStage.READY.value,
+                                task_id=task.id,
+                                project_id=task.project_id,
+                                actor_id=None,
+                                from_stage=TaskStage.IN_PROGRESS.value,
+                                to_stage=TaskStage.READY.value,
                                 from_run_status=RunStatus.RUNNING.value,
                                 to_run_status=RunStatus.QUEUED.value,
                                 reason="Expired worker recovered from durable checkpoint",
                                 command="checkpoint_recovery",
-                                version_before=task.version - 1, version_after=task.version,
+                                version_before=task.version - 1,
+                                version_after=task.version,
                             )
                         )
                         await _record_event(
-                            db, task=task, event_type="task.ready", actor_id=None,
+                            db,
+                            task=task,
+                            event_type="task.ready",
+                            actor_id=None,
                             run_id=run.id,
-                            payload={"reason": "checkpoint_recovery", "checkpoint_id": str(checkpoint.id),
-                                     "version": task.version},
+                            payload={
+                                "reason": "checkpoint_recovery",
+                                "checkpoint_id": str(checkpoint.id),
+                                "version": task.version,
+                            },
                         )
                     else:
                         task.run_status = RunStatus.FAILED.value
-                        task.blocked_reason = "worker_lost_unrecoverable"
+                        task.blocked_reason = (
+                            "wall_time_limit_exhausted"
+                            if wall_exhausted
+                            else "attempt_limit_exhausted"
+                            if run.attempt >= attempt_limit
+                            else "worker_lost_unrecoverable"
+                        )
                         db.add(
                             TaskTransition(
-                                task_id=task.id, project_id=task.project_id, actor_id=None,
-                                from_stage=task.stage, to_stage=task.stage,
+                                task_id=task.id,
+                                project_id=task.project_id,
+                                actor_id=None,
+                                from_stage=task.stage,
+                                to_stage=task.stage,
                                 from_run_status=RunStatus.RUNNING.value,
                                 to_run_status=RunStatus.FAILED.value,
-                                reason="Expired worker had no resumable checkpoint; automatic replay refused",
+                                reason="Expired worker recovery stopped because its checkpoint or shared limits did not permit replay",
                                 command="worker_lost",
-                                version_before=task.version - 1, version_after=task.version,
+                                version_before=task.version - 1,
+                                version_after=task.version,
                             )
                         )
                         db.add(
                             DeadLetter(
-                                project_id=task.project_id, task_id=task.id, run_id=run.id,
+                                project_id=task.project_id,
+                                task_id=task.id,
+                                run_id=run.id,
                                 kind="worker_lost_unrecoverable",
                                 reason="Worker lease expired and no resumable checkpoint was retained",
                                 payload={"attempt": run.attempt},
                             )
                         )
                         await _record_event(
-                            db, task=task, event_type="task.worker_lost", actor_id=None,
+                            db,
+                            task=task,
+                            event_type="task.worker_lost",
+                            actor_id=None,
                             run_id=run.id,
                             payload={"reason": task.blocked_reason, "version": task.version},
                         )
@@ -966,4 +1337,43 @@ def _artifact_summary(artifact: RunArtifact) -> dict[str, Any]:
         "storage_key": artifact.storage_key,
         "run_id": str(artifact.run_id),
         "fencing_token": artifact.fencing_token,
+    }
+
+
+def _repair_feedback(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Select bounded, explicitly untrusted verifier facts for the next implementation turn."""
+    criteria = result.get("criteria", [])
+    commands = result.get("commands", [])
+    selected_criteria = (
+        [
+            {
+                "criterion_id": item.get("criterion_id"),
+                "outcome": item.get("outcome"),
+                "summary": str(item.get("summary", ""))[:500],
+            }
+            for item in criteria[:100]
+            if isinstance(item, dict) and item.get("outcome") in {"failed", "unverified"}
+        ]
+        if isinstance(criteria, list)
+        else []
+    )
+    selected_commands = (
+        [
+            {
+                "command_id": item.get("command_id"),
+                "exit_code": item.get("exit_code"),
+                "stderr": str(item.get("stderr", ""))[:1200],
+                "stdout": str(item.get("stdout", ""))[:1200],
+            }
+            for item in commands[:50]
+            if isinstance(item, dict) and item.get("outcome") in {"failed", "unverified"}
+        ][:8]
+        if isinstance(commands, list)
+        else []
+    )
+    return {
+        "outcome": result.get("outcome", "unverified"),
+        "criteria": selected_criteria,
+        "commands": selected_commands,
+        "evidence_is_untrusted": True,
     }

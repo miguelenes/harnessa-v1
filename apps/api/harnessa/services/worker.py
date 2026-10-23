@@ -21,6 +21,7 @@ from harnessa.services.effects import ReconcileOutcome, reconcile_effect_intents
 from harnessa.services.model_gateway import reconcile_stale_model_reservations
 from harnessa.services.scheduler import Scheduler
 from harnessa.services.streams import OutboxPublisher, StreamConsumer, prune_retained_events
+from harnessa.services.verification_workflow import VerificationDispatcher
 from redis.asyncio import Redis
 
 logger = logging.getLogger("harnessa.worker")
@@ -35,8 +36,7 @@ def _configured_execution_adapter() -> ExecutionAdapter:
     except json.JSONDecodeError as exc:
         raise ValueError("ACP_REPOSITORY_SOURCES_JSON must be valid JSON") from exc
     if not isinstance(decoded, dict) or any(
-        not isinstance(key, str) or not isinstance(value, str)
-        for key, value in decoded.items()
+        not isinstance(key, str) or not isinstance(value, str) for key, value in decoded.items()
     ):
         raise ValueError("ACP_REPOSITORY_SOURCES_JSON must map project ids to source paths")
     limits = SandboxLimits(
@@ -60,9 +60,7 @@ def _configured_execution_adapter() -> ExecutionAdapter:
         limits=limits,
         # The run-scoped bridge sends every model request through Harnessa budgets.
         # The agent receives only its run token and cannot reach provider networks.
-        model_route_ready=(
-            settings.acp_model_broker_enabled and bool(settings.model_gateway_url)
-        ),
+        model_route_ready=(settings.acp_model_broker_enabled and bool(settings.model_gateway_url)),
         model_alias=settings.acp_model_alias,
         model_max_output_tokens=settings.acp_model_max_output_tokens,
     )
@@ -76,6 +74,13 @@ async def run() -> None:
     consumer = StreamConsumer(redis, consumer_name=owner)
     scheduler = Scheduler()
     adapter = _configured_execution_adapter()
+    try:
+        source_mapping = json.loads(settings.acp_repository_sources_json)
+        verification_dispatcher = VerificationDispatcher(
+            {str(key): Path(value) for key, value in source_mapping.items()}
+        )
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        verification_dispatcher = None
     active_runs: set[asyncio.Task[bool]] = set()
     last_prune = 0.0
     last_model_reconcile = 0.0
@@ -108,6 +113,13 @@ async def run() -> None:
                 await publisher.publish_once()
                 await consumer.process_once(block_ms=100)
                 await scheduler.recover_expired_leases()
+                if verification_dispatcher is not None:
+                    try:
+                        await verification_dispatcher.run_once()
+                    except Exception:
+                        logger.exception(
+                            "Independent verifier failed; durable task remains recoverable"
+                        )
                 await reconcile_effect_intents(_UnconfiguredEffectReconciler())
                 if adapter.available:
                     available = max(0, settings.max_concurrent_runs - len(active_runs))
@@ -121,17 +133,12 @@ async def run() -> None:
                     await prune_retained_events()
                     await scheduler.reconcile_orphan_artifacts()
                     last_prune = now
-                if (
-                    isinstance(adapter, ACPExecutionAdapter)
-                    and now - last_acp_reconcile >= 30
-                ):
+                if isinstance(adapter, ACPExecutionAdapter) and now - last_acp_reconcile >= 30:
                     last_acp_reconcile = now
                     try:
                         if not adapter.sandbox_validated:
                             await adapter.validate()
-                        await adapter.reconcile_orphans(
-                            is_current_fence=scheduler.is_current_fence
-                        )
+                        await adapter.reconcile_orphans(is_current_fence=scheduler.is_current_fence)
                     except Exception:
                         logger.exception("ACP periodic validation or orphan reconciliation failed")
                 if not active_runs:

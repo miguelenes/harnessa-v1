@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -455,6 +455,7 @@ class TaskRead(TaskCreate):
     updated_at: datetime
     specification_readiness_state: str | None = None
     specification_revision: int | None = None
+    specification_commit_sha: str | None = None
     allowed_transitions: list[TaskStage] = Field(default_factory=list)
 
 
@@ -516,6 +517,15 @@ class RunRead(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     checkpoint_id: UUID | None = None
+    source_revision: str | None = None
+    base_sha: str | None = None
+    specification_hash: str | None = None
+    specification_revision: int | None = None
+    policy_revision: str | None = None
+    budget_policy_digest: str | None = None
+    harness_revision: str | None = None
+    harness_digest: str | None = None
+    verification_manifest_revision_id: UUID | None = None
 
 
 class RunOrchestrationIdentity(BaseModel):
@@ -612,7 +622,9 @@ class EvidenceTextValue(BaseModel):
     @model_validator(mode="after")
     def validate_status_value(self) -> EvidenceTextValue:
         if (self.status == EvidenceValueStatus.KNOWN) != (self.value is not None):
-            raise ValueError("known evidence text requires a value; unknown or redacted text omits it")
+            raise ValueError(
+                "known evidence text requires a value; unknown or redacted text omits it"
+            )
         return self
 
 
@@ -623,7 +635,9 @@ class EvidenceUuidValue(BaseModel):
     @model_validator(mode="after")
     def validate_status_value(self) -> EvidenceUuidValue:
         if (self.status == EvidenceValueStatus.KNOWN) != (self.value is not None):
-            raise ValueError("known evidence UUID requires a value; unknown or redacted UUID omits it")
+            raise ValueError(
+                "known evidence UUID requires a value; unknown or redacted UUID omits it"
+            )
         return self
 
 
@@ -634,7 +648,9 @@ class EvidenceIntegerValue(BaseModel):
     @model_validator(mode="after")
     def validate_status_value(self) -> EvidenceIntegerValue:
         if (self.status == EvidenceValueStatus.KNOWN) != (self.value is not None):
-            raise ValueError("known evidence integer requires a value; unknown or redacted integer omits it")
+            raise ValueError(
+                "known evidence integer requires a value; unknown or redacted integer omits it"
+            )
         return self
 
 
@@ -645,7 +661,9 @@ class EvidenceTimestampValue(BaseModel):
     @model_validator(mode="after")
     def validate_status_value(self) -> EvidenceTimestampValue:
         if (self.status == EvidenceValueStatus.KNOWN) != (self.value is not None):
-            raise ValueError("known evidence time requires a value; unknown or redacted time omits it")
+            raise ValueError(
+                "known evidence time requires a value; unknown or redacted time omits it"
+            )
         return self
 
 
@@ -734,6 +752,51 @@ class RepositoryRead(RepositoryCreate):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     project_id: UUID
+
+
+class VerificationManifestApprovalRequest(BaseModel):
+    """Approve the manifest file at one exact, current repository revision."""
+
+    source_path: str = Field(default=".harnessa/verification.json", min_length=1, max_length=500)
+    source_revision: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    protected_fixtures: dict[str, str] = Field(default_factory=dict, max_length=100)
+
+
+class VerificationManifestRevisionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    repository_id: UUID
+    revision: int
+    source_path: str
+    source_revision: str
+    source_digest: str
+    manifest_digest: str
+    manifest: dict[str, Any]
+    approved_by: UUID
+    approved_at: datetime
+    created_at: datetime
+
+
+class ReviewDecisionRequest(BaseModel):
+    decision: Literal["approve", "request_changes", "comment"]
+    rationale: str = Field(min_length=1, max_length=10_000)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    bundle_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ManualIntegrationRequest(BaseModel):
+    expected_base_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    stable_key: str = Field(min_length=1, max_length=200)
+    integration_revision: str = Field(min_length=1, max_length=200)
+    evidence: dict[str, Any]
+
+
+class PostIntegrationStepRequest(BaseModel):
+    status: Literal["succeeded", "failed"]
+    result: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = Field(default=None, max_length=2000)
 
 
 class SpecificationInterviewCreate(BaseModel):

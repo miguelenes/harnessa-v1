@@ -42,6 +42,7 @@ class SandboxBackend(Protocol):
         broker_socket: Path | None = None,
         opencode_config: Path | None = None,
         relay_binary: Path | None = None,
+        approved_specification: Path | None = None,
         orchestrator_socket: Path | None = None,
         orchestrator_binary: Path | None = None,
     ) -> asyncio.subprocess.Process: ...
@@ -125,6 +126,7 @@ class PodmanSandboxBackend:
         broker_socket: Path | None = None,
         opencode_config: Path | None = None,
         relay_binary: Path | None = None,
+        approved_specification: Path | None = None,
         orchestrator_socket: Path | None = None,
         orchestrator_binary: Path | None = None,
     ) -> list[str]:
@@ -187,7 +189,11 @@ class PodmanSandboxBackend:
             relay_path = relay_binary.resolve(strict=True)
             if not stat.S_ISSOCK(socket_path.stat().st_mode):
                 raise SandboxPolicyError("The model broker path is not a Unix socket")
-            if any(character in str(path) for path in (socket_path, config_path, relay_path) for character in ",:"):
+            if any(
+                character in str(path)
+                for path in (socket_path, config_path, relay_path)
+                for character in ",:"
+            ):
                 raise SandboxPolicyError("Model broker paths may not contain ':' or ','")
             if not relay_path.is_file() or not os.access(relay_path, os.X_OK):
                 raise SandboxPolicyError("The model socket relay is not executable")
@@ -203,6 +209,18 @@ class PodmanSandboxBackend:
                     "OPENCODE_CONFIG=/run/harnessa/opencode.json",
                 ]
             )
+        if approved_specification is not None:
+            specification_path = approved_specification.resolve(strict=True)
+            if not specification_path.is_dir() or any(
+                character in str(specification_path) for character in ",:"
+            ):
+                raise SandboxPolicyError("Approved specification mount is invalid")
+            command.extend(
+                [
+                    "--volume",
+                    f"{specification_path}:/run/harnessa/approved-spec:ro,rprivate,Z",
+                ]
+            )
         if orchestrator_socket is not None and orchestrator_binary is not None:
             socket_path = orchestrator_socket.resolve(strict=True)
             tool_path = orchestrator_binary.resolve(strict=True)
@@ -210,7 +228,9 @@ class PodmanSandboxBackend:
                 raise SandboxPolicyError("The orchestrator path is not a Unix socket")
             if not tool_path.is_file() or not os.access(tool_path, os.X_OK):
                 raise SandboxPolicyError("The orchestrator MCP bridge is not executable")
-            if any(character in str(path) for path in (socket_path, tool_path) for character in ",:"):
+            if any(
+                character in str(path) for path in (socket_path, tool_path) for character in ",:"
+            ):
                 raise SandboxPolicyError("Orchestrator bridge paths may not contain ':' or ','")
             command.extend(
                 [
@@ -237,7 +257,7 @@ class PodmanSandboxBackend:
             command.extend(
                 [
                     "-c",
-                    "/harnessa/model-relay /run/harnessa/model.sock 8765 </dev/null >/dev/null 2>&1 & exec opencode \"$@\"",
+                    '/harnessa/model-relay /run/harnessa/model.sock 8765 </dev/null >/dev/null 2>&1 & exec opencode "$@"',
                     "harnessa-agent",
                     *agent_command,
                 ]
@@ -249,7 +269,9 @@ class PodmanSandboxBackend:
     async def build_model_relay(self, destination: Path) -> Path:
         compiler = shutil.which("cc")
         if compiler is None:
-            raise SandboxUnavailable("A C compiler is required to build the isolated model socket relay")
+            raise SandboxUnavailable(
+                "A C compiler is required to build the isolated model socket relay"
+            )
         source = Path(__file__).with_name("acp_socket_relay.c")
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temporary = destination.with_suffix(".tmp")
@@ -279,7 +301,9 @@ class PodmanSandboxBackend:
     async def build_orchestrator_tool(self, destination: Path) -> Path:
         compiler = shutil.which("cc")
         if compiler is None:
-            raise SandboxUnavailable("A C compiler is required to build the isolated orchestrator tool")
+            raise SandboxUnavailable(
+                "A C compiler is required to build the isolated orchestrator tool"
+            )
         source = Path(__file__).with_name("acp_orchestrator_mcp.c")
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temporary = destination.with_suffix(".tmp")
@@ -317,6 +341,7 @@ class PodmanSandboxBackend:
         broker_socket: Path | None = None,
         opencode_config: Path | None = None,
         relay_binary: Path | None = None,
+        approved_specification: Path | None = None,
         orchestrator_socket: Path | None = None,
         orchestrator_binary: Path | None = None,
     ) -> asyncio.subprocess.Process:
@@ -328,6 +353,7 @@ class PodmanSandboxBackend:
             broker_socket=broker_socket,
             opencode_config=opencode_config,
             relay_binary=relay_binary,
+            approved_specification=approved_specification,
             orchestrator_socket=orchestrator_socket,
             orchestrator_binary=orchestrator_binary,
         )

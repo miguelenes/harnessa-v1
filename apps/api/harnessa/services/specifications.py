@@ -52,7 +52,7 @@ from harnessa.services.lifecycle import (
     record_system_transition,
     transition_task,
 )
-from harnessa.services.model_gateway import has_compatible_configured_route
+from harnessa.services.model_gateway import budget_policy_digest, has_compatible_configured_route
 from harnessa.services.retrieval_index import approved_skill_paths_for_project
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,6 +68,11 @@ _ARTIFACT_NAMES = {
     "design_md": "design.md",
     "tasks_md": "tasks.md",
 }
+
+
+def specification_workspace_manager() -> SpecificationWorkspaceManager:
+    """Return the shared manager used for approved specification workspaces."""
+    return _workspace_manager
 
 
 def _request_hash(value: dict[str, Any]) -> str:
@@ -269,7 +274,9 @@ async def create_agent_question(
     question_text: str,
 ) -> SpecificationQuestion:
     if not 12 <= len(question_text.strip()) <= 2000:
-        raise HTTPException(422, "Clarification question must contain between 12 and 2000 characters")
+        raise HTTPException(
+            422, "Clarification question must contain between 12 and 2000 characters"
+        )
     interview = await db.scalar(
         select(SpecificationInterview)
         .where(
@@ -563,11 +570,15 @@ async def create_interview(
         )
         if existing is not None:
             if existing.request_hash != request_digest:
-                raise HTTPException(409, "Idempotency-Key was already used with a different interview")
+                raise HTTPException(
+                    409, "Idempotency-Key was already used with a different interview"
+                )
             return existing, True
 
         current_base = await _workspace_manager.current_base(repository)
-        command_key = f"openspec-task:{_request_hash({'project': str(project_id), 'key': idempotency_key})}"
+        command_key = (
+            f"openspec-task:{_request_hash({'project': str(project_id), 'key': idempotency_key})}"
+        )
         task, task_replayed = await create_task(
             db,
             project_id=project_id,
@@ -602,7 +613,9 @@ async def create_interview(
                 interview_id, repository, change_id, files
             )
             if workspace.base_sha != current_base:
-                raise HTTPException(409, "Repository base changed while the interview workspace was created")
+                raise HTTPException(
+                    409, "Repository base changed while the interview workspace was created"
+                )
             validation = await _workspace_manager.validate(workspace)
         except SpecificationWorkspaceError as exc:
             raise HTTPException(503, str(exc)) from exc
@@ -656,8 +669,14 @@ async def create_interview(
                     "behavior described by the topic."
                 ),
                 recommended_options=[
-                    {"label": "Keep this assumption", "description": "Continue with the focused draft."},
-                    {"label": "Add cases", "description": "Provide additional acceptance behavior."},
+                    {
+                        "label": "Keep this assumption",
+                        "description": "Continue with the focused draft.",
+                    },
+                    {
+                        "label": "Add cases",
+                        "description": "Provide additional acceptance behavior.",
+                    },
                 ],
                 affected_artifacts=list(files),
                 evidence=citations,
@@ -689,7 +708,9 @@ async def create_interview(
         await db.rollback()
         raise
     finally:
-        await db.execute(text("SELECT pg_advisory_unlock(hashtextextended(:key, 0))"), {"key": lock_key})
+        await db.execute(
+            text("SELECT pg_advisory_unlock(hashtextextended(:key, 0))"), {"key": lock_key}
+        )
 
 
 async def search_repository(
@@ -751,12 +772,15 @@ async def search_repository(
         raise HTTPException(503, str(exc)) from exc
     # Reauthorize after source and verifier evidence reads, before returning excerpts.
     await require_membership(db, actor, project_id)
-    if await db.scalar(
-        select(Repository.id).where(
-            Repository.id == repository_id,
-            Repository.project_id == project_id,
+    if (
+        await db.scalar(
+            select(Repository.id).where(
+                Repository.id == repository_id,
+                Repository.project_id == project_id,
+            )
         )
-    ) is None:
+        is None
+    ):
         raise HTTPException(404, "Repository is not connected to this project")
     terms = {term.casefold() for term in re.findall(r"[\w-]+", query) if len(term) > 1}
     verified_citations: list[RepositoryCitation] = []
@@ -777,7 +801,8 @@ async def search_repository(
                     term
                     for item in matched_criteria
                     for term in terms
-                    if term in f"{item['criterion_id']} {item['outcome']} {item['summary']}".casefold()
+                    if term
+                    in f"{item['criterion_id']} {item['outcome']} {item['summary']}".casefold()
                 }
             )
         )
@@ -806,10 +831,17 @@ async def search_repository(
     omitted: list[str] = []
     candidates = sorted(
         (*result.citations, *verified_citations),
-        key=lambda citation: (-len(citation.matched_terms), citation.path, citation.revision, citation.line),
+        key=lambda citation: (
+            -len(citation.matched_terms),
+            citation.path,
+            citation.revision,
+            citation.line,
+        ),
     )[:limit]
     for rank, citation in enumerate(candidates, start=1):
-        snippet_hash = citation.content_hash or hashlib.sha256(citation.snippet.encode("utf-8")).hexdigest()
+        snippet_hash = (
+            citation.content_hash or hashlib.sha256(citation.snippet.encode("utf-8")).hexdigest()
+        )
         snippet_bytes = len(citation.snippet.encode("utf-8"))
         if context_bytes + snippet_bytes > max_context_bytes:
             omitted.append(f"{citation.path}:{citation.line}:context_budget")
@@ -852,7 +884,10 @@ async def search_repository(
         organization_id=str(project.organization_id),
         project_id=str(project_id),
         repository_id=str(repository_id),
-        sources_considered=(f"repo://{repository_id}@{result.revision}", f"verified-runs://{project_id}"),
+        sources_considered=(
+            f"repo://{repository_id}@{result.revision}",
+            f"verified-runs://{project_id}",
+        ),
         selected=tuple(manifest_items),
         omitted=tuple(omitted),
         max_context_bytes=max_context_bytes,
@@ -937,9 +972,7 @@ async def update_artifacts(
 ) -> SpecificationInterview:
     interview, repository, task, _ = await _interview_for_update(db, interview_id, actor)
     if interview.revision != expected_revision:
-        current, current_files, _ = await read_artifacts(
-            db, interview_id=interview_id, actor=actor
-        )
+        current, current_files, _ = await read_artifacts(db, interview_id=interview_id, actor=actor)
         replay_files = {
             f"openspec/changes/{interview.change_id}/proposal.md": proposal_md,
             f"openspec/changes/{interview.change_id}/specs/{interview.change_id}/spec.md": spec_md,
@@ -995,8 +1028,12 @@ async def answer_question(
         raise HTTPException(400, "A valid Idempotency-Key is required")
     interview, repository, task, membership = await _interview_for_update(db, interview_id, actor)
     request_digest = _request_hash(
-        {"question_id": str(question_id), "revision": expected_revision,
-         "answer": answer, "changes_scope": changes_scope}
+        {
+            "question_id": str(question_id),
+            "revision": expected_revision,
+            "answer": answer,
+            "changes_scope": changes_scope,
+        }
     )
     previous = await db.scalar(
         select(SpecificationAnswer).where(
@@ -1172,8 +1209,13 @@ async def answer_question(
 
 
 def _readiness_gates(
-    files: dict[str, str], validation: OpenSpecValidation, *, blocking_questions: int,
-    base_current: bool, signoff_required: bool, signoff_received: bool,
+    files: dict[str, str],
+    validation: OpenSpecValidation,
+    *,
+    blocking_questions: int,
+    base_current: bool,
+    signoff_required: bool,
+    signoff_received: bool,
     model_route_ready: bool = True,
 ) -> tuple[float, dict[str, Any]]:
     proposal = files.get("proposal.md", "")
@@ -1188,10 +1230,14 @@ def _readiness_gates(
     requirements = re.findall(r"(?im)^###\s+Requirement:?\s+(.+?)\s*$", spec)
     scenarios = re.findall(r"(?im)^####\s+Scenario:\s+(.+?)\s*$", spec)
     scenario_blocks = re.split(r"(?im)^####\s+Scenario:\s+.+$", spec)[1:]
-    scenario_checks = bool(requirements and scenarios) and len(scenario_blocks) == len(scenarios) and all(
-        re.search(r"(?im)^-\s+\*\*WHEN\*\*\s+.+$", block)
-        and re.search(r"(?im)^-\s+\*\*THEN\*\*\s+.+$", block)
-        for block in scenario_blocks
+    scenario_checks = (
+        bool(requirements and scenarios)
+        and len(scenario_blocks) == len(scenarios)
+        and all(
+            re.search(r"(?im)^-\s+\*\*WHEN\*\*\s+.+$", block)
+            and re.search(r"(?im)^-\s+\*\*THEN\*\*\s+.+$", block)
+            for block in scenario_blocks
+        )
     )
     design_checks = {
         "context": bool(re.search(r"(?im)^##\s+Context\s*$", design)),
@@ -1211,18 +1257,32 @@ def _readiness_gates(
         1.0 if all(design_checks.values()) else sum(design_checks.values()) / 4,
         1.0 if task_checks and requirement_mapping else 0.0,
     ]
-    score = round(sections[0] * 0.25 + sections[1] * 0.30 + sections[2] * 0.25 + sections[3] * 0.20, 4)
+    score = round(
+        sections[0] * 0.25 + sections[1] * 0.30 + sections[2] * 0.25 + sections[3] * 0.20, 4
+    )
     gates: dict[str, Any] = {
         "rubric": {
             "proposal": {"weight": 0.25, "score": sections[0], "checks": proposal_checks},
-            "scenarios": {"weight": 0.30, "score": sections[1], "requirements": requirements,
-                          "scenarios": scenarios, "when_then_present": scenario_checks},
+            "scenarios": {
+                "weight": 0.30,
+                "score": sections[1],
+                "requirements": requirements,
+                "scenarios": scenarios,
+                "when_then_present": scenario_checks,
+            },
             "design": {"weight": 0.25, "score": sections[2], "checks": design_checks},
-            "tasks": {"weight": 0.20, "score": sections[3], "verification_section": task_checks,
-                      "requirement_mapping": requirement_mapping},
+            "tasks": {
+                "weight": 0.20,
+                "score": sections[3],
+                "verification_section": task_checks,
+                "requirement_mapping": requirement_mapping,
+            },
         },
-        "openspec_validation": {"version": validation.version, "valid": validation.valid,
-                                "result": validation.result},
+        "openspec_validation": {
+            "version": validation.version,
+            "valid": validation.valid,
+            "result": validation.result,
+        },
         "unresolved_blocking_questions": blocking_questions,
         "base_current": base_current,
         "execution_capabilities": {"model_route_ready": model_route_ready},
@@ -1253,15 +1313,18 @@ async def evaluate_readiness(
         validation = await _workspace_manager.validate(workspace)
     except SpecificationWorkspaceError as exc:
         raise HTTPException(503, str(exc)) from exc
-    blocking_count = await db.scalar(
-        select(__import__("sqlalchemy").func.count())
-        .select_from(SpecificationQuestion)
-        .where(
-            SpecificationQuestion.interview_id == interview.id,
-            SpecificationQuestion.classification == "blocking",
-            SpecificationQuestion.status == "open",
+    blocking_count = (
+        await db.scalar(
+            select(__import__("sqlalchemy").func.count())
+            .select_from(SpecificationQuestion)
+            .where(
+                SpecificationQuestion.interview_id == interview.id,
+                SpecificationQuestion.classification == "blocking",
+                SpecificationQuestion.status == "open",
+            )
         )
-    ) or 0
+        or 0
+    )
     snapshot = interview.readiness_snapshot or {}
     signed_off_by = snapshot.get("signed_off_by")
     signoff_received = isinstance(signed_off_by, str)
@@ -1271,12 +1334,17 @@ async def evaluate_readiness(
         and bool(settings.model_gateway_url.strip())
     )
     project = await db.get(Project, interview.project_id) if model_route_ready else None
+    budget_policy: ModelBudgetPolicy | None = None
     if project is not None:
         budget_policy = (
-            await db.execute(
-                select(ModelBudgetPolicy).where(ModelBudgetPolicy.project_id == project.id)
+            (
+                await db.execute(
+                    select(ModelBudgetPolicy).where(ModelBudgetPolicy.project_id == project.id)
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         # The broker estimates one input token per serialized request byte and
         # the gateway reserves output separately. Require a route that can fit
         # the configured request-byte bound plus ACP's output ceiling.
@@ -1312,6 +1380,9 @@ async def evaluate_readiness(
         signoff_required=settings.openspec_require_signoff,
         signoff_received=signoff_received,
         model_route_ready=model_route_ready,
+    )
+    gates["budget_policy_digest"] = (
+        budget_policy_digest(budget_policy) if budget_policy is not None else None
     )
     ready = (
         score >= 0.90
@@ -1432,7 +1503,10 @@ async def get_readiness(
             current_base = await _workspace_manager.current_base(repository)
         except SpecificationWorkspaceError as exc:
             raise HTTPException(503, str(exc)) from exc
-        if current_base != evaluation.base_sha or evaluation.content_hash != interview.artifact_hash:
+        if (
+            current_base != evaluation.base_sha
+            or evaluation.content_hash != interview.artifact_hash
+        ):
             interview.readiness_state = "STALE"
             if interview.readiness_snapshot is not None:
                 interview.readiness_snapshot = {**interview.readiness_snapshot, "state": "STALE"}
@@ -1452,7 +1526,8 @@ async def get_readiness(
                             **evaluation.gates,
                             "invalidated": {
                                 "base_current": current_base == evaluation.base_sha,
-                                "content_hash_current": evaluation.content_hash == interview.artifact_hash,
+                                "content_hash_current": evaluation.content_hash
+                                == interview.artifact_hash,
                             },
                         },
                         evaluated_by=actor.id,
@@ -1521,7 +1596,9 @@ async def generate_architect_draft(
     idempotency_key: str,
 ) -> tuple[SpecificationInterview, list[SpecificationQuestion]]:
     if not authorize_model_generation:
-        raise HTTPException(403, "Set authorize_model_generation=true to authorize this bounded model call")
+        raise HTTPException(
+            403, "Set authorize_model_generation=true to authorize this bounded model call"
+        )
     if not idempotency_key or len(idempotency_key) > 200:
         raise HTTPException(400, "A valid Idempotency-Key is required")
     interview, repository, task, _ = await _interview_for_update(db, interview_id, actor)
@@ -1529,11 +1606,16 @@ async def generate_architect_draft(
         if interview.architect_idempotency_key != idempotency_key:
             raise HTTPException(409, "Architect revision was already generated with another key")
         questions = list(
-            (await db.scalars(select(SpecificationQuestion).where(
-                SpecificationQuestion.interview_id == interview.id,
-                SpecificationQuestion.source == "architect",
-                SpecificationQuestion.source_revision == interview.architect_artifact_revision,
-            ))).all()
+            (
+                await db.scalars(
+                    select(SpecificationQuestion).where(
+                        SpecificationQuestion.interview_id == interview.id,
+                        SpecificationQuestion.source == "architect",
+                        SpecificationQuestion.source_revision
+                        == interview.architect_artifact_revision,
+                    )
+                )
+            ).all()
         )
         if questions:
             return interview, questions
@@ -1580,7 +1662,9 @@ async def generate_architect_draft(
     for item in draft.questions:
         affected = [path for path in item.affected_artifacts if path in artifact_names]
         if not affected:
-            affected = [f"openspec/changes/{interview.change_id}/specs/{interview.change_id}/spec.md"]
+            affected = [
+                f"openspec/changes/{interview.change_id}/specs/{interview.change_id}/spec.md"
+            ]
         question = SpecificationQuestion(
             interview_id=interview.id,
             task_id=task.id,
