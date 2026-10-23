@@ -25,7 +25,7 @@ from harnessa.adapters.verification import (
 )
 from harnessa.config import settings
 from harnessa.contracts import TaskStage
-from harnessa.db.harness import HarnessExperiment, HarnessProbeRun
+from harnessa.db.harness import HarnessExperiment, HarnessPolicy, HarnessProbeRun
 from harnessa.db.model_gateway import ModelBudgetPolicy, ModelRequestLedger, ModelReservation
 from harnessa.db.models import Project, Repository, Task
 from harnessa.db.orchestration import Run, RunArtifact, TaskLease, TaskTransition
@@ -43,12 +43,29 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 def _harness_learning_hook(
-    experiment: HarnessExperiment | None, probes: list[HarnessProbeRun]
+    experiment: HarnessExperiment | None,
+    probes: list[HarnessProbeRun],
+    *,
+    base_sha: str | None,
+    specification_hash: str | None,
+    specification_revision: int | None,
+    policy_revision: int | None,
 ) -> dict[str, Any]:
     """Bind post-merge experience to a complete, successful, immutable probe set."""
     empty = {"reserved_for": "M12", "triggered": False, "probe_outcome": None}
     if experiment is None or experiment.status != "succeeded":
         return {**empty, "reason": "no_successful_harness_experiment"}
+    if (
+        experiment.base_sha != base_sha
+        or experiment.specification_hash != specification_hash
+        or experiment.specification_revision != specification_revision
+        or experiment.policy_revision != policy_revision
+    ):
+        return {
+            **empty,
+            "experiment_id": str(experiment.id),
+            "reason": "frozen_experiment_identity_mismatch",
+        }
     phases = {probe.phase for probe in probes if probe.status == "succeeded"}
     if not {"baseline", "candidate", "composed"}.issubset(phases):
         return {
@@ -772,11 +789,19 @@ class VerificationDispatcher:
                         "diff_sha256": hashlib.sha256(b"").hexdigest(),
                         "final_head_verified": False,
                     }
+                harness_policy = await db.scalar(
+                    select(HarnessPolicy).where(HarnessPolicy.project_id == project.id)
+                )
                 harness_experiment = await db.scalar(
                     select(HarnessExperiment)
                     .where(
                         HarnessExperiment.task_id == task.id,
                         HarnessExperiment.status == "succeeded",
+                        HarnessExperiment.base_sha == run.base_sha,
+                        HarnessExperiment.specification_hash == run.specification_hash,
+                        HarnessExperiment.specification_revision == run.specification_revision,
+                        HarnessExperiment.policy_revision
+                        == (harness_policy.revision if harness_policy is not None else -1),
                     )
                     .order_by(HarnessExperiment.completed_at.desc())
                     .limit(1)
@@ -792,7 +817,14 @@ class VerificationDispatcher:
                     if harness_experiment is not None
                     else []
                 )
-                harness_learning_hook = _harness_learning_hook(harness_experiment, harness_probes)
+                harness_learning_hook = _harness_learning_hook(
+                    harness_experiment,
+                    harness_probes,
+                    base_sha=run.base_sha,
+                    specification_hash=run.specification_hash,
+                    specification_revision=run.specification_revision,
+                    policy_revision=(harness_policy.revision if harness_policy is not None else None),
+                )
                 bundle = {
                     "base_sha": run.base_sha,
                     "head_sha": review_head,

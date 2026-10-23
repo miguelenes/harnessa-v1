@@ -123,16 +123,29 @@ def test_learning_hook_requires_successful_matched_probe_evidence() -> None:
     experiment = SimpleNamespace(
         id=uuid4(),
         status="succeeded",
+        base_sha="a" * 40,
+        specification_hash="b" * 64,
+        specification_revision=4,
+        policy_revision=3,
         result={"experience_candidate": {"cue": "specific cue", "lesson": "bounded lesson"}},
     )
     probes = [
         SimpleNamespace(phase=phase, status="succeeded", trace_digest=str(index) * 64, label=phase)
         for index, phase in enumerate(("baseline", "candidate", "composed"), 1)
     ]
-    hook = _harness_learning_hook(experiment, probes)
+    identity = {
+        "base_sha": experiment.base_sha,
+        "specification_hash": experiment.specification_hash,
+        "specification_revision": experiment.specification_revision,
+        "policy_revision": experiment.policy_revision,
+    }
+    hook = _harness_learning_hook(experiment, probes, **identity)
     assert hook["triggered"] is True
     assert len(hook["evidence_refs"]) == 3
-    assert _harness_learning_hook(experiment, probes[:2])["triggered"] is False
+    assert _harness_learning_hook(experiment, probes[:2], **identity)["triggered"] is False
+    assert _harness_learning_hook(
+        experiment, probes, **{**identity, "specification_revision": 5}
+    )["reason"] == "frozen_experiment_identity_mismatch"
 
 
 def test_reviewed_rollback_restores_previous_version_and_supersedes_current() -> None:
