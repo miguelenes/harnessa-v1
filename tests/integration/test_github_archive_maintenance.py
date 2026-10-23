@@ -621,16 +621,131 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
             "labels": [{"name": "harnessa"}],
         }
     }
+    missed_webhook_issue = {
+        "id": 903,
+        "number": 22,
+        "user": {"id": 789, "login": "fixture-operator"},
+    }
+    remote_issue_states["/repos/fixture/specifications/issues/22"] = {
+        **missed_webhook_issue,
+        "title": "Recovered without an opened webhook",
+        "body": "This issue was found by the periodic topic scan.",
+        "html_url": "https://github.test/fixture/specifications/issues/22",
+        "state": "open",
+        "labels": [{"name": "harnessa"}],
+    }
+    issue_scan_page_one = [
+        missed_webhook_issue,
+        {"id": 904, "number": 23, "user": {"id": 900, "login": "unmapped"}},
+        {
+            "id": 905,
+            "number": 24,
+            "user": {"id": 789, "login": "fixture-operator"},
+            "pull_request": {"url": "https://api.github.test/pulls/24"},
+        },
+        {"id": 906, "number": 25, "user": "invalid"},
+        {},
+    ]
+    issue_scan_result: object = issue_scan_page_one + [{}] * (100 - len(issue_scan_page_one))
+    issue_scan_error: github_processor.GitHubAppError | None = None
 
     class CurrentIssueClient:
-        async def request_installation(self, **kwargs: object) -> dict[str, object]:
-            assert kwargs["method"] == "GET"
+        async def request_installation(self, **kwargs: object) -> object:
             path = kwargs["path"]
             assert isinstance(path, str)
+            if path == "/repos/fixture/specifications/issues":
+                params = kwargs["params"]
+                assert isinstance(params, dict)
+                assert params["state"] == "open"
+                assert params["labels"] == "harnessa"
+                assert params["per_page"] == 100
+                assert params["page"] in {1, 2}
+                assert kwargs["permissions"] == {"issues": "read"}
+                if issue_scan_error is not None:
+                    raise issue_scan_error
+                if params["page"] == 2:
+                    return [missed_webhook_issue]
+                return issue_scan_result
+            assert kwargs["method"] == "GET"
             assert kwargs["permissions"] == {"issues": "read"}
             return remote_issue_states[path]
 
     monkeypatch.setattr(github_processor, "GitHubAppClient", CurrentIssueClient)
+    # The issue has no inbox receipt and is recovered from the bounded issue scan.
+    assert await issue_processor.reconcile_topic_issues(limit=1) == 1
+    async with SessionLocal() as db:
+        scan_link = await db.get(GitHubRepositoryLink, link.id)
+        assert scan_link is not None and scan_link.issue_reconciliation_page == 2
+        recovered_sync = await db.scalar(
+            select(GitHubSyncObject).where(
+                GitHubSyncObject.object_kind == "issue",
+                GitHubSyncObject.github_object_id == "903",
+            )
+        )
+        assert recovered_sync is not None
+        recovered_task_id = recovered_sync.task_id
+        assert recovered_sync.field_baseline == {
+            "title": "Recovered without an opened webhook",
+            "body": "This issue was found by the periodic topic scan.",
+        }
+        assert await db.scalar(
+            select(GitHubWebhookDelivery.id).where(
+                GitHubWebhookDelivery.delivery_id == "reconcile-issue-4321-903-1"
+            )
+        ) is None
+    # Replaying the same page is idempotent: it reuses the sync row and task.
+    assert await issue_processor.reconcile_topic_issues(limit=1) == 0
+    async with SessionLocal() as db:
+        scan_link = await db.get(GitHubRepositoryLink, link.id)
+        assert scan_link is not None and scan_link.issue_reconciliation_page == 1
+        replayed_sync = await db.scalar(
+            select(GitHubSyncObject).where(
+                GitHubSyncObject.object_kind == "issue",
+                GitHubSyncObject.github_object_id == "903",
+            )
+        )
+        assert replayed_sync is not None and replayed_sync.task_id == recovered_task_id
+
+    issue_scan_result = None
+    assert await issue_processor.reconcile_topic_issues(limit=1) == 0
+    issue_scan_result = [
+        {},
+        {"id": "invalid", "number": 24, "user": {"id": 789}},
+        {"id": 905, "number": 24, "pull_request": {}, "user": {"id": 789}},
+        {"id": 906, "number": 25, "user": "invalid"},
+    ]
+    assert await issue_processor.reconcile_topic_issues(limit=1) == 0
+    issue_scan_result = [missed_webhook_issue]
+    issue_scan_error = github_processor.GitHubAppError(
+        "limited", rate_limited=True, retry_after_seconds=60
+    )
+    assert await issue_processor.reconcile_topic_issues(limit=1) == 0
+    async with SessionLocal() as db:
+        scan_link = await db.get(GitHubRepositoryLink, link.id)
+        assert scan_link is not None and scan_link.retry_after_at is not None
+        scan_link.retry_after_at = None
+        await db.commit()
+    issue_scan_error = github_processor.GitHubAppError("forbidden", status_code=403)
+    assert await issue_processor.reconcile_topic_issues(limit=1) == 0
+    async with SessionLocal() as db:
+        scan_link = await db.get(GitHubRepositoryLink, link.id)
+        assert scan_link is not None and scan_link.setup_status == "stale"
+        scan_link.setup_status = "ready"
+        scan_link.last_error = None
+        await db.commit()
+    issue_scan_error = github_processor.GitHubAppError("missing", status_code=404)
+    assert await issue_processor.reconcile_topic_issues(limit=1) == 0
+    async with SessionLocal() as db:
+        scan_link = await db.get(GitHubRepositoryLink, link.id)
+        assert scan_link is not None and scan_link.opted_in is False
+        scan_link.opted_in = True
+        scan_link.setup_status = "ready"
+        scan_link.last_error = None
+        await db.commit()
+    issue_scan_error = github_processor.GitHubAppError("transient")
+    assert await issue_processor.reconcile_topic_issues(limit=1) == 0
+    issue_scan_error = None
+    issue_scan_result = [missed_webhook_issue]
     unchanged = await issue_processor.process(
         DeliveryEnvelope(
             id=uuid4(),
@@ -1033,6 +1148,7 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
         if path in {
             "/repos/fixture/specifications/issues/19/comments",
             "/repos/fixture/specifications/issues/21/comments",
+            "/repos/fixture/specifications/issues/22/comments",
         }:
             if request.method == "GET":
                 return httpx.Response(200, json=[])
@@ -1242,10 +1358,10 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
     effects_processed = await reconcile_effect_intents(
         github_effects.GitHubEffectReconciler(workspace_manager=manager)
     )
-    assert effects_processed == 4
+    assert effects_processed == 5
     async with SessionLocal() as db:
         effect_intents = (await db.scalars(select(EffectIntent))).all()
-        assert len(effect_intents) == 4
+        assert len(effect_intents) == 5
         assert all(intent.status == "completed" for intent in effect_intents)
         review_sync = await db.scalar(
             select(GitHubSyncObject).where(
@@ -1494,7 +1610,7 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
     assert outbound_effects == 2
     async with SessionLocal() as db:
         effects = (await db.scalars(select(EffectIntent))).all()
-        assert len(effects) == 6
+        assert len(effects) == 7
         assert all(effect.status == "completed" for effect in effects)
     assert any(
         method == "POST" and path == "/repos/fixture/specifications/issues"

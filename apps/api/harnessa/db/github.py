@@ -123,6 +123,8 @@ class GitHubRepositoryLink(Scoped, Base):
     setup_status: Mapped[str] = mapped_column(String(20), default="ready", nullable=False)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retry_after_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    issue_reconciliation_page: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    issue_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
 

@@ -324,6 +324,167 @@ class GitHubWebhookProcessor:
                 continue
         return reconciled
 
+    async def reconcile_topic_issues(self, *, limit: int = 25) -> int:
+        """Poll a bounded page of opted-in topic issues to recover dropped webhooks."""
+        if limit < 1 or limit > 100:
+            raise ValueError("GitHub issue reconciliation limit must be between 1 and 100")
+        async with self.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(GitHubRepositoryLink, GitHubInstallation, GitHubAppConfiguration)
+                    .join(
+                        GitHubInstallation,
+                        GitHubInstallation.id == GitHubRepositoryLink.installation_id,
+                    )
+                    .join(
+                        GitHubAppConfiguration,
+                        GitHubAppConfiguration.id == GitHubInstallation.app_configuration_id,
+                    )
+                    .where(
+                        GitHubRepositoryLink.opted_in.is_(True),
+                        GitHubRepositoryLink.setup_status == "ready",
+                        GitHubInstallation.active.is_(True),
+                        GitHubAppConfiguration.enabled.is_(True),
+                        or_(
+                            GitHubRepositoryLink.retry_after_at.is_(None),
+                            GitHubRepositoryLink.retry_after_at <= datetime.now(UTC),
+                        ),
+                        or_(
+                            GitHubInstallation.retry_after_at.is_(None),
+                            GitHubInstallation.retry_after_at <= datetime.now(UTC),
+                        ),
+                    )
+                    .order_by(GitHubRepositoryLink.issue_reconciled_at.asc().nulls_first())
+                    .limit(limit)
+                )
+            ).all()
+            snapshots = [
+                (
+                    link.id,
+                    link.organization_id,
+                    link.github_repository_id,
+                    link.owner,
+                    link.name,
+                    link.topic_label,
+                    link.issue_reconciliation_page,
+                    installation.installation_id,
+                    app.id,
+                    app.app_id,
+                    app.private_key_secret_ref,
+                )
+                for link, installation, app in rows
+            ]
+
+        discovered = 0
+        for (
+            link_id,
+            organization_id,
+            repository_id,
+            owner,
+            name,
+            topic_label,
+            page,
+            installation_number,
+            app_configuration_id,
+            app_id,
+            key_ref,
+        ) in snapshots:
+            try:
+                issues = await GitHubAppClient().request_installation(
+                    app_id=app_id,
+                    private_key_reference=key_ref,
+                    installation_id=installation_number,
+                    repository_id=repository_id,
+                    method="GET",
+                    path=f"/repos/{owner}/{name}/issues",
+                    params={
+                        "state": "open",
+                        "labels": topic_label,
+                        "per_page": 100,
+                        "page": page,
+                    },
+                    permissions={"issues": "read"},
+                )
+                if not isinstance(issues, list):
+                    continue
+                for issue in issues:
+                    if (
+                        not isinstance(issue, dict)
+                        or not isinstance(issue.get("id"), int)
+                        or not isinstance(issue.get("number"), int)
+                        or "pull_request" in issue
+                    ):
+                        continue
+                    author = issue.get("user")
+                    if not isinstance(author, dict) or not isinstance(author.get("id"), int):
+                        continue
+                    delivery = DeliveryEnvelope(
+                        id=UUID(int=0),
+                        organization_id=organization_id,
+                        app_configuration_id=app_configuration_id,
+                        event_name="issues",
+                        action="edited",
+                        installation_number=installation_number,
+                        github_repository_id=repository_id,
+                        payload={
+                            "repository": {"id": repository_id},
+                            "sender": author,
+                            "issue": {"id": issue["id"], "number": issue["number"]},
+                        },
+                        delivery_id=(
+                            f"reconcile-issue-{repository_id}-{issue['id']}-{page}"
+                        ),
+                    )
+                    outcome = await self._issue_edited(delivery)
+                    if outcome.result.get("created_from_current_state") is True:
+                        discovered += 1
+                async with self.session_factory() as db:
+                    link = await db.get(GitHubRepositoryLink, link_id)
+                    if link is not None and link.opted_in and link.setup_status == "ready":
+                        link.issue_reconciliation_page = page + 1 if len(issues) == 100 else 1
+                        link.issue_reconciled_at = datetime.now(UTC)
+                        link.retry_after_at = None
+                        link.last_error = None
+                        await db.commit()
+            except GitHubAppError as exc:
+                if exc.rate_limited:
+                    async with self.session_factory() as db:
+                        link = await db.get(GitHubRepositoryLink, link_id)
+                        if link is not None:
+                            link.retry_after_at = datetime.now(UTC) + timedelta(
+                                seconds=exc.retry_after_seconds or 300
+                            )
+                            link.last_error = (
+                                "GitHub API rate limit reached; issue retry scheduled"
+                            )
+                            await db.commit()
+                    continue
+                if exc.status_code in {403, 404}:
+                    async with self.session_factory() as db:
+                        link = await db.get(GitHubRepositoryLink, link_id)
+                        if link is not None:
+                            link.setup_status = "revoked" if exc.status_code == 404 else "stale"
+                            if exc.status_code == 404:
+                                link.opted_in = False
+                            link.last_error = (
+                                "GitHub repository access was removed"
+                                if exc.status_code == 404
+                                else "GitHub issue access is forbidden; setup must be refreshed"
+                            )
+                            await db.commit()
+                    continue
+                logger.warning(
+                    "GitHub issue reconciliation failed for repository %s",
+                    repository_id,
+                    exc_info=True,
+                )
+            except Exception:
+                logger.exception(
+                    "GitHub issue reconciliation failed for repository %s",
+                    repository_id,
+                )
+        return discovered
+
     async def reconcile_installation_access(self, *, limit: int = 25) -> int:
         """Refresh installation grants and explicitly opted-in repository access."""
         if limit < 1 or limit > 100:

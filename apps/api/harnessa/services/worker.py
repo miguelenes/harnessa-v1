@@ -140,8 +140,9 @@ async def run() -> None:
                         github_processor = GitHubWebhookProcessor()
                         await github_processor.reconcile_installation_access(limit=25)
                         await github_processor.reconcile_tracked_pull_requests(limit=25)
+                        await github_processor.reconcile_topic_issues(limit=25)
                     except Exception:
-                        logger.exception("GitHub pull request reconciliation failed")
+                        logger.exception("GitHub periodic reconciliation failed")
                     last_github_reconcile = now
                 if adapter.available:
                     available = max(0, settings.max_concurrent_runs - len(active_runs))
