@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     mcp_servers_json: str = "{}"
     mcp_read_only_tools_json: str = "{}"
     mcp_secret_references_json: str = "{}"
+    github_secret_references_json: str = "{}"
+    github_api_url: str = "https://api.github.com"
+    github_http_timeout_seconds: float = 10.0
+    github_webhook_max_bytes: int = 262144
+    github_webhook_max_attempts: int = 12
     retrieval_approved_skill_paths_json: str = "{}"
     model_max_attempts: int = 3
     model_http_timeout_seconds: float = 60.0

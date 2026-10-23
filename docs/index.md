@@ -4,6 +4,8 @@ Harnessa is an open-source, self-hosted control plane for repository change work
 
 Use this guide to [run Harnessa locally](getting-started.md), understand its [architecture](architecture.md), and [contribute](contributing.md).
 
+For GitHub App installation, secret-reference setup, repository opt-in, and delivery repair, see the [GitHub App integration guide](integrations/github-app.md).
+
 ## Project links
 
 - [Project website](https://harnessa.cloud)

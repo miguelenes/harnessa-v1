@@ -161,6 +161,7 @@ class ReviewDecision(Scoped, Base):
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     bundle_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    github_head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class IntegrationEvidence(Scoped, Base):

@@ -357,6 +357,8 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
             db,
         )
         assert integration["status"] == "confirmed"
+        task = await db.get(Task, task_id)
+        assert task is not None and task.stage == "LEARNING"
         integration_replay = await review_routes.record_manual_integration(
             task_id,
             ManualIntegrationRequest(
@@ -391,6 +393,8 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
                 db,
             )
             assert step["status"] == "succeeded"
+        task = await db.get(Task, task_id)
+        assert task is not None and task.stage == "DONE"
         with pytest.raises(HTTPException) as unknown_step:
             await review_routes.update_post_integration_step(
                 integration["id"],

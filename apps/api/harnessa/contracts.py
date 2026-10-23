@@ -754,6 +754,110 @@ class RepositoryRead(RepositoryCreate):
     project_id: UUID
 
 
+class GitHubAppConfigurationCreate(BaseModel):
+    app_id: int = Field(gt=0)
+    webhook_id: int = Field(gt=0)
+    private_key_secret_ref: str = Field(min_length=1, max_length=240, pattern=r"^[A-Za-z0-9_.:-]+$")
+    webhook_secret_ref: str = Field(min_length=1, max_length=240, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class GitHubAppConfigurationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    app_id: int
+    webhook_id: int
+    enabled: bool
+    connection_status: str
+    checked_at: datetime | None = None
+    last_error: str | None = None
+
+
+class GitHubInstallationCreate(BaseModel):
+    app_configuration_id: UUID
+    installation_id: int = Field(gt=0)
+
+
+class GitHubInstallationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    app_configuration_id: UUID
+    installation_id: int
+    account_id: int | None
+    account_login: str
+    account_type: str
+    repository_selection: str
+    granted_permissions: dict[str, str]
+    active: bool
+    checked_at: datetime | None = None
+    last_error: str | None = None
+
+
+class GitHubRepositoryOptIn(BaseModel):
+    installation_id: UUID
+    github_repository_id: int = Field(gt=0)
+    required_checks: list[str] = Field(min_length=1, max_length=40)
+    topic_label: str = Field(default="harnessa", min_length=1, max_length=80)
+
+
+class GitHubRepositoryLinkRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    repository_id: UUID
+    installation_id: UUID
+    github_repository_id: int
+    full_name: str
+    opted_in: bool
+    required_checks: list[str]
+    topic_label: str
+    setup_status: str
+    last_synced_at: datetime | None = None
+    last_error: str | None = None
+
+
+class GitHubActorMappingCreate(BaseModel):
+    installation_id: UUID
+    github_user_id: int = Field(gt=0)
+    github_login: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9-]+$")
+    user_id: UUID
+
+
+class GitHubActorMappingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    installation_id: UUID
+    github_user_id: int
+    github_login: str
+    user_id: UUID
+    active: bool
+
+
+class GitHubConnectionStatusRead(BaseModel):
+    configured_apps: list[GitHubAppConfigurationRead]
+    installations: list[GitHubInstallationRead]
+    repository_links: list[GitHubRepositoryLinkRead]
+    actor_mappings: list[GitHubActorMappingRead]
+    webhook_health: dict[str, int]
+    recent_deliveries: list[dict[str, Any]]
+
+
+class GitHubDeliveryRepairRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class GitHubPublishRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class GitHubEffectQueuedRead(BaseModel):
+    queued: bool
+    stable_keys: list[str]
+
+
+class GitHubWebhookReceipt(BaseModel):
+    accepted: bool = True
+    duplicate: bool = False
+
+
 class VerificationManifestApprovalRequest(BaseModel):
     """Approve the manifest file at one exact, current repository revision."""
 

@@ -490,7 +490,7 @@ async def record_manual_integration(
             )
         )
     before = task.version
-    task.stage = "DONE"
+    task.stage = "LEARNING"
     task.version += 1
     db.add(
         TaskTransition(
@@ -498,10 +498,10 @@ async def record_manual_integration(
             project_id=task.project_id,
             actor_id=actor.id,
             from_stage="HUMAN_REVIEW",
-            to_stage="DONE",
+            to_stage="LEARNING",
             from_run_status=task.run_status,
             to_run_status=task.run_status,
-            reason="Operator confirmed manual integration against the approved base",
+            reason="Operator confirmed integration; durable post-integration steps are pending",
             command="integration_confirmed",
             version_before=before,
             version_after=task.version,
@@ -541,5 +541,40 @@ async def update_post_integration_step(
     step.attempts += 1
     step.result = body.result
     step.last_error = body.error
+    await db.flush()
+    steps = list(
+        (
+            await db.scalars(
+                select(PostIntegrationStep).where(
+                    PostIntegrationStep.integration_evidence_id == integration_id
+                )
+            )
+        ).all()
+    )
+    task = await db.scalar(select(Task).where(Task.id == integration.task_id).with_for_update())
+    if (
+        task is not None
+        and task.stage == "LEARNING"
+        and steps
+        and all(item.status == "succeeded" for item in steps)
+    ):
+        before = task.version
+        task.stage = "DONE"
+        task.version += 1
+        db.add(
+            TaskTransition(
+                task_id=task.id,
+                project_id=task.project_id,
+                actor_id=actor.id,
+                from_stage="LEARNING",
+                to_stage="DONE",
+                from_run_status=task.run_status,
+                to_run_status=task.run_status,
+                reason="All durable post-integration steps succeeded",
+                command="post_integration_complete",
+                version_before=before,
+                version_after=task.version,
+            )
+        )
     await db.commit()
     return {"kind": step.kind, "status": step.status, "attempts": step.attempts}

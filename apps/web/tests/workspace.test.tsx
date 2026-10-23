@@ -144,6 +144,37 @@ describe("workspace routes and task board", () => {
     }
   });
 
+  it("shows authenticated GitHub health and queues an administrator repair", async () => {
+    const status = {
+      configured_apps: [{ id: "app-1", app_id: 55, connection_status: "permission_missing", checked_at: null, last_error: "Missing Checks:write" }],
+      installations: [{ id: "install-1", account_login: "harnessa-fixture", active: true, last_error: null }],
+      repository_links: [{ id: "link-1", full_name: "harnessa-fixture/demo", opted_in: true, setup_status: "ready", last_error: null }],
+      actor_mappings: [],
+      webhook_health: { failed: 1 },
+      recent_deliveries: [{ id: "delivery-row-1", delivery_id: "fixture-delivery", event_name: "issues", action: "opened", status: "failed", last_error: "handler failed" }],
+    };
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/projects")) return response([project]);
+      if (url.includes("/events/stream")) return response({}, 403);
+      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/github/status")) return response(status);
+      if (url.endsWith("/github/deliveries/delivery-row-1/retry") && init?.method === "POST") return response({ status: "queued" }, 202);
+      return response({}, 404);
+    });
+    vi.spyOn(window, "prompt").mockReturnValue("Corrected the deployment secret reference");
+    render(<Workspace section="github" />);
+    expect(await screen.findByText("App 55")).toBeTruthy();
+    expect(screen.getByText("harnessa-fixture/demo")).toBeTruthy();
+    expect(screen.getByText("fixture-delivery")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Repair" }));
+    expect(await screen.findByText("Webhook delivery queued for repair.")).toBeTruthy();
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/github/deliveries/delivery-row-1/retry"),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ reason: "Corrected the deployment secret reference" }) }),
+    ));
+  });
+
   it("supports inspector focus restoration and its empty artifact and activity states", async () => {
     render(<Workspace section="board" />);
     const card = await screen.findByRole("button", { name: /Prepare release/ });
