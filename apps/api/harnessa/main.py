@@ -16,6 +16,13 @@ from starlette.responses import Response
 
 from harnessa.api.evidence_routes import router as evidence_router
 from harnessa.api.github_routes import router as github_router
+from harnessa.api.harness_routes import (
+    ExperimentCreate,
+    ExperimentRead,
+    HarnessOverview,
+    PromotionRequest,
+)
+from harnessa.api.harness_routes import router as harness_router
 from harnessa.api.model_routes import router as model_router
 from harnessa.api.retrieval_routes import router as retrieval_router
 from harnessa.api.review_routes import router as review_router
@@ -184,6 +191,10 @@ CONTRACT_MODELS = (
     GatewayUsageImportResult,
     Harness2ArtifactEvidence,
     Harness2ImportFixture,
+    ExperimentCreate,
+    ExperimentRead,
+    HarnessOverview,
+    PromotionRequest,
     VerificationManifestApprovalRequest,
     VerificationManifestRevisionRead,
     RunOrchestrationIdentity,
@@ -374,6 +385,7 @@ app.include_router(specification_router)
 app.include_router(retrieval_router)
 app.include_router(review_router)
 app.include_router(github_router)
+app.include_router(harness_router)
 app.include_router(evidence_router)
 
 

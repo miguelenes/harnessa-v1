@@ -18,6 +18,7 @@ dependencies = [
   "agent-client-protocol==0.12.1",
   "ag-ui-protocol==1.0.0",
   "pyjwt[crypto]==2.15.1",
+  "harness2 @ git+https://github.com/google-research/harness2.git@1cfe254e8d25b15f37048c3730134686abe60335",
 ]
 
 [project.optional-dependencies]

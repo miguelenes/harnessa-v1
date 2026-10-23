@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,7 @@ from harnessa.adapters.specification_workspace import (
     SpecificationWorkspaceError,
     SpecificationWorkspaceManager,
 )
+from harnessa.db.harness import HarnessExperience, HarnessExperiment
 from harnessa.db.models import Repository, Task
 from harnessa.db.orchestration import TaskTransition
 from harnessa.db.review import (
@@ -145,11 +147,103 @@ async def _execute_step(
                     raise SpecificationWorkspaceError("Opted-in GitHub repository is unavailable")
                 archive_policy = link.archive_policy
         elif kind == "learning":
-            # No project-scoped learning hook is configured in this milestone.
+            hook = bundle.bundle.get("harness_adaptation_hook")
+            if not isinstance(hook, dict) or hook.get("triggered") is not True:
+                return {
+                    "outcome": "skipped",
+                    "reason": "no_completed_harness_experiment",
+                    "optional": True,
+                }
+            try:
+                experiment_id = UUID(str(hook["experiment_id"]))
+                cue = str(hook["cue"]).strip()
+                lesson = str(hook["lesson"]).strip()
+                evidence_refs = hook["evidence_refs"]
+            except (KeyError, ValueError, TypeError) as exc:
+                raise SpecificationWorkspaceError(
+                    "Completed harness learning evidence is malformed"
+                ) from exc
+            if not cue or len(cue) > 1000 or not lesson or len(lesson) > 2000:
+                raise SpecificationWorkspaceError(
+                    "Harness learning cue or lesson is outside its bound"
+                )
+            if (
+                not isinstance(evidence_refs, list)
+                or not evidence_refs
+                or any(
+                    not isinstance(ref, dict)
+                    or not isinstance(ref.get("digest"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", ref["digest"])
+                    for ref in evidence_refs
+                )
+            ):
+                raise SpecificationWorkspaceError(
+                    "Harness learning evidence references are invalid"
+                )
+            experiment = await db.scalar(
+                select(HarnessExperiment).where(
+                    HarnessExperiment.id == experiment_id,
+                    HarnessExperiment.task_id == integration.task_id,
+                    HarnessExperiment.project_id == integration.project_id,
+                    HarnessExperiment.status == "succeeded",
+                )
+            )
+            repository = await db.get(Repository, integration.repository_id)
+            if experiment is None or repository is None:
+                raise SpecificationWorkspaceError(
+                    "Successful experiment or repository scope is unavailable"
+                )
+            key = hashlib.sha256(f"{experiment.id}:{cue}".encode()).hexdigest()[:32]
+            existing = await db.scalar(
+                select(HarnessExperience).where(
+                    HarnessExperience.project_id == integration.project_id,
+                    HarnessExperience.experience_key == key,
+                    HarnessExperience.version == 1,
+                )
+            )
+            if existing:
+                return {
+                    "outcome": "succeeded",
+                    "experience_id": str(existing.id),
+                    "status": existing.status,
+                    "idempotent_replay": True,
+                }
+            payload = {
+                "cue": cue,
+                "lesson": lesson,
+                "evidence_refs": evidence_refs,
+                "repository_scope": repository.target_id,
+                "domain_scope": str(hook.get("domain_scope", "repository")),
+            }
+            candidate_digest = hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            candidate = HarnessExperience(
+                organization_id=integration.organization_id,
+                project_id=integration.project_id,
+                source_task_id=integration.task_id,
+                source_experiment_id=experiment.id,
+                experience_key=key,
+                version=1,
+                status="candidate",
+                repository_scope=repository.target_id,
+                domain_scope=str(hook.get("domain_scope", "repository"))[:120],
+                cue=cue,
+                lesson=lesson,
+                evidence_refs=evidence_refs,
+                candidate_digest=candidate_digest,
+                conflict_key=str(hook.get("conflict_key", key))[:120],
+                expiry_at=datetime.now(UTC) + timedelta(days=180),
+                policy_revision=experiment.policy_revision,
+            )
+            db.add(candidate)
+            await db.flush()
+            await db.commit()
             return {
-                "outcome": "skipped",
-                "reason": "no_learning_hook_configured",
-                "optional": True,
+                "outcome": "succeeded",
+                "experience_id": str(candidate.id),
+                "status": "candidate",
+                "automatically_activated": False,
             }
         elif kind == "cleanup":
             repository = await db.get(Repository, integration.repository_id)

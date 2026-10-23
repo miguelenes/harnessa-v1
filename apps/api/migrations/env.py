@@ -4,6 +4,7 @@ from alembic import context
 from harnessa.config import settings
 from harnessa.db import (  # noqa: F401
     github,
+    harness,
     model_gateway,
     models,
     orchestration,

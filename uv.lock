@@ -737,6 +737,11 @@ wheels = [
 ]
 
 [[package]]
+name = "harness2"
+version = "0.1.0"
+source = { git = "https://github.com/google-research/harness2.git?rev=1cfe254e8d25b15f37048c3730134686abe60335#1cfe254e8d25b15f37048c3730134686abe60335" }
+
+[[package]]
 name = "harnessa"
 version = "0.1.0"
 source = { virtual = "." }
@@ -747,6 +752,7 @@ dependencies = [
     { name = "asyncpg" },
     { name = "fastapi" },
     { name = "fastapi-users", extra = ["sqlalchemy"] },
+    { name = "harness2" },
     { name = "httpx" },
     { name = "pwdlib", extra = ["argon2"] },
     { name = "pydantic-settings" },
@@ -781,6 +787,7 @@ requires-dist = [
     { name = "asyncpg", specifier = "==0.32.0" },
     { name = "fastapi", specifier = "==0.159.1" },
     { name = "fastapi-users", extras = ["sqlalchemy"], specifier = "==15.0.5" },
+    { name = "harness2", git = "https://github.com/google-research/harness2.git?rev=1cfe254e8d25b15f37048c3730134686abe60335" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "llama-index-core", marker = "extra == 'retrieval'", specifier = "==0.14.25" },
     { name = "llama-index-vector-stores-qdrant", marker = "extra == 'retrieval'", specifier = "==0.10.4" },

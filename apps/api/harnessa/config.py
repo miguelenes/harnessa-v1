@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     openspec_model_alias: str | None = None
     openspec_model_max_output_tokens: int = Field(default=4096, ge=256, le=16_384)
     openspec_require_signoff: bool = False
+    harness2_max_output_tokens: int = Field(default=4096, ge=256, le=16_384)
+    harness2_max_probe_concurrency: int = Field(default=3, ge=1, le=3)
 
 
 settings = Settings()
