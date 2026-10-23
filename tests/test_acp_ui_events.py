@@ -17,6 +17,7 @@ async def test_acp_updates_emit_only_bounded_redacted_ui_content() -> None:
         events.append(event)
 
     client = _SandboxACPClient(max_updates=20, on_ui_event=capture)
+    await client.start_step()
     await client.session_update(
         "session",
         AgentMessageChunk(
@@ -59,6 +60,7 @@ async def test_acp_updates_emit_only_bounded_redacted_ui_content() -> None:
 
     kinds = [event["kind"] for event in events]
     assert kinds == [
+        "step_started",
         "message_started",
         "message_content",
         "message_ended",
@@ -77,18 +79,63 @@ async def test_acp_updates_emit_only_bounded_redacted_ui_content() -> None:
 
 
 @pytest.mark.anyio
-async def test_acp_ui_event_buffer_is_bounded() -> None:
+async def test_acp_ui_event_buffer_reserves_room_for_open_envelope_closures() -> None:
     events: list[dict[str, object]] = []
 
     async def capture(event: dict[str, object]) -> None:
         events.append(event)
 
-    client = _SandboxACPClient(max_updates=2, on_ui_event=capture)
+    client = _SandboxACPClient(max_updates=7, on_ui_event=capture)
     await client.start_step()
-    await client.start_step()
-    await client.start_step()
+    await client.session_update(
+        "session",
+        AgentMessageChunk(
+            session_update="agent_message_chunk",
+            message_id="provider-message",
+            content={"type": "text", "text": "bounded response"},
+        ),
+    )
+    assert await client._emit_ui_event({"kind": "bounded_progress"})
+    assert await client._emit_ui_event({"kind": "bounded_progress"})
+    assert not await client._emit_ui_event({"kind": "over_budget_progress"})
 
-    assert len(events) == 2
+    await client.finish_step("failed")
+
+    assert [event["kind"] for event in events] == [
+        "step_started", "message_started", "bounded_progress", "bounded_progress",
+        "message_content", "message_ended", "step_finished",
+    ]
+    assert len(events) == client._max_ui_events
+    assert client._ui_reserved_events == 0
+
+
+@pytest.mark.anyio
+async def test_cancelled_step_closes_an_interrupted_tool_call() -> None:
+    events: list[dict[str, object]] = []
+
+    async def capture(event: dict[str, object]) -> None:
+        events.append(event)
+
+    client = _SandboxACPClient(max_updates=20, on_ui_event=capture)
+    await client.start_step()
+    await client.session_update(
+        "session",
+        ToolCallStart(
+            tool_call_id="provider-tool",
+            title="read private file",
+            kind="read",
+            status="in_progress",
+            raw_input={"secret": "never stored"},
+            session_update="tool_call",
+        ),
+    )
+    await client.finish_step("cancelled")
+
+    assert [event["kind"] for event in events] == [
+        "step_started", "tool_started", "tool_args_redacted", "tool_ended",
+        "tool_result_redacted", "step_finished",
+    ]
+    assert "never stored" not in repr(events)
 
 
 class FakeEventDatabase:
@@ -259,6 +306,24 @@ async def test_cancelled_run_allows_only_terminal_event_closure(monkeypatch: pyt
 
 
 @pytest.mark.anyio
+async def test_paused_run_allows_fenced_terminal_event_closure(monkeypatch: pytest.MonkeyPatch) -> None:
+    task, run, lease = current_run_rows()
+    task.run_status = "PAUSED"
+    run.cancel_requested_at = datetime.now(UTC)
+    database = FakeEventDatabase([lease, task, run])
+
+    async def save_event(_db: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(execution, "record_domain_event", save_event)
+    await execution.persist_acp_ui_event(
+        FakeEventSessionFactory(database), task=task, run=run,
+        event={"kind": "step_finished", "outcome": "cancelled"},
+    )
+    assert database.commits == 1
+
+
+@pytest.mark.anyio
 async def test_cancelled_step_closes_open_message_without_publishing_partial_text() -> None:
     events: list[dict[str, object]] = []
 
@@ -266,6 +331,7 @@ async def test_cancelled_step_closes_open_message_without_publishing_partial_tex
         events.append(event)
 
     client = _SandboxACPClient(max_updates=20, on_ui_event=capture)
+    await client.start_step()
     await client.session_update(
         "session",
         AgentMessageChunk(
@@ -277,7 +343,7 @@ async def test_cancelled_step_closes_open_message_without_publishing_partial_tex
     await client.finish_step("cancelled")
 
     assert [event["kind"] for event in events] == [
-        "message_started", "message_ended", "step_finished"
+        "step_started", "message_started", "message_ended", "step_finished"
     ]
     assert "partial secret-like response" not in repr(events)
 

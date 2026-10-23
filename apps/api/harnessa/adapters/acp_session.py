@@ -153,6 +153,9 @@ class _SandboxACPClient:
         self.progress_error: Exception | None = None
         self._max_ui_events = min(max_updates, 512)
         self._ui_event_count = 0
+        self._ui_reservations: dict[str, int] = {}
+        self._ui_reserved_events = 0
+        self._step_started = False
         self._message_source_id: str | None = None
         self._message_id: str | None = None
         self._message_chunks: list[str] = []
@@ -161,26 +164,88 @@ class _SandboxACPClient:
         self._message_count = 0
         self._tool_ids: dict[str, str] = {}
 
-    async def _emit_ui_event(self, event: Mapping[str, Any]) -> None:
-        if self.on_ui_event is None or self._ui_event_count >= self._max_ui_events:
-            return
+    async def _emit_ui_event(self, event: Mapping[str, Any]) -> bool:
+        if self.on_ui_event is None:
+            return True
+        kind = event.get("kind")
+        reservation_key: str | None = None
+        reserve = 0
+        release = 0
+        if kind == "step_started":
+            reservation_key, reserve = "step", 1
+        elif kind == "message_started" and isinstance(event.get("message_id"), str):
+            reservation_key, reserve = f"message:{event['message_id']}", 2
+        elif kind == "tool_started" and isinstance(event.get("tool_call_id"), str):
+            reservation_key, reserve = f"tool:{event['tool_call_id']}", 2
+        elif kind in {"message_content", "message_ended"} and isinstance(
+            event.get("message_id"), str
+        ):
+            reservation_key = f"message:{event['message_id']}"
+            release = 1
+        elif kind == "step_finished":
+            reservation_key, release = "step", 1
+        elif kind in {"tool_ended", "tool_result_redacted"} and isinstance(
+            event.get("tool_call_id"), str
+        ):
+            reservation_key = f"tool:{event['tool_call_id']}"
+            release = 1
+        current_reservation = self._ui_reservations.get(reservation_key or "", 0)
+        released = min(release, current_reservation)
+        reserved_after = self._ui_reserved_events + reserve - released
+        if self._ui_event_count + 1 + reserved_after > self._max_ui_events:
+            self.progress_error = self.progress_error or ProtocolLimitExceeded(
+                "ACP agent exhausted the bounded UI event buffer"
+            )
+            self.limit_exceeded.set()
+            return False
         try:
             await self.on_ui_event(event)
             self._ui_event_count += 1
+            self._ui_reserved_events = reserved_after
+            if reservation_key is not None:
+                next_reservation = current_reservation + reserve - released
+                if next_reservation:
+                    self._ui_reservations[reservation_key] = next_reservation
+                else:
+                    self._ui_reservations.pop(reservation_key, None)
+            return True
         except Exception as exc:  # noqa: BLE001 - durable event failure stops unsafe continuation.
-            self.progress_error = exc
+            self.progress_error = self.progress_error or exc
             self.limit_exceeded.set()
+            return False
+
+    def _release_ui_reservation(self, key: str, count: int) -> None:
+        current = self._ui_reservations.get(key, 0)
+        released = min(count, current)
+        if not released:
+            return
+        self._ui_reserved_events -= released
+        remaining = current - released
+        if remaining:
+            self._ui_reservations[key] = remaining
+        else:
+            self._ui_reservations.pop(key, None)
 
     async def start_step(self) -> None:
-        await self._emit_ui_event({"kind": "step_started", "step_name": "agent_execution"})
+        self._step_started = await self._emit_ui_event(
+            {"kind": "step_started", "step_name": "agent_execution"}
+        )
 
     async def finish_step(self, outcome: str) -> None:
+        for source_id, tool_id in tuple(self._tool_ids.items()):
+            await self._emit_ui_event({"kind": "tool_ended", "tool_call_id": tool_id})
+            await self._emit_ui_event(
+                {"kind": "tool_result_redacted", "tool_call_id": tool_id}
+            )
+            self._tool_ids.pop(source_id, None)
         # Cancellation closes the message envelope without publishing a partial
         # assistant response after the user asked the run to stop.
         await self.finish_message(include_content=outcome != "cancelled")
-        await self._emit_ui_event(
-            {"kind": "step_finished", "step_name": "agent_execution", "outcome": outcome}
-        )
+        if self._step_started:
+            await self._emit_ui_event(
+                {"kind": "step_finished", "step_name": "agent_execution", "outcome": outcome}
+            )
+            self._step_started = False
 
     async def finish_message(self, *, include_content: bool = True) -> None:
         if self._message_id is None:
@@ -197,6 +262,8 @@ class _SandboxACPClient:
             await self._emit_ui_event(
                 {"kind": "message_content", "message_id": message_id, "text": text}
             )
+        else:
+            self._release_ui_reservation(f"message:{message_id}", 1)
         await self._emit_ui_event({"kind": "message_ended", "message_id": message_id})
         self._message_source_id = None
         self._message_id = None
@@ -212,15 +279,18 @@ class _SandboxACPClient:
         tool_id = self._tool_ids.get(source_id)
         if isinstance(update, ToolCallStart) and tool_id is None:
             tool_id = str(uuid4())
-            self._tool_ids[source_id] = tool_id
             kind = getattr(update, "kind", None)
             safe_kind = kind if kind in {
                 "read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"
             } else "other"
-            await self._emit_ui_event(
+            started = await self._emit_ui_event(
                 {"kind": "tool_started", "tool_call_id": tool_id, "tool_name": safe_kind}
             )
-            await self._emit_ui_event({"kind": "tool_args_redacted", "tool_call_id": tool_id})
+            if started:
+                self._tool_ids[source_id] = tool_id
+                await self._emit_ui_event(
+                    {"kind": "tool_args_redacted", "tool_call_id": tool_id}
+                )
         status = getattr(update, "status", None)
         if tool_id and status in {"completed", "failed"}:
             await self._emit_ui_event(
@@ -262,10 +332,14 @@ class _SandboxACPClient:
             if source_id != self._message_source_id:
                 await self.finish_message()
                 self._message_source_id = source_id
-                self._message_id = str(uuid4())
-                await self._emit_ui_event(
-                    {"kind": "message_started", "message_id": self._message_id}
-                )
+                message_id = str(uuid4())
+                if await self._emit_ui_event(
+                    {"kind": "message_started", "message_id": message_id}
+                ):
+                    self._message_id = message_id
+                else:
+                    self._message_source_id = None
+                    return
             chunk = content.text
             if self._message_char_count + len(chunk) > 8192:
                 self._message_overflow = True

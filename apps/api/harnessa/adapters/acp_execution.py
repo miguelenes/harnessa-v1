@@ -129,14 +129,21 @@ async def persist_acp_ui_event(
         current_run = await event_db.scalar(
             select(Run).where(Run.id == run.id).with_for_update()
         )
-        is_cancelling = bool(
+        is_interrupted = bool(
             current_task is not None
             and (
-                current_task.run_status == "CANCELLED"
+                current_task.run_status in {"CANCELLED", "PAUSED"}
                 or getattr(current_task, "cancel_requested_at", None)
+                or (
+                    current_run is not None
+                    and getattr(current_run, "cancel_requested_at", None)
+                )
             )
         )
-        terminal_closure = kind in {"message_ended", "tool_ended", "tool_result_redacted", "step_finished"}
+        terminal_closure = kind in {
+            "message_ended", "tool_args_redacted", "tool_ended",
+            "tool_result_redacted", "step_finished",
+        }
         if (
             current_task is None
             or current_run is None
@@ -152,7 +159,7 @@ async def persist_acp_ui_event(
             or current_run.status != "RUNNING"
             or (
                 current_task.run_status != "RUNNING"
-                and not (is_cancelling and terminal_closure)
+                and not (is_interrupted and terminal_closure)
             )
         ):
             raise StaleLease("Agent event rejected because the run lease is no longer current")
