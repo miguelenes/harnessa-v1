@@ -551,6 +551,21 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
         assert citation.content_hash == recorded.content_hash
         assert result.context_manifest is not None
         assert any(uri.startswith("verified-runs://") for uri in result.context_manifest.sources_considered)
+        assert len(result.citations) <= 5
+        assert any(
+            item.source_uri == f"verified-runs://{project_id}/{recorded.id}"
+            for item in result.context_manifest.selected
+        )
+        criterion_only = await search_repository(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            query="Revocation checked",
+            limit=5,
+        )
+        criterion_citation = next(item for item in criterion_only.citations if "/verification/" in item.path)
+        assert "Revocation checked" in criterion_citation.snippet
         failed_result = await search_repository(
             db,
             project_id=project_id,

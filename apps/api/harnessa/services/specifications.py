@@ -761,18 +761,39 @@ async def search_repository(
     terms = {term.casefold() for term in re.findall(r"[\w-]+", query) if len(term) > 1}
     verified_citations: list[RepositoryCitation] = []
     for evidence in evidence_rows:
-        searchable = f"{evidence.summary} " + " ".join(
-            f"{item['criterion_id']} {item['outcome']} {item['summary']}"
+        matched_summary = {term for term in terms if term in evidence.summary.casefold()}
+        matched_criteria = [
+            item
             for item in evidence.criteria
+            if any(
+                term in f"{item['criterion_id']} {item['outcome']} {item['summary']}".casefold()
+                for term in terms
+            )
+        ]
+        matched = tuple(
+            sorted(
+                matched_summary
+                | {
+                    term
+                    for item in matched_criteria
+                    for term in terms
+                    if term in f"{item['criterion_id']} {item['outcome']} {item['summary']}".casefold()
+                }
+            )
         )
-        matched = tuple(sorted(term for term in terms if term in searchable.casefold()))
         if matched:
+            snippet = evidence.summary
+            if matched_criteria:
+                snippet += "\nMatching criteria:\n" + "\n".join(
+                    f"{item['criterion_id']} [{item['outcome']}]: {item['summary']}"
+                    for item in matched_criteria
+                )
             verified_citations.append(
                 RepositoryCitation(
                     revision=evidence.source_revision,
                     path=f"runs/{evidence.run_id}/verification/{evidence.id}",
                     line=1,
-                    snippet=evidence.summary,
+                    snippet=snippet,
                     matched_terms=matched,
                     content_hash=evidence.content_hash,
                 )
@@ -783,7 +804,11 @@ async def search_repository(
     selected: list[RepositoryCitation] = []
     manifest_items: list[RetrievalManifestItem] = []
     omitted: list[str] = []
-    for rank, citation in enumerate((*result.citations, *verified_citations[:limit]), start=1):
+    candidates = sorted(
+        (*result.citations, *verified_citations),
+        key=lambda citation: (-len(citation.matched_terms), citation.path, citation.revision, citation.line),
+    )[:limit]
+    for rank, citation in enumerate(candidates, start=1):
         snippet_hash = citation.content_hash or hashlib.sha256(citation.snippet.encode("utf-8")).hexdigest()
         snippet_bytes = len(citation.snippet.encode("utf-8"))
         if context_bytes + snippet_bytes > max_context_bytes:
@@ -802,10 +827,15 @@ async def search_repository(
             content_hash=snippet_hash,
         )
         selected.append(selected_citation)
+        source_uri = (
+            f"verified-runs://{project_id}/{citation.path.rsplit('/', 1)[-1]}"
+            if citation.path.startswith("runs/")
+            else f"repo://{repository_id}/{citation.path}"
+        )
         manifest_items.append(
             RetrievalManifestItem(
                 source_id=source_id,
-                source_uri=f"repo://{repository_id}/{citation.path}",
+                source_uri=source_uri,
                 revision=citation.revision,
                 path=citation.path,
                 line=citation.line,
