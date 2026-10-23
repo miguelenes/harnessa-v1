@@ -15,7 +15,7 @@ FROM python:3.12.15-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y git \
+    && apt-get install --no-install-recommends -y git libatomic1 \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv==0.13.5 \
     && uv sync --frozen --no-dev
@@ -23,7 +23,7 @@ RUN apt-get update \
 FROM python:3.12.15-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y git \
+    && apt-get install --no-install-recommends -y git libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=openspec-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=openspec-runtime /app/node_modules /app/node_modules
