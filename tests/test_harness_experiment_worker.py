@@ -18,8 +18,31 @@ from harnessa.services.harness_experiments import (
     HarnessACPTaskAdapter,
     HarnessExperimentWorker,
     _assert_holdout_free_tree,
+    _exception_type_chain,
+    _matched_comparison,
     _probe_label,
 )
+
+
+def test_exception_chain_records_numeric_rpc_code_without_error_message() -> None:
+    class RequestError(Exception):
+        def __init__(self) -> None:
+            super().__init__("private model or user content")
+            self.code = -32603
+            self.data = {"type": "InternalProviderError", "message": "private response"}
+            self.harnessa_diagnostics = ["rate_limited", "private response content"]
+
+    wrapped = RuntimeError("wrapper")
+    wrapped.__cause__ = RequestError()
+
+    chain = _exception_type_chain(wrapped)
+
+    assert chain == (
+        "RuntimeError->RequestError[code=-32603,type=InternalProviderError]"
+        "[stderr=rate_limited]"
+    )
+    assert "private model or user content" not in chain
+    assert "private response" not in chain
 
 
 class _ComposedAdapter:
@@ -290,6 +313,25 @@ def test_probe_record_labels_are_bounded_and_distinct() -> None:
     assert baseline_label != candidate_label
 
 
+def test_matched_comparison_requires_successful_delivered_baseline_and_final_candidate() -> None:
+    report = {
+        "comparison_successful": True,
+        "modes": {"agg": {"ok": True, "finals": ["agg1"]}},
+    }
+    records = [
+        {"phase": "baseline", "status": "failed", "delivered": False},
+        {
+            "phase": "candidate", "status": "succeeded", "delivered": True,
+            "source_run_id": "task/agg1",
+        },
+    ]
+
+    passed, issues = _matched_comparison(report, records)
+
+    assert passed is False
+    assert issues == ["baseline_rollout_missing_or_failed"]
+
+
 @pytest.mark.anyio
 async def test_task_adapter_records_and_reads_a_completed_rollout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -360,6 +402,45 @@ async def test_task_adapter_records_and_reads_a_completed_rollout(
 
 
 @pytest.mark.anyio
+async def test_task_adapter_records_redacted_execution_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harnessa.adapters.execution import ExecutionFailure
+    from harnessa.services import harness_experiments as module
+
+    frozen = FrozenExperiment(
+        experiment_id=uuid4(), task_id=uuid4(), project_id=uuid4(),
+        organization_id=uuid4(), base_sha="a" * 40, specification_hash="b" * 64,
+        specification_revision=1, policy_revision=1, mode="parallel", k=1,
+        route_alias="probe-route", image_revision="sha256:agent",
+        tool_revision="upstream-revision", root=tmp_path, claim_attempt=2,
+    )
+    base = tmp_path / "base"
+    base.mkdir()
+    monkeypatch.setattr(module.harness_tree, "read_tree", lambda *_: {"systemprompt.md": "safe"})
+    monkeypatch.setattr(module, "validate_product_tree", lambda _tree: None)
+    adapter = HarnessACPTaskAdapter(
+        frozen=frozen, execution=object(),
+        task=TaskInput(frozen.task_id, frozen.project_id, "Title", "Description"),
+        organization_id=frozen.organization_id, repository_scope="repo/example",
+        base_harness=base, max_concurrency=1, event_loop=asyncio.get_running_loop(),
+    )
+
+    async def execute(_run_id: Any, _harness: Path) -> dict[str, Any]:
+        raise ExecutionFailure("permanent", "acp_prompt_not_completed", "private response text")
+
+    monkeypatch.setattr(adapter, "_execute", execute)
+    run_dir = await asyncio.to_thread(
+        adapter.execute, str(frozen.task_id), None, "baseline-run"
+    )
+
+    assert adapter.delivered(run_dir) is False
+    assert adapter.records[0]["status"] == "failed"
+    assert '"error_code": "acp_prompt_not_completed"' in adapter.records[0]["outcome"]
+    assert "private response text" not in adapter.records[0]["outcome"]
+
+
+@pytest.mark.anyio
 async def test_task_adapter_rejects_unbound_tasks_and_cancels_active_runs() -> None:
     adapter = HarnessACPTaskAdapter.__new__(HarnessACPTaskAdapter)
     adapter.frozen = type("Frozen", (), {"task_id": uuid4()})()
@@ -424,7 +505,14 @@ async def test_worker_run_persists_success_and_keeps_cancelled_attempts_unpublis
         return frozen, task_input, frozen.organization_id, "repo/demo", base, [], 1
 
     monkeypatch.setattr(HarnessExperimentWorker, "_inputs", inputs)
-    monkeypatch.setattr(module, "run_upstream_task", lambda *_args, **_kwargs: {"comparison_successful": True})
+    def run_comparison(adapter: Any, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        adapter.records.extend([
+            {"phase": "baseline", "status": "succeeded", "delivered": True},
+            {"phase": "candidate", "status": "succeeded", "delivered": True, "source_run_id": "task/agg1"},
+        ])
+        return {"comparison_successful": True, "modes": {"agg": {"ok": True, "finals": ["agg1"]}}}
+
+    monkeypatch.setattr(module, "run_upstream_task", run_comparison)
     composed: list[dict[str, Any]] = []
 
     async def compose(_self: Any, _frozen: Any, _adapter: Any, result: dict[str, Any]) -> None:
@@ -479,6 +567,7 @@ async def test_worker_run_persists_success_and_keeps_cancelled_attempts_unpublis
     assert composed and persisted
     assert finished == [("succeeded", None)]
     assert persisted[0]["holdout_evaluation"]["judge_revision"] == "deterministic-fixture-v1"
+    assert persisted[0]["comparison_integrity"] == {"status": "passed", "issues": []}
 
     persisted.clear()
     finished.clear()
@@ -505,6 +594,7 @@ async def test_unconfigured_holdout_evaluator_fails_closed(tmp_path: Path, monke
 
     monkeypatch.setattr(worker, "_persist_holdout_evaluation", persist)
     result: dict[str, Any] = {
+        "composed_successful": True,
         "holdout_manifest": {"schema_version": 1, "digest": "c" * 64, "artifacts": []}
     }
 
@@ -514,6 +604,44 @@ async def test_unconfigured_holdout_evaluator_fails_closed(tmp_path: Path, monke
     assert grade["reason_code"] == "evaluator_not_configured"
     assert persisted == [result]
     assert "judge_revision" not in grade
+
+
+@pytest.mark.anyio
+async def test_holdout_is_not_submitted_without_a_composed_deliverable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frozen = FrozenExperiment(
+        experiment_id=uuid4(), task_id=uuid4(), project_id=uuid4(), organization_id=uuid4(),
+        base_sha="a" * 40, specification_hash="b" * 64, specification_revision=1,
+        policy_revision=1, mode="parallel", k=1, route_alias="probe", image_revision="image",
+        tool_revision="tools", root=tmp_path, claim_attempt=2,
+    )
+
+    class UnexpectedEvaluator:
+        async def evaluate(self, _manifest: dict[str, Any]) -> dict[str, str]:
+            raise AssertionError("incomplete composition must not reach the evaluator")
+
+    worker = HarnessExperimentWorker(None, evaluator=UnexpectedEvaluator())  # type: ignore[arg-type]
+    persisted: list[dict[str, Any]] = []
+
+    async def persist(_frozen: Any, result: dict[str, Any]) -> bool:
+        persisted.append(result)
+        return True
+
+    monkeypatch.setattr(worker, "_persist_holdout_evaluation", persist)
+    result: dict[str, Any] = {
+        "composed_successful": False,
+        "holdout_manifest": {"schema_version": 1, "digest": "c" * 64, "artifacts": []},
+    }
+
+    grade = await worker._grade_holdout(frozen, result)
+
+    assert grade == {
+        "status": "not_run",
+        "reason_code": "composed_artifact_unavailable",
+        "manifest_digest": "c" * 64,
+    }
+    assert persisted == [result]
 
 
 @pytest.mark.anyio
@@ -534,6 +662,7 @@ async def test_holdout_evaluator_timeout_stays_unknown(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(worker, "_persist_holdout_evaluation", persist)
     result: dict[str, Any] = {
+        "composed_successful": True,
         "holdout_manifest": {"schema_version": 1, "digest": "c" * 64, "artifacts": []}
     }
 

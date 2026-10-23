@@ -207,3 +207,12 @@ async def test_crashed_process_and_protocol_path_traversal_are_rejected(tmp_path
     assert not permission_allowed("read", ["/workspace/../etc/passwd"], workspace)
     assert permission_allowed("execute", [])
     assert not permission_allowed("fetch", ["/workspace/file.txt"])
+
+
+def test_stderr_diagnostics_keep_only_fixed_failure_categories() -> None:
+    session = object.__new__(ACPAgentSession)
+    session._stderr_tail = bytearray(
+        b"provider returned 429 Too Many Requests; private response text"
+    )
+
+    assert session._stderr_categories() == ["rate_limited"]

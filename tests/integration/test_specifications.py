@@ -203,6 +203,11 @@ async def _create_ready_interview(
         interview, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
         assert evaluation.state == "READY"
         assert evaluation.score == 1
+        assert evaluation.gates["execution_capabilities"]["model_route_ready"] is True
+        deployment = await db.scalar(
+            select(ModelDeployment).where(ModelDeployment.name == "fixture-acp-deployment")
+        )
+        assert deployment is not None and deployment.capabilities["cancellation"] is False
         repository = await db.get(Repository, repository_id)
         assert repository is not None
         source = await specification_service._workspace_manager.read_file_at_revision(
@@ -242,7 +247,7 @@ async def _configure_acp_route(
     project_id: UUID,
     *,
     tools: bool = True,
-    cancellation: bool = True,
+    cancellation: bool = False,
     context_window: int | None = None,
     budget_max_output_tokens: int = 16_384,
 ) -> None:

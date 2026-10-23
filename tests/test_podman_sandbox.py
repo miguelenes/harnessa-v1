@@ -62,8 +62,9 @@ def test_container_command_rejects_partial_broker_mounts(tmp_path: Path) -> None
 
 
 def test_container_command_mounts_only_valid_broker_sockets_and_executables(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("HARNESSA_ACP_DEBUG", "1")
     backend = _backend()
     workspace = tmp_path / "workspace"
     state = tmp_path / "state"
@@ -98,6 +99,8 @@ def test_container_command_mounts_only_valid_broker_sockets_and_executables(
         )
         assert f"{model_socket}:/run/harnessa/model.sock:ro,rprivate,Z" in command
         assert f"{orchestrator_socket}:/run/harnessa/orchestrator.sock:ro,rprivate,Z" in command
+        assert "OPENCODE_LOG_LEVEL=DEBUG" in command
+        assert "OPENCODE_PRINT_LOGS=1" in command
         assert command[-3:] == ["harnessa-agent", "opencode", "acp"]
         assert "/bin/sh" in command
     finally:

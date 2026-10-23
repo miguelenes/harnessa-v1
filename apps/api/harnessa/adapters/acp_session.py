@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -393,6 +394,7 @@ class ACPAgentSession:
         self.session_id: str | None = None
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         self.stderr_bytes = 0
+        self._stderr_tail = bytearray()
 
     async def initialize(self) -> InitializeResponse:
         try:
@@ -450,6 +452,7 @@ class ACPAgentSession:
             try:
                 response = await prompt_task
             except Exception as exc:
+                exc.__dict__["harnessa_diagnostics"] = self._stderr_categories()
                 raise ACPProtocolError("ACP agent failed while handling a prompt") from exc
             outcome = "cancelled" if response.stop_reason == "cancelled" else "completed"
             return str(response.stop_reason)
@@ -491,3 +494,22 @@ class ACPAgentSession:
             if not chunk:
                 return
             self.stderr_bytes += len(chunk)
+            self._stderr_tail.extend(chunk)
+            if len(self._stderr_tail) > 65_536:
+                del self._stderr_tail[:-65_536]
+
+    def _stderr_categories(self) -> list[str]:
+        """Classify a bounded stderr tail without retaining or returning log text."""
+        text = self._stderr_tail.decode("utf-8", errors="ignore").lower()
+        rules = {
+            "connection_refused": r"econnrefused|connection refused",
+            "connection_reset": r"econnreset|connection reset",
+            "dns_failure": r"enotfound|name resolution failed",
+            "timeout": r"etimedout|timed out|deadline exceeded",
+            "authentication_rejected": r"401 unauthorized|invalid api key|authentication failed",
+            "permission_rejected": r"403 forbidden|permission denied",
+            "budget_rejected": r"402 payment required|insufficient budget|reservation limit",
+            "rate_limited": r"429 too many requests|rate limit|quota exceeded",
+            "provider_unavailable": r"502 bad gateway|503 service unavailable|model not found",
+        }
+        return [category for category, pattern in rules.items() if re.search(pattern, text)]
