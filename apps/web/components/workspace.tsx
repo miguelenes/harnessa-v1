@@ -6,7 +6,7 @@ import { isRecognizedEvent, type UnrecognizedEvent } from "@ag-ui/client";
 import dynamic from "next/dynamic";
 import type { components } from "@harnessa/contracts";
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from "@harnessa/ui-react";
-import { Activity, BookOpen, Boxes, ClipboardList, FileCode2, LayoutDashboard, LoaderCircle, Moon, Radio, Settings2, Sun } from "lucide-react";
+import { Activity, BookOpen, Boxes, ClipboardList, FileCode2, GripVertical, LayoutDashboard, LoaderCircle, Moon, Radio, Settings2, Sun } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { SafeMarkdown } from "./safe-markdown";
@@ -55,14 +55,17 @@ function eventSummary(event: AgUiEvent): string {
 }
 
 function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: task.id, data: { task } });
-  return <button ref={setNodeRef} {...listeners} {...attributes} onClick={onOpen} className={`w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)] ${isDragging ? "opacity-50" : ""}`} style={transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined} aria-label={`${task.title}, ${LABELS[task.stage]}; open task details for authorized transition actions`}>
-    <span className="block font-medium leading-5">{task.title}</span>
-    <span className="mt-2 flex flex-wrap gap-1.5"><Badge variant="outline">{LABELS[task.stage] ?? task.stage}</Badge><Badge variant={task.run_status === "FAILED" ? "destructive" : "secondary"}>{task.run_status}</Badge></span>
-    {task.specification_readiness_state && <span className="mt-2 block"><Badge variant={task.specification_readiness_state === "READY" ? "success" : "warning"}>Spec {task.specification_readiness_state} · r{task.specification_revision}</Badge></span>}
-    {task.blocked_reason && <span className="mt-2 block text-xs text-[var(--danger)]">Blocked: {task.blocked_reason}</span>}
-    <span className="mt-2 block font-mono text-[11px] text-[var(--muted-foreground)]">v{task.version}</span>
-  </button>;
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, isDragging } = useDraggable({ id: task.id, data: { task } });
+  return <div ref={setNodeRef} className={`relative w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] ${isDragging ? "opacity-50" : ""}`} style={transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined}>
+    <button type="button" onClick={onOpen} className="w-full rounded-lg p-3 pr-10 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]" aria-label={`${task.title}, ${LABELS[task.stage]}; open task details for authorized transition actions`}>
+      <span id={`task-title-${task.id}`} className="block font-medium leading-5">{task.title}</span>
+      <span className="mt-2 flex flex-wrap gap-1.5"><Badge variant="outline">{LABELS[task.stage] ?? task.stage}</Badge><Badge variant={task.run_status === "FAILED" ? "destructive" : "secondary"}>{task.run_status}</Badge></span>
+      {task.specification_readiness_state && <span className="mt-2 block"><Badge variant={task.specification_readiness_state === "READY" ? "success" : "warning"}>Spec {task.specification_readiness_state} · r{task.specification_revision}</Badge></span>}
+      {task.blocked_reason && <span className="mt-2 block text-xs text-[var(--danger)]">Blocked: {task.blocked_reason}</span>}
+      <span className="mt-2 block font-mono text-[11px] text-[var(--muted-foreground)]">v{task.version}</span>
+    </button>
+    <button type="button" ref={setActivatorNodeRef} {...listeners} {...attributes} aria-label={`Drag task card ${task.id.slice(0, 8)}`} aria-describedby={`task-title-${task.id}`} className="absolute right-2 top-2 rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]"><GripVertical size={16} aria-hidden="true" /></button>
+  </div>;
 }
 
 function BoardColumn({ stage, tasks, open, disabled }: { stage: string; tasks: Task[]; open: (task: Task) => void; disabled: boolean }) {
