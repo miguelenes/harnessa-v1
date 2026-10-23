@@ -78,6 +78,8 @@ class Run(Scoped, Base):
     checkpoint_id: Mapped[UUID | None] = mapped_column(nullable=True)
     resume_from_run_id: Mapped[UUID | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
     adapter_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Set once by a trusted execution adapter to identify the commit actually tested.
+    source_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class RunCheckpoint(Scoped, Base):

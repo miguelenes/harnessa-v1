@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -22,8 +23,10 @@ from harnessa.db.models import (
     Project,
     ProjectMembership,
     Repository,
+    Task,
     User,
 )
+from harnessa.db.orchestration import Run
 from harnessa.db.retrieval import (
     MCPProjectGrant,
     MCPToolAudit,
@@ -32,17 +35,26 @@ from harnessa.db.retrieval import (
     RetrievalSync,
 )
 from harnessa.db.session import SessionLocal
+from harnessa.db.specification import SpecificationInterview
 from harnessa.services.retrieval_governance import MCPTool
 from harnessa.services.retrieval_index import sync_repository_index
 from harnessa.services.specifications import search_repository
+from harnessa.services.verification_evidence import (
+    VerificationEvidenceInput,
+    bind_run_source_revision,
+    record_verification_evidence,
+)
 from pwdlib import PasswordHash
 from sqlalchemy import delete, select, update
 
 pytestmark = pytest.mark.integration
 
 
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+def _git(root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
+    )
+    return result.stdout.strip()
 
 
 def _commit(root: Path, message: str) -> None:
@@ -478,6 +490,197 @@ async def test_search_cites_synced_openspec_history_and_project_approved_skill(
         )
         assert any(item.path == "openspec/changes/example-change/proposal.md" for item in history.citations)
         assert any(item.path == skill_path for item in approved_skill.citations)
+
+
+async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, project_id, repository_id, actor, manager = await _source_fixture(tmp_path, monkeypatch)
+    (root / "docs/guide.md").write_text("Second commit for revision binding evidence.\n")
+    _git(root, "add", "docs/guide.md")
+    await asyncio.to_thread(_commit, root, "second revision")
+    source_revision = await asyncio.to_thread(_git, root, "rev-parse", "HEAD")
+    other_valid_revision = await asyncio.to_thread(_git, root, "rev-parse", "HEAD^")
+    async with SessionLocal() as db:
+        project = await db.get(Project, project_id)
+        assert project is not None
+        task = Task(project_id=project_id, title="Fixture verification", stage="DONE", run_status="SUCCEEDED")
+        db.add(task)
+        await db.flush()
+        db.add(
+            SpecificationInterview(
+                organization_id=project.organization_id,
+                project_id=project_id,
+                task_id=task.id,
+                repository_id=repository_id,
+                created_by=actor.id,
+                topic="Fixture verification",
+                change_id="fixture-verification",
+                base_sha=source_revision,
+                head_sha=source_revision,
+                idempotency_key=f"verification-{uuid4()}",
+                request_hash="b" * 64,
+                artifact_hash="c" * 64,
+            )
+        )
+        run = Run(
+            task_id=task.id,
+            project_id=project_id,
+            attempt=1,
+            status="SUCCEEDED",
+            fencing_token=7,
+            adapter_name="fixture",
+        )
+        db.add(run)
+        await db.flush()
+        await db.commit()
+
+        async def bind_revision(revision: str) -> bool:
+            async with SessionLocal() as competing_db:
+                try:
+                    await bind_run_source_revision(
+                        competing_db,
+                        organization_id=project.organization_id,
+                        project_id=project_id,
+                        repository_id=repository_id,
+                        task_id=task.id,
+                        run_id=run.id,
+                        attempt=1,
+                        fencing_token=7,
+                        source_revision=revision,
+                        workspace_manager=manager,
+                    )
+                    await competing_db.commit()
+                    return True
+                except HTTPException:
+                    await competing_db.rollback()
+                    return False
+
+        binding_results = await asyncio.gather(
+            bind_revision(source_revision), bind_revision(other_valid_revision)
+        )
+        assert binding_results.count(True) == 1
+        await db.refresh(run)
+        bound_revision = run.source_revision
+        assert bound_revision in {source_revision, other_valid_revision}
+        evidence = VerificationEvidenceInput(
+            organization_id=project.organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            task_id=task.id,
+            run_id=run.id,
+            attempt=1,
+            fencing_token=7,
+            source_record_id="fixture-verifier-001",
+            source_revision=bound_revision,
+            outcome="passed",
+            summary="Verified lexical fixture isolation and authorization revocation.",
+            criteria=(
+                {"criterion_id": "authorization", "outcome": "passed", "summary": "Revocation checked."},
+            ),
+            verifier_id="fixture-verifier-v1",
+        )
+
+        async def record_concurrently() -> str:
+            async with SessionLocal() as competing_db:
+                record = await record_verification_evidence(
+                    competing_db, evidence, workspace_manager=manager
+                )
+                await competing_db.commit()
+                return str(record.id)
+
+        concurrent_ids = await asyncio.gather(record_concurrently(), record_concurrently())
+        assert concurrent_ids[0] == concurrent_ids[1]
+        recorded = await record_verification_evidence(db, evidence, workspace_manager=manager)
+        repeated = await record_verification_evidence(db, evidence, workspace_manager=manager)
+        assert recorded.id == repeated.id
+        failed = replace(
+            evidence,
+            source_record_id="fixture-verifier-failed-002",
+            outcome="failed",
+            summary="Failed isolated verifier sentinel result.",
+        )
+        await record_verification_evidence(db, failed, workspace_manager=manager)
+        with pytest.raises(HTTPException) as mismatch:
+            await record_verification_evidence(
+                db, replace(evidence, attempt=2), workspace_manager=manager
+            )
+        assert mismatch.value.status_code == 409
+        unrelated_repository = Repository(
+            project_id=project_id,
+            target_id="fixture/other-source",
+            display_name="Other fixture",
+            default_branch="main",
+        )
+        db.add(unrelated_repository)
+        await db.flush()
+        with pytest.raises(HTTPException) as wrong_repository:
+            await record_verification_evidence(
+                db,
+                replace(evidence, repository_id=unrelated_repository.id),
+                workspace_manager=manager,
+            )
+        assert wrong_repository.value.status_code == 409
+        with pytest.raises(HTTPException) as different_valid_revision:
+            await record_verification_evidence(
+                db,
+                replace(
+                    evidence,
+                    source_record_id="fixture-verifier-other-revision",
+                    source_revision=(
+                        source_revision
+                        if bound_revision == other_valid_revision
+                        else other_valid_revision
+                    ),
+                ),
+                workspace_manager=manager,
+            )
+        assert different_valid_revision.value.status_code == 409
+        with pytest.raises(HTTPException) as unknown_revision:
+            await record_verification_evidence(
+                db,
+                replace(evidence, source_revision="a" * 40),
+                workspace_manager=manager,
+            )
+        assert unknown_revision.value.status_code == 409
+        await db.commit()
+        result = await search_repository(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            query="authorization revocation verified",
+            limit=5,
+        )
+        citation = next(item for item in result.citations if "/verification/" in item.path)
+        assert citation.revision == bound_revision
+        assert citation.content_hash == recorded.content_hash
+        assert result.context_manifest is not None
+        assert any(uri.startswith("verified-runs://") for uri in result.context_manifest.sources_considered)
+        assert len(result.citations) <= 5
+        assert any(
+            item.source_uri == f"verified-runs://{project_id}/{recorded.id}"
+            for item in result.context_manifest.selected
+        )
+        criterion_only = await search_repository(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            query="Revocation checked",
+            limit=5,
+        )
+        criterion_citation = next(item for item in criterion_only.citations if "/verification/" in item.path)
+        assert "Revocation checked" in criterion_citation.snippet
+        failed_result = await search_repository(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            query="isolated verifier sentinel",
+            limit=5,
+        )
+        assert not any("/verification/" in item.path for item in failed_result.citations)
 
 
 async def test_mcp_result_is_suppressed_when_project_grant_is_revoked_during_call(

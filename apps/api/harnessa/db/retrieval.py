@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -103,6 +104,31 @@ class RetrievalSync(Scoped, Base):
     incremental: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     snapshot_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     omitted_counts: Mapped[dict[str, int]] = mapped_column(JSON_DOCUMENT, nullable=False, default=dict)
+
+
+class VerificationEvidence(Scoped, Base):
+    """Immutable result supplied by a trusted verifier; task status is not proof."""
+
+    __tablename__ = "verification_evidence"
+    __table_args__ = (
+        UniqueConstraint("project_id", "source_record_id", name="uq_verification_source"),
+        Index("ix_verification_evidence_scope", "project_id", "outcome", "created_at"),
+    )
+    organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    repository_id: Mapped[UUID] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
+    task_id: Mapped[UUID] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_record_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_revision: Mapped[str] = mapped_column(String(200), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    summary: Mapped[str] = mapped_column(String(2000), nullable=False)
+    criteria: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    artifact_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    verifier_id: Mapped[str] = mapped_column(String(120), nullable=False)
 
 
 class MCPProjectGrant(Scoped, Base):

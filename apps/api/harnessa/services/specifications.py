@@ -29,6 +29,7 @@ from harnessa.contracts import ModelPoolKind, ModelProtocol, RouteRequirements, 
 from harnessa.db.model_gateway import ModelBudgetPolicy
 from harnessa.db.models import Membership, Project, ProjectMembership, Repository, Task, User
 from harnessa.db.orchestration import Run, TaskLease, TaskTransition
+from harnessa.db.retrieval import VerificationEvidence
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import (
     SpecificationAnswer,
@@ -731,15 +732,84 @@ async def search_repository(
             limit,
             approved_skill_paths_for_project(project_id),
         )
+        # Prior verifier results share this search surface. Only explicit passed
+        # evidence is eligible; scheduler status never promotes a run to verified.
+        evidence_rows = list(
+            await db.scalars(
+                select(VerificationEvidence)
+                .where(
+                    VerificationEvidence.organization_id == project.organization_id,
+                    VerificationEvidence.project_id == project_id,
+                    VerificationEvidence.repository_id == repository_id,
+                    VerificationEvidence.outcome == "passed",
+                )
+                .order_by(VerificationEvidence.created_at.desc())
+                .limit(500)
+            )
+        )
     except (OSError, SpecificationWorkspaceError) as exc:
         raise HTTPException(503, str(exc)) from exc
+    # Reauthorize after source and verifier evidence reads, before returning excerpts.
+    await require_membership(db, actor, project_id)
+    if await db.scalar(
+        select(Repository.id).where(
+            Repository.id == repository_id,
+            Repository.project_id == project_id,
+        )
+    ) is None:
+        raise HTTPException(404, "Repository is not connected to this project")
+    terms = {term.casefold() for term in re.findall(r"[\w-]+", query) if len(term) > 1}
+    verified_citations: list[RepositoryCitation] = []
+    for evidence in evidence_rows:
+        matched_summary = {term for term in terms if term in evidence.summary.casefold()}
+        matched_criteria = [
+            item
+            for item in evidence.criteria
+            if any(
+                term in f"{item['criterion_id']} {item['outcome']} {item['summary']}".casefold()
+                for term in terms
+            )
+        ]
+        matched = tuple(
+            sorted(
+                matched_summary
+                | {
+                    term
+                    for item in matched_criteria
+                    for term in terms
+                    if term in f"{item['criterion_id']} {item['outcome']} {item['summary']}".casefold()
+                }
+            )
+        )
+        if matched:
+            snippet = evidence.summary
+            if matched_criteria:
+                snippet += "\nMatching criteria:\n" + "\n".join(
+                    f"{item['criterion_id']} [{item['outcome']}]: {item['summary']}"
+                    for item in matched_criteria
+                )
+            verified_citations.append(
+                RepositoryCitation(
+                    revision=evidence.source_revision,
+                    path=f"runs/{evidence.run_id}/verification/{evidence.id}",
+                    line=1,
+                    snippet=snippet,
+                    matched_terms=matched,
+                    content_hash=evidence.content_hash,
+                )
+            )
+    verified_citations.sort(key=lambda item: (-len(item.matched_terms), item.revision, item.path))
     max_context_bytes = 24_000
     context_bytes = 0
     selected: list[RepositoryCitation] = []
     manifest_items: list[RetrievalManifestItem] = []
     omitted: list[str] = []
-    for rank, citation in enumerate(result.citations, start=1):
-        snippet_hash = hashlib.sha256(citation.snippet.encode("utf-8")).hexdigest()
+    candidates = sorted(
+        (*result.citations, *verified_citations),
+        key=lambda citation: (-len(citation.matched_terms), citation.path, citation.revision, citation.line),
+    )[:limit]
+    for rank, citation in enumerate(candidates, start=1):
+        snippet_hash = citation.content_hash or hashlib.sha256(citation.snippet.encode("utf-8")).hexdigest()
         snippet_bytes = len(citation.snippet.encode("utf-8"))
         if context_bytes + snippet_bytes > max_context_bytes:
             omitted.append(f"{citation.path}:{citation.line}:context_budget")
@@ -757,10 +827,15 @@ async def search_repository(
             content_hash=snippet_hash,
         )
         selected.append(selected_citation)
+        source_uri = (
+            f"verified-runs://{project_id}/{citation.path.rsplit('/', 1)[-1]}"
+            if citation.path.startswith("runs/")
+            else f"repo://{repository_id}/{citation.path}"
+        )
         manifest_items.append(
             RetrievalManifestItem(
                 source_id=source_id,
-                source_uri=f"repo://{repository_id}/{citation.path}",
+                source_uri=source_uri,
                 revision=citation.revision,
                 path=citation.path,
                 line=citation.line,
@@ -777,7 +852,7 @@ async def search_repository(
         organization_id=str(project.organization_id),
         project_id=str(project_id),
         repository_id=str(repository_id),
-        sources_considered=(f"repo://{repository_id}@{result.revision}",),
+        sources_considered=(f"repo://{repository_id}@{result.revision}", f"verified-runs://{project_id}"),
         selected=tuple(manifest_items),
         omitted=tuple(omitted),
         max_context_bytes=max_context_bytes,

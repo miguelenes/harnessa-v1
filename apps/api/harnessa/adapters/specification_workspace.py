@@ -77,6 +77,13 @@ class SpecificationWorkspaceManager:
         source = await self.source_path(repository)
         return await asyncio.to_thread(self._current_base, source, repository.default_branch)
 
+    async def contains_revision(self, repository: Repository, revision: str) -> bool:
+        """Confirm an immutable full commit SHA exists in the connected repository."""
+        if not re.fullmatch(r"[0-9a-f]{40,64}", revision):
+            return False
+        source = await self.source_path(repository)
+        return await asyncio.to_thread(self._contains_revision, source, revision)
+
     async def open(
         self,
         interview_id: UUID,
@@ -246,6 +253,17 @@ class SpecificationWorkspaceManager:
         revision = f"refs/heads/{default_branch}^{{commit}}"
         self._git(source, "check-ref-format", f"refs/heads/{default_branch}")
         return self._git(source, "rev-parse", "--verify", revision).strip()
+
+    def _contains_revision(self, source: Path, revision: str) -> bool:
+        result = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=self._git_env(),
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+        return result.returncode == 0 and result.stdout.strip() == revision
 
     def _create(
         self,
