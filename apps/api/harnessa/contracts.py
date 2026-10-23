@@ -754,6 +754,128 @@ class RepositoryRead(RepositoryCreate):
     project_id: UUID
 
 
+class GitHubAppConfigurationCreate(BaseModel):
+    app_id: int = Field(gt=0)
+    webhook_id: int = Field(gt=0)
+    private_key_secret_ref: str = Field(min_length=1, max_length=240, pattern=r"^[A-Za-z0-9_.:-]+$")
+    webhook_secret_ref: str = Field(min_length=1, max_length=240, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class GitHubAppConfigurationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    app_id: int
+    webhook_id: int
+    enabled: bool
+    connection_status: str
+    checked_at: datetime | None = None
+    last_error: str | None = None
+
+
+class GitHubInstallationCreate(BaseModel):
+    app_configuration_id: UUID
+    installation_id: int = Field(gt=0)
+
+
+class GitHubInstallationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    app_configuration_id: UUID
+    installation_id: int
+    account_id: int | None
+    account_login: str
+    account_type: str
+    repository_selection: str
+    granted_permissions: dict[str, str]
+    active: bool
+    checked_at: datetime | None = None
+    last_error: str | None = None
+
+
+class GitHubRepositoryOptIn(BaseModel):
+    installation_id: UUID
+    github_repository_id: int = Field(gt=0)
+    required_checks: list[str] = Field(min_length=1, max_length=40)
+    topic_label: str = Field(default="harnessa", min_length=1, max_length=80)
+    archive_policy: Literal["pre_merge", "post_merge"] = "pre_merge"
+
+
+class GitHubRepositoryLinkRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    repository_id: UUID
+    installation_id: UUID
+    github_repository_id: int
+    full_name: str
+    opted_in: bool
+    required_checks: list[str]
+    topic_label: str
+    archive_policy: str = Field(pattern=r"^(pre_merge|post_merge)$")
+    setup_status: str
+    last_synced_at: datetime | None = None
+    last_error: str | None = None
+
+
+class GitHubActorMappingCreate(BaseModel):
+    installation_id: UUID
+    github_user_id: int = Field(gt=0)
+    github_login: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9-]+$")
+    user_id: UUID
+
+
+class GitHubActorMappingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    installation_id: UUID
+    github_user_id: int
+    github_login: str
+    user_id: UUID
+    active: bool
+
+
+class GitHubConnectionStatusRead(BaseModel):
+    configured_apps: list[GitHubAppConfigurationRead]
+    installations: list[GitHubInstallationRead]
+    repository_links: list[GitHubRepositoryLinkRead]
+    actor_mappings: list[GitHubActorMappingRead]
+    webhook_health: dict[str, int]
+    recent_deliveries: list[dict[str, Any]]
+
+
+class GitHubDeliveryRepairRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class GitHubPublishRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class GitHubIssueCreateRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class GitHubCommitStatusRequest(BaseModel):
+    state: Literal["pending", "success", "error", "failure"]
+    description: str = Field(min_length=1, max_length=140)
+    target_url: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_target_url(self) -> GitHubCommitStatusRequest:
+        if self.target_url is not None and not self.target_url.startswith("https://"):
+            raise ValueError("GitHub status target_url must use HTTPS")
+        return self
+
+
+class GitHubEffectQueuedRead(BaseModel):
+    queued: bool
+    stable_keys: list[str]
+
+
+class GitHubWebhookReceipt(BaseModel):
+    accepted: bool = True
+    duplicate: bool = False
+
+
 class VerificationManifestApprovalRequest(BaseModel):
     """Approve the manifest file at one exact, current repository revision."""
 
@@ -794,9 +916,28 @@ class ManualIntegrationRequest(BaseModel):
 
 
 class PostIntegrationStepRequest(BaseModel):
-    status: Literal["succeeded", "failed"]
+    status: Literal["pending", "succeeded", "failed"]
     result: dict[str, Any] = Field(default_factory=dict)
     error: str | None = Field(default=None, max_length=2000)
+
+
+class PostIntegrationStepRead(BaseModel):
+    kind: str = Field(pattern=r"^(archive|learning|cleanup)$")
+    status: str = Field(pattern=r"^(pending|running|succeeded|failed|skipped|awaiting_merge)$")
+    attempts: int
+    result: dict[str, Any]
+    last_error: str | None = None
+
+
+class IntegrationEvidenceRead(BaseModel):
+    id: UUID
+    status: str
+    mode: str
+    stable_key: str
+    evidence: dict[str, Any]
+    evidence_digest: str
+    integration_revision: str | None
+    steps: list[PostIntegrationStepRead]
 
 
 class SpecificationInterviewCreate(BaseModel):

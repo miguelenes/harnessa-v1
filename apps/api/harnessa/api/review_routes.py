@@ -17,12 +17,15 @@ from harnessa.adapters.verification import VerificationManifest
 from harnessa.auth.users import current_active_user
 from harnessa.config import settings
 from harnessa.contracts import (
+    IntegrationEvidenceRead,
     ManualIntegrationRequest,
+    PostIntegrationStepRead,
     PostIntegrationStepRequest,
     ReviewDecisionRequest,
     VerificationManifestApprovalRequest,
     VerificationManifestRevisionRead,
 )
+from harnessa.db.github import GitHubRepositoryLink
 from harnessa.db.model_gateway import ModelBudgetPolicy
 from harnessa.db.models import Project, Repository, Task, User
 from harnessa.db.orchestration import Run, TaskTransition
@@ -38,6 +41,7 @@ from harnessa.db.session import get_db
 from harnessa.db.specification import SpecificationInterview
 from harnessa.services.authorization import require_membership
 from harnessa.services.model_gateway import budget_policy_digest
+from harnessa.services.post_integration import complete_task_if_ready
 from harnessa.services.review_publication import LocalReviewPublicationPort
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -490,7 +494,7 @@ async def record_manual_integration(
             )
         )
     before = task.version
-    task.stage = "DONE"
+    task.stage = "LEARNING"
     task.version += 1
     db.add(
         TaskTransition(
@@ -498,10 +502,10 @@ async def record_manual_integration(
             project_id=task.project_id,
             actor_id=actor.id,
             from_stage="HUMAN_REVIEW",
-            to_stage="DONE",
+            to_stage="LEARNING",
             from_run_status=task.run_status,
             to_run_status=task.run_status,
-            reason="Operator confirmed manual integration against the approved base",
+            reason="Operator confirmed integration; durable post-integration steps are pending",
             command="integration_confirmed",
             version_before=before,
             version_after=task.version,
@@ -509,6 +513,54 @@ async def record_manual_integration(
     )
     await db.commit()
     return {"id": integration.id, "status": integration.status, "evidence_digest": digest}
+
+
+@router.get("/tasks/{task_id}/integration-evidence", response_model=IntegrationEvidenceRead)
+async def get_integration_evidence(
+    task_id: UUID,
+    actor: User = Depends(current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> IntegrationEvidenceRead:
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(404, "Task not found")
+    await require_membership(db, actor, task.project_id)
+    integration = await db.scalar(
+        select(IntegrationEvidence)
+        .where(IntegrationEvidence.task_id == task_id)
+        .order_by(IntegrationEvidence.created_at.desc())
+        .limit(1)
+    )
+    if integration is None:
+        raise HTTPException(404, "Integration evidence not found")
+    steps = list(
+        (
+            await db.scalars(
+                select(PostIntegrationStep)
+                .where(PostIntegrationStep.integration_evidence_id == integration.id)
+                .order_by(PostIntegrationStep.kind)
+            )
+        ).all()
+    )
+    return IntegrationEvidenceRead(
+        id=integration.id,
+        status=integration.status,
+        mode=integration.mode,
+        stable_key=integration.stable_key,
+        evidence=integration.evidence,
+        evidence_digest=integration.evidence_digest,
+        integration_revision=integration.integration_revision,
+        steps=[
+            PostIntegrationStepRead(
+                kind=step.kind,
+                status=step.status,
+                attempts=step.attempts,
+                result=step.result,
+                last_error=step.last_error,
+            )
+            for step in steps
+        ],
+    )
 
 
 @router.put("/integration-evidence/{integration_id}/steps/{kind}")
@@ -537,9 +589,46 @@ async def update_post_integration_step(
     )
     if step is None:
         raise HTTPException(404, "Post-integration step not found")
+    link = await db.scalar(
+        select(GitHubRepositoryLink).where(
+            GitHubRepositoryLink.repository_id == integration.repository_id
+        )
+    )
+    if (
+        kind == "archive"
+        and integration.mode == "github"
+        and link is not None
+        and link.archive_policy == "post_merge"
+    ):
+        if body.status == "succeeded":
+            raise HTTPException(
+                409,
+                "Post-merge archive completion requires verified GitHub merge evidence",
+            )
+        if body.status == "pending":
+            if step.status != "failed":
+                raise HTTPException(409, "Only a failed maintenance archive can be retried")
+            step.status = "pending"
+            step.attempts = 0
+            step.last_error = None
+            step.result = {
+                "outcome": "retry_requested",
+                "reason": body.error or "operator_retry",
+            }
+        else:
+            step.attempts += 1
+            step.status = body.status
+            step.result = body.result
+            step.last_error = body.error
+        await complete_task_if_ready(db, integration_id)
+        await db.commit()
+        return {"kind": step.kind, "status": step.status, "attempts": step.attempts}
+    if body.status == "pending":
+        raise HTTPException(422, "Pending is available only for a failed post-merge archive retry")
     step.status = body.status
     step.attempts += 1
     step.result = body.result
     step.last_error = body.error
+    await complete_task_if_ready(db, integration_id)
     await db.commit()
     return {"kind": step.kind, "status": step.status, "attempts": step.attempts}

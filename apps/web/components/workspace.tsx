@@ -6,7 +6,7 @@ import { isRecognizedEvent, type UnrecognizedEvent } from "@ag-ui/client";
 import dynamic from "next/dynamic";
 import type { components } from "@harnessa/contracts";
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from "@harnessa/ui-react";
-import { Activity, BookOpen, Boxes, ClipboardList, FileCode2, GripVertical, LayoutDashboard, LoaderCircle, Moon, Radio, Settings2, Sun } from "lucide-react";
+import { Activity, BookOpen, Boxes, ClipboardList, FileCode2, GitBranch, GripVertical, LayoutDashboard, LoaderCircle, Moon, Radio, Settings2, Sun } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { SafeMarkdown } from "./safe-markdown";
@@ -19,7 +19,7 @@ type Interview = components["schemas"]["SpecificationInterviewRead"];
 type Question = components["schemas"]["SpecificationQuestionRead"];
 type Artifacts = components["schemas"]["SpecificationArtifactRead"];
 type ProjectEvent = { cursor: number; event: AgUiEvent };
-type Section = "board" | "openspec" | "harness" | "evals" | "routing" | "events";
+type Section = "board" | "openspec" | "harness" | "evals" | "routing" | "events" | "github";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8010";
 const NAV: { id: Section; label: string; icon: typeof Activity }[] = [
   { id: "board", label: "Task board", icon: LayoutDashboard },
@@ -28,6 +28,7 @@ const NAV: { id: Section; label: string; icon: typeof Activity }[] = [
   { id: "evals", label: "Evals", icon: ClipboardList },
   { id: "routing", label: "Routing", icon: Settings2 },
   { id: "events", label: "Events", icon: Radio },
+  { id: "github", label: "GitHub", icon: GitBranch },
 ];
 const COLUMNS = ["BACKLOG", "SPECIFYING", "READY", "IN_PROGRESS", "VERIFYING", "HUMAN_REVIEW", "LEARNING", "DONE", "CLARIFYING", "HARNESS_PROBE"] as const;
 const LABELS: Record<string, string> = { BACKLOG: "Backlog", SPECIFYING: "Specifying", READY: "Ready", IN_PROGRESS: "In progress", VERIFYING: "Verifying", HUMAN_REVIEW: "Human review", LEARNING: "Learning", DONE: "Done", CLARIFYING: "Clarifying", HARNESS_PROBE: "Harness probe", REJECTED: "Rejected", CANCELLED: "Cancelled", RETRY_EXHAUSTED: "Retry exhausted" };
@@ -266,10 +267,54 @@ export function Workspace({ section: rawSection }: { section: string }) {
           {loading ? <div role="status" className="flex items-center gap-2 py-12 text-sm"><LoaderCircle className="animate-spin" size={18} />Loading tasks…</div> : tasks.length === 0 ? <Card><CardHeader><CardTitle>No tasks yet</CardTitle><CardDescription>Create a task to start a governed workflow.</CardDescription></CardHeader></Card> : <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragTask(null)}><div className="flex gap-3 overflow-x-auto pb-4" aria-label="Ten-column task board">{COLUMNS.map((stage) => <BoardColumn key={stage} stage={stage} tasks={tasks.filter((task) => task.stage === stage)} open={setActive} disabled={dragTask ? !(dragTask.allowed_transitions ?? []).includes(stage) : false} />)}</div></DndContext>}
           {!loading && tasks.some((task) => ["REJECTED", "CANCELLED", "RETRY_EXHAUSTED"].includes(task.stage)) && <section aria-label="Terminal tasks" className="mt-5"><h2 className="mb-2 text-sm font-semibold">Terminal tasks</h2><ul className="space-y-2">{tasks.filter((task) => ["REJECTED", "CANCELLED", "RETRY_EXHAUSTED"].includes(task.stage)).map((task) => <li key={task.id}><button className="flex w-full flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]" onClick={() => setActive(task)}><span className="font-medium">{task.title}</span><span className="flex flex-wrap gap-1.5"><Badge variant="outline">{LABELS[task.stage]}</Badge><Badge variant={task.run_status === "FAILED" ? "destructive" : "secondary"}>{task.run_status}</Badge>{task.specification_readiness_state && <Badge variant="outline">Spec {task.specification_readiness_state} · r{task.specification_revision}</Badge>}</span></button></li>)}</ul></section>}
           {active && <TaskInspector task={active} onClose={closeInspector} onMove={(target) => move(active, target)} onRefresh={() => refreshTask(active.id)} onError={setError} />}
-        </> : section === "events" ? <EventsView events={projectEvents} connected={live} /> : section === "openspec" ? <OpenSpecView projectId={projectId} /> : section === "harness" ? <HarnessStudioView projectId={projectId} tasks={tasks} /> : section === "evals" ? <EvaluationsView tasks={tasks} /> : <RoutingView projectId={projectId} />}
+        </> : section === "events" ? <EventsView events={projectEvents} connected={live} /> : section === "openspec" ? <OpenSpecView projectId={projectId} /> : section === "harness" ? <HarnessStudioView projectId={projectId} tasks={tasks} /> : section === "evals" ? <EvaluationsView tasks={tasks} /> : section === "github" ? <GitHubView /> : <RoutingView projectId={projectId} />}
       </section>
     </div>
   </main>;
+}
+
+type GitHubStatus = {
+  configured_apps: { id: string; app_id: number; connection_status: string; checked_at: string | null; last_error: string | null }[];
+  installations: { id: string; account_login: string; active: boolean; last_error: string | null }[];
+  repository_links: { id: string; full_name: string; opted_in: boolean; setup_status: string; last_error: string | null }[];
+  webhook_health: Record<string, number>;
+  recent_deliveries: { id: string; delivery_id: string; event_name: string; action: string | null; status: string; last_error: string | null }[];
+};
+
+function GitHubView() {
+  const [status, setStatus] = useState<GitHubStatus | null>(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(true);
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    const response = await fetch(`${API}/github/status`, { credentials: "include", cache: "no-store" });
+    if (!response.ok) throw new Error(response.status === 403 ? "GitHub status access denied." : "GitHub status is unavailable.");
+    setStatus(await response.json() as GitHubStatus);
+    setLoading(false);
+  }, []);
+  useEffect(() => { queueMicrotask(() => { refresh().catch((cause: unknown) => { setError(cause instanceof Error ? cause.message : "GitHub status is unavailable."); setLoading(false); }); }); }, [refresh]);
+  async function retry(deliveryId: string) {
+    setError(""); setNotice("");
+    const reason = window.prompt("Reason for retrying this webhook delivery");
+    if (!reason?.trim()) return;
+    const response = await fetch(`${API}/github/deliveries/${deliveryId}/retry`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json", "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" }, body: JSON.stringify({ reason: reason.trim() }) });
+    if (!response.ok) { setError(response.status === 403 ? "Administrator access is required to repair webhook deliveries." : "Delivery could not be queued for repair."); return; }
+    setNotice("Webhook delivery queued for repair.");
+    await refresh();
+  }
+  return <div className="space-y-5">
+    <p className="text-sm text-[var(--muted-foreground)]">GitHub App health and repository links are read from the authenticated connection status API. Secret values are never shown here.</p>
+    {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}{notice && <Alert><AlertDescription>{notice}</AlertDescription></Alert>}
+    {loading ? <div role="status" className="py-8 text-sm">Loading GitHub status…</div> : <>
+      <Card><CardHeader><CardTitle>Applications and installations</CardTitle><CardDescription>Connection checks reflect the latest verified App and permission state.</CardDescription></CardHeader><CardContent className="space-y-2">
+        {status?.configured_apps.length ? status.configured_apps.map((app) => <div key={app.id} className="flex flex-wrap justify-between gap-2 rounded-lg border border-[var(--border)] p-3"><span>App {app.app_id}</span><Badge variant={app.connection_status === "ready" ? "success" : "warning"}>{app.connection_status}</Badge>{app.last_error && <p className="w-full text-xs text-[var(--danger)]">{app.last_error}</p>}</div>) : <p className="text-sm text-[var(--muted-foreground)]">No App configuration is visible for this account.</p>}
+        {status?.installations.map((installation) => <div key={installation.id} className="flex justify-between gap-2 rounded-lg border border-[var(--border)] p-3"><span>{installation.account_login}</span><Badge variant={installation.active ? "success" : "warning"}>{installation.active ? "Active" : "Needs attention"}</Badge>{installation.last_error && <p className="w-full text-xs">{installation.last_error}</p>}</div>)}
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle>Opted-in repositories</CardTitle></CardHeader><CardContent className="space-y-2">{status?.repository_links.length ? status.repository_links.map((link) => <div key={link.id} className="flex flex-wrap justify-between gap-2 rounded-lg border border-[var(--border)] p-3"><span>{link.full_name}</span><Badge variant={link.opted_in && link.setup_status === "ready" ? "success" : "warning"}>{link.opted_in ? link.setup_status : "Opted out"}</Badge>{link.last_error && <p className="w-full text-xs">{link.last_error}</p>}</div>) : <p className="text-sm text-[var(--muted-foreground)]">No linked repositories are visible.</p>}</CardContent></Card>
+      <Card><CardHeader><CardTitle>Webhook delivery health</CardTitle><CardDescription>{Object.entries(status?.webhook_health ?? {}).map(([key, value]) => `${key}: ${value}`).join(" · ") || "No delivery health data is visible."}</CardDescription></CardHeader><CardContent className="space-y-2">{status?.recent_deliveries.length ? status.recent_deliveries.map((delivery) => <div key={delivery.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] p-3"><div><p className="font-medium">{delivery.event_name}{delivery.action ? ` · ${delivery.action}` : ""}</p><p className="font-mono text-xs text-[var(--muted-foreground)]">{delivery.delivery_id}</p>{delivery.last_error && <p className="mt-1 text-xs text-[var(--danger)]">{delivery.last_error}</p>}</div><div className="flex items-center gap-2"><Badge variant={delivery.status === "failed" ? "destructive" : delivery.status === "processed" ? "success" : "outline"}>{delivery.status}</Badge>{["failed", "ignored"].includes(delivery.status) && <Button size="sm" variant="outline" onClick={() => void retry(delivery.id)}>Repair</Button>}</div></div>) : <p className="text-sm text-[var(--muted-foreground)]">No recent deliveries are visible.</p>}</CardContent></Card>
+    </>}
+  </div>;
 }
 
 function TaskInspector({ task, onClose, onMove, onRefresh, onError }: { task: Task; onClose: () => void; onMove: (stage: string) => Promise<Task | null>; onRefresh: () => Promise<Task | null>; onError: (message: string) => void }) {

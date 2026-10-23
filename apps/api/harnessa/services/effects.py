@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 from uuid import UUID
@@ -15,10 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 ReconcileOutcome = Literal["applied", "not_applied", "unknown"]
 
 
+@dataclass(frozen=True)
+class EffectResult:
+    outcome: ReconcileOutcome
+    result: dict[str, Any]
+
+
 class EffectReconciler(Protocol):
     async def reconcile(
         self, *, kind: str, stable_key: str, payload: Mapping[str, object]
-    ) -> ReconcileOutcome: ...
+    ) -> ReconcileOutcome | EffectResult: ...
 
 
 async def reconcile_effect_intents(
@@ -32,21 +39,28 @@ async def reconcile_effect_intents(
     claimed: list[tuple[UUID, str, str, dict[str, Any]]] = []
     async with session_factory() as db:
         rows = (
-            await db.execute(
-                select(EffectIntent)
-                .where(
-                    or_(
-                        EffectIntent.status.in_(["pending", "unknown"])
-                        & or_(EffectIntent.next_attempt_at.is_(None), EffectIntent.next_attempt_at <= now),
-                        (EffectIntent.status == "reconciling")
-                        & (EffectIntent.updated_at <= now - timedelta(seconds=60)),
-                    ),
+            (
+                await db.execute(
+                    select(EffectIntent)
+                    .where(
+                        or_(
+                            EffectIntent.status.in_(["pending", "unknown"])
+                            & or_(
+                                EffectIntent.next_attempt_at.is_(None),
+                                EffectIntent.next_attempt_at <= now,
+                            ),
+                            (EffectIntent.status == "reconciling")
+                            & (EffectIntent.updated_at <= now - timedelta(seconds=60)),
+                        ),
+                    )
+                    .order_by(EffectIntent.created_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(limit)
                 )
-                .order_by(EffectIntent.created_at)
-                .with_for_update(skip_locked=True)
-                .limit(limit)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for row in rows:
             row.status = "reconciling"
             row.attempts += 1
@@ -55,8 +69,16 @@ async def reconcile_effect_intents(
 
     for intent_id, kind, stable_key, payload in claimed:
         error: str | None = None
+        result_payload: dict[str, Any] = {}
         try:
-            outcome = await adapter.reconcile(kind=kind, stable_key=stable_key, payload=payload)
+            outcome_value = await adapter.reconcile(
+                kind=kind, stable_key=stable_key, payload=payload
+            )
+            if isinstance(outcome_value, EffectResult):
+                outcome = outcome_value.outcome
+                result_payload = outcome_value.result
+            else:
+                outcome = outcome_value
         except Exception as exc:  # noqa: BLE001 - arbitrary adapter failures have unknown effects.
             outcome = "unknown"
             error = str(exc)[:2000]
@@ -64,14 +86,19 @@ async def reconcile_effect_intents(
             intent_row = await db.get(EffectIntent, intent_id)
             if intent_row is None or intent_row.status != "reconciling":
                 continue
-            intent_row.status = "completed" if outcome == "applied" else (
-                "pending" if outcome == "not_applied" else "unknown"
+            intent_row.status = (
+                "completed"
+                if outcome == "applied"
+                else ("pending" if outcome == "not_applied" else "unknown")
             )
             intent_row.last_error = error
             intent_row.reconciled_at = datetime.now(UTC)
+            if result_payload:
+                intent_row.result = {**intent_row.result, **result_payload}
             intent_row.next_attempt_at = (
-                None if outcome == "applied" else
-                datetime.now(UTC)
+                None
+                if outcome == "applied"
+                else datetime.now(UTC)
                 + timedelta(seconds=min(300, 2 ** min(intent_row.attempts, 8)))
             )
             await db.commit()

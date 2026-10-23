@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
+from harnessa.api.github_routes import router as github_router
 from harnessa.api.model_routes import router as model_router
 from harnessa.api.retrieval_routes import router as retrieval_router
 from harnessa.api.review_routes import router as review_router
@@ -35,6 +36,19 @@ from harnessa.contracts import (
     EvidenceTextValue,
     EvidenceTimestampValue,
     EvidenceUuidValue,
+    GitHubActorMappingCreate,
+    GitHubActorMappingRead,
+    GitHubAppConfigurationCreate,
+    GitHubAppConfigurationRead,
+    GitHubConnectionStatusRead,
+    GitHubDeliveryRepairRequest,
+    GitHubEffectQueuedRead,
+    GitHubInstallationCreate,
+    GitHubInstallationRead,
+    GitHubPublishRequest,
+    GitHubRepositoryLinkRead,
+    GitHubRepositoryOptIn,
+    GitHubWebhookReceipt,
     Identity,
     MCPGrantCreate,
     MCPGrantRead,
@@ -195,6 +209,19 @@ CONTRACT_MODELS = (
     SpecificationArchitectRead,
     SpecificationExplorerEntry,
     SpecificationExplorerRead,
+    GitHubAppConfigurationCreate,
+    GitHubAppConfigurationRead,
+    GitHubInstallationCreate,
+    GitHubInstallationRead,
+    GitHubRepositoryOptIn,
+    GitHubRepositoryLinkRead,
+    GitHubActorMappingCreate,
+    GitHubActorMappingRead,
+    GitHubConnectionStatusRead,
+    GitHubDeliveryRepairRequest,
+    GitHubPublishRequest,
+    GitHubEffectQueuedRead,
+    GitHubWebhookReceipt,
 )
 
 
@@ -237,7 +264,12 @@ async def security_headers(request: Request, call_next: RequestResponseEndpoint)
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         origin = request.headers.get("origin")
         path = request.url.path
-        if path != "/auth/bootstrap" and (not origin or origin not in origins):
+        is_github_webhook = path == "/webhooks/github"
+        if (
+            path != "/auth/bootstrap"
+            and not is_github_webhook
+            and (not origin or origin not in origins)
+        ):
             return JSONResponse(
                 ErrorResponse(
                     code="origin_denied",
@@ -247,7 +279,7 @@ async def security_headers(request: Request, call_next: RequestResponseEndpoint)
                 status_code=403,
                 headers={"X-Request-ID": request_id},
             )
-        if path not in {"/auth/bootstrap", "/auth/csrf"}:
+        if path not in {"/auth/bootstrap", "/auth/csrf"} and not is_github_webhook:
             cookie = request.cookies.get("harnessa_csrf", "")
             header = request.headers.get("x-csrf-token", "")
             if not cookie or not secrets.compare_digest(cookie, header):
@@ -326,6 +358,7 @@ app.include_router(model_router)
 app.include_router(specification_router)
 app.include_router(retrieval_router)
 app.include_router(review_router)
+app.include_router(github_router)
 
 
 @app.get("/health/live", tags=["health"])

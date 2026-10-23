@@ -20,6 +20,7 @@ from harnessa.db.review import ReviewBundle, VerificationExecution, Verification
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
 from harnessa.services.model_gateway import budget_policy_digest
+from harnessa.services.post_integration import process_post_integration_steps
 from sqlalchemy import select
 
 from tests.integration.test_specifications import (
@@ -177,6 +178,7 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
                     "proposed_final_review_head": source_revision,
                     "archive_diff": "",
                     "diff_sha256": hashlib.sha256(b"").hexdigest(),
+                    "review_candidate_ref": f"refs/harnessa/review-candidates/{run.id.hex}-f1",
                 },
             },
             status="prepared",
@@ -241,6 +243,7 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
                 "proposed_final_review_head": source_revision,
                 "archive_diff": "",
                 "diff_sha256": hashlib.sha256(b"").hexdigest(),
+                "review_candidate_ref": f"refs/harnessa/review-candidates/{run.id.hex}-f1",
             },
         }
         await db.flush()
@@ -357,6 +360,8 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
             db,
         )
         assert integration["status"] == "confirmed"
+        task = await db.get(Task, task_id)
+        assert task is not None and task.stage == "LEARNING"
         integration_replay = await review_routes.record_manual_integration(
             task_id,
             ManualIntegrationRequest(
@@ -382,15 +387,21 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
                 db,
             )
         assert conflicting_evidence.value.status_code == 409
-        for kind in ("archive", "learning", "cleanup"):
-            step = await review_routes.update_post_integration_step(
-                integration["id"],
-                kind,
-                PostIntegrationStepRequest(status="succeeded", result={"fixture": True}),
-                actor,
-                db,
+    processed = await process_post_integration_steps(workspace_manager=manager)
+    assert processed == 3
+    async with SessionLocal() as db:
+        step_rows = await db.scalars(
+            select(review_routes.PostIntegrationStep).where(
+                review_routes.PostIntegrationStep.integration_evidence_id == integration["id"]
             )
-            assert step["status"] == "succeeded"
+        )
+        assert {row.kind: row.status for row in step_rows} == {
+            "archive": "succeeded",
+            "learning": "skipped",
+            "cleanup": "succeeded",
+        }
+        task = await db.get(Task, task_id)
+        assert task is not None and task.stage == "DONE"
         with pytest.raises(HTTPException) as unknown_step:
             await review_routes.update_post_integration_step(
                 integration["id"],

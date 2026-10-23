@@ -14,11 +14,15 @@ from uuid import uuid4
 from harnessa.adapters.acp_execution import ACPExecutionAdapter
 from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.execution import ExecutionAdapter, UnconfiguredExecutionAdapter
+from harnessa.adapters.github_effects import GitHubEffectReconciler
 from harnessa.adapters.sandbox_policy import SandboxLimits
 from harnessa.config import settings
 from harnessa.db.session import SessionLocal
-from harnessa.services.effects import ReconcileOutcome, reconcile_effect_intents
+from harnessa.services.effects import EffectResult, ReconcileOutcome, reconcile_effect_intents
+from harnessa.services.github_processor import GitHubWebhookProcessor
+from harnessa.services.github_webhooks import process_github_webhook_outbox
 from harnessa.services.model_gateway import reconcile_stale_model_reservations
+from harnessa.services.post_integration import process_post_integration_steps
 from harnessa.services.scheduler import Scheduler
 from harnessa.services.streams import OutboxPublisher, StreamConsumer, prune_retained_events
 from harnessa.services.verification_workflow import VerificationDispatcher
@@ -85,6 +89,8 @@ async def run() -> None:
     last_prune = 0.0
     last_model_reconcile = 0.0
     last_acp_reconcile = 0.0
+    last_github_reconcile = 0.0
+    last_post_integration_reconcile = 0.0
     await consumer.ensure_group()
     if isinstance(adapter, ACPExecutionAdapter) and adapter.enabled:
         try:
@@ -121,6 +127,23 @@ async def run() -> None:
                             "Independent verifier failed; durable task remains recoverable"
                         )
                 await reconcile_effect_intents(_UnconfiguredEffectReconciler())
+                await process_github_webhook_outbox(GitHubWebhookProcessor(), owner_id=owner)
+                now = asyncio.get_running_loop().time()
+                if now - last_post_integration_reconcile >= 30:
+                    try:
+                        await process_post_integration_steps(limit=20)
+                    except Exception:
+                        logger.exception("Post-integration finalization failed")
+                    last_post_integration_reconcile = now
+                if now - last_github_reconcile >= 300:
+                    try:
+                        github_processor = GitHubWebhookProcessor()
+                        await github_processor.reconcile_installation_access(limit=25)
+                        await github_processor.reconcile_tracked_pull_requests(limit=25)
+                        await github_processor.reconcile_topic_issues(limit=25)
+                    except Exception:
+                        logger.exception("GitHub periodic reconciliation failed")
+                    last_github_reconcile = now
                 if adapter.available:
                     available = max(0, settings.max_concurrent_runs - len(active_runs))
                     for _ in range(available):
@@ -161,5 +184,9 @@ class _UnconfiguredEffectReconciler:
 
     async def reconcile(
         self, *, kind: str, stable_key: str, payload: Mapping[str, object]
-    ) -> ReconcileOutcome:
+    ) -> ReconcileOutcome | EffectResult:
+        if kind.startswith("github."):
+            return await GitHubEffectReconciler().reconcile(
+                kind=kind, stable_key=stable_key, payload=payload
+            )
         return "unknown"
