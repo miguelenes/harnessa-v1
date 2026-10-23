@@ -324,6 +324,8 @@ class PodmanCommandExecutor:
             self.executable,
             "run",
             "--rm",
+            "--name",
+            volume.replace("harnessa-verify-", "harnessa-verify-command-", 1),
             "--pull=never",
             "--network=none",
             "--read-only",
@@ -594,17 +596,56 @@ except Exception as exc:
                 "Bounded verifier workspace preparation or evidence capture timed out"
             ) from exc
         finally:
-            remove = await asyncio.create_subprocess_exec(
-                self.executable,
-                "volume",
-                "rm",
-                volume,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                env=_podman_environment(),
-            )
-            await _wait_process(remove, timeout=30)
-            fixture_temporary.cleanup()
+            try:
+                remove_container = await asyncio.create_subprocess_exec(
+                    self.executable,
+                    "rm",
+                    "--force",
+                    "--ignore",
+                    "--time",
+                    "0",
+                    volume.replace("harnessa-verify-", "harnessa-verify-command-", 1),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=_podman_environment(),
+                )
+                _container_out, _container_err = await _communicate_process(
+                    remove_container, timeout=30
+                )
+                if remove_container.returncode != 0:
+                    raise VerificationUnavailable("Could not stop and remove verifier container")
+
+                volume_exists = await asyncio.create_subprocess_exec(
+                    self.executable,
+                    "volume",
+                    "exists",
+                    volume,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    env=_podman_environment(),
+                )
+                await _wait_process(volume_exists, timeout=30)
+                if volume_exists.returncode not in {0, 1}:
+                    raise VerificationUnavailable(
+                        "Could not determine whether verifier volume remains"
+                    )
+                if volume_exists.returncode == 0:
+                    remove_volume = await asyncio.create_subprocess_exec(
+                        self.executable,
+                        "volume",
+                        "rm",
+                        volume,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=_podman_environment(),
+                    )
+                    _volume_out, _volume_err = await _communicate_process(
+                        remove_volume, timeout=30
+                    )
+                    if remove_volume.returncode != 0:
+                        raise VerificationUnavailable("Could not remove bounded verifier workspace")
+            finally:
+                fixture_temporary.cleanup()
 
         duration_ms = max(0, round((time.monotonic() - started) * 1000))
         outcome: Literal["passed", "failed", "unverified"] = (

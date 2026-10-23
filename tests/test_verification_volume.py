@@ -115,6 +115,8 @@ async def test_bounded_volume_execution_captures_fixtures_and_artifacts(
         _Process(),
         _Process(stdout=json.dumps(capture).encode()),
         _Process(),
+        _Process(),
+        _Process(),
     ]
     calls: list[tuple[object, ...]] = []
 
@@ -142,6 +144,7 @@ async def test_bounded_volume_execution_captures_fixtures_and_artifacts(
     assert not missing
     assert any("o=size=33554432,nodev,nosuid" in str(arg) for arg in calls[0])
     assert any("/verification-fixtures:ro" in str(arg) for arg in calls[2])
+    assert "--name" in calls[2]
     assert calls[-1][1:3] == ("volume", "rm")
     assert processes == []
 
@@ -152,7 +155,13 @@ async def test_bounded_volume_checkout_failure_is_unverified_and_removed(
 ) -> None:
     repository = tmp_path / "source"
     revision = _repository(repository)
-    processes = [_Process(), _Process(returncode=23), _Process()]
+    processes = [
+        _Process(),
+        _Process(returncode=23),
+        _Process(),
+        _Process(),
+        _Process(),
+    ]
     calls: list[tuple[object, ...]] = []
 
     async def fake_exec(*args, **_kwargs):
@@ -176,7 +185,7 @@ async def test_bounded_volume_creation_failure_still_cleans_up(
 ) -> None:
     repository = tmp_path / "source"
     revision = _repository(repository)
-    processes = [_Process(returncode=23), _Process()]
+    processes = [_Process(returncode=23), _Process(), _Process(returncode=1)]
     calls: list[tuple[object, ...]] = []
 
     async def fake_exec(*args, **_kwargs):
@@ -191,7 +200,7 @@ async def test_bounded_volume_creation_failure_still_cleans_up(
             source_revision=revision,
             protected_fixtures={},
         )
-    assert calls[-1][1:3] == ("volume", "rm")
+    assert calls[-1][1:3] == ("volume", "exists")
 
 
 @pytest.mark.anyio
@@ -214,7 +223,14 @@ async def test_bounded_volume_command_timeout_removes_workspace(
     repository = tmp_path / "source"
     revision = _repository(repository)
     command_process = _TimedOutProcess()
-    processes = [_Process(), _Process(), command_process, _Process()]
+    processes = [
+        _Process(),
+        _Process(),
+        command_process,
+        _Process(),
+        _Process(),
+        _Process(),
+    ]
     calls: list[tuple[object, ...]] = []
 
     async def fake_exec(*args, **_kwargs):
@@ -236,3 +252,35 @@ async def test_bounded_volume_command_timeout_removes_workspace(
     assert evidence.timed_out
     assert command_process.killed
     assert calls[-1][1:3] == ("volume", "rm")
+
+
+@pytest.mark.anyio
+async def test_bounded_volume_removal_failure_is_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "source"
+    revision = _repository(repository)
+    processes = [
+        _Process(),
+        _Process(),
+        _Process(),
+        _Process(),
+        _Process(),
+        _Process(returncode=23),
+    ]
+
+    async def fake_exec(*_args, **_kwargs):
+        return processes.pop(0)
+
+    async def read_bounded(_stream, _limit):
+        return b""
+
+    monkeypatch.setattr(verification.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(verification, "_read_bounded", read_bounded)
+    with pytest.raises(VerificationUnavailable, match="Could not remove bounded verifier workspace"):
+        await PodmanCommandExecutor().execute_revision(
+            _command(),
+            repository_path=repository,
+            source_revision=revision,
+            protected_fixtures={},
+        )
