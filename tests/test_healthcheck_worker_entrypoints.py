@@ -55,8 +55,9 @@ def test_worker_module_entrypoint_starts_the_shared_worker(
 ) -> None:
     started = False
 
-    async def fake_worker() -> None:
+    async def fake_worker(*, harness_evaluator: object | None = None) -> None:
         nonlocal started
+        assert harness_evaluator is None
         started = True
 
     def run(coroutine) -> None:
