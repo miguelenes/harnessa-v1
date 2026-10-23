@@ -4,6 +4,7 @@ import asyncio
 import subprocess
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Self
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ import pytest
 from harness2.core.schedule import Namespace
 from harness2.substrate.opencode import OpencodeSubstrate
 from harnessa.adapters.async_bridge import call_on_event_loop
+from harnessa.adapters.execution import TaskInput
 from harnessa.services.harness_adaptation import FrozenExperiment
 from harnessa.services.harness_experiments import (
     HarnessACPTaskAdapter,
@@ -284,6 +286,183 @@ def test_probe_record_labels_are_bounded_and_distinct() -> None:
     assert len(baseline_label) <= 100
     assert len(candidate_label) <= 100
     assert baseline_label != candidate_label
+
+
+@pytest.mark.anyio
+async def test_task_adapter_records_and_reads_a_completed_rollout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harnessa.services import harness_experiments as module
+
+    frozen = FrozenExperiment(
+        experiment_id=uuid4(),
+        task_id=uuid4(),
+        project_id=uuid4(),
+        organization_id=uuid4(),
+        base_sha="a" * 40,
+        specification_hash="b" * 64,
+        specification_revision=1,
+        policy_revision=1,
+        mode="parallel",
+        k=1,
+        route_alias="probe-route",
+        image_revision="sha256:agent",
+        tool_revision="upstream-revision",
+        root=tmp_path,
+        claim_attempt=2,
+    )
+    base = tmp_path / "base"
+    base.mkdir()
+    patch_root = tmp_path / "artifacts"
+    patch_root.mkdir()
+    (patch_root / "patch.bin").write_bytes(b"diff --git a/x b/x\n")
+    monkeypatch.setattr(module.settings, "artifact_root", str(patch_root))
+    monkeypatch.setattr(module.harness_tree, "read_tree", lambda *_: {"systemprompt.md": "safe"})
+    monkeypatch.setattr(module, "validate_product_tree", lambda _tree: None)
+    adapter = HarnessACPTaskAdapter(
+        frozen=frozen,
+        execution=object(),  # type: ignore[arg-type]
+        task=TaskInput(frozen.task_id, frozen.project_id, "Title", "Description"),
+        organization_id=frozen.organization_id,
+        repository_scope="repo/example",
+        base_harness=base,
+        max_concurrency=1,
+        event_loop=asyncio.get_running_loop(),
+    )
+
+    async def execute(_run_id: Any, _harness: Path) -> dict[str, Any]:
+        return {
+            "status": "completed",
+            "patch_artifact": {"storage_key": "patch.bin"},
+            "changed_files": ["x"],
+            "patch_sha256": "c" * 64,
+        }
+
+    monkeypatch.setattr(adapter, "_execute", execute)
+    run_dir = await asyncio.to_thread(
+        adapter.execute, str(frozen.task_id), None, "baseline-run"
+    )
+
+    assert adapter.tasks() == [str(frozen.task_id)]
+    assert adapter.tasks("unassigned") == []
+    assert adapter.domain_of(str(frozen.task_id)) == "repo/example"
+    assert adapter.task_prompt(str(frozen.task_id)) == "Title\n\nDescription"
+    assert adapter.task_files(str(frozen.task_id)) is None
+    assert adapter.base_harness() == base
+    assert adapter.delivered(run_dir) is True
+    assert adapter.trajectory(run_dir, obs_trunc=20)
+    assert adapter.deliverable_files(run_dir)["deliverable.patch"].startswith("diff --git")
+    assert adapter.deliverable_text(run_dir).startswith("diff --git")
+    assert adapter.records[0]["phase"] == "baseline"
+    assert adapter.records[0]["status"] == "succeeded"
+
+
+@pytest.mark.anyio
+async def test_task_adapter_rejects_unbound_tasks_and_cancels_active_runs() -> None:
+    adapter = HarnessACPTaskAdapter.__new__(HarnessACPTaskAdapter)
+    adapter.frozen = type("Frozen", (), {"task_id": uuid4()})()
+    adapter._active_runs = {uuid4(), uuid4()}
+
+    class Execution:
+        def __init__(self) -> None:
+            self.cancelled: list[Any] = []
+
+        async def cancel(self, run_id: Any) -> None:
+            self.cancelled.append(run_id)
+
+    adapter.execution = Execution()
+    adapter._active_lock = threading.Lock()
+
+    with pytest.raises(ValueError, match="unbound"):
+        adapter.domain_of(str(uuid4()))
+    await adapter.cancel_active()
+    assert set(adapter.execution.cancelled) == adapter._active_runs
+
+
+@pytest.mark.anyio
+async def test_worker_run_persists_success_and_keeps_cancelled_attempts_unpublished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harnessa.services import harness_experiments as module
+
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "systemprompt.md").write_text("base", encoding="utf-8")
+    frozen = FrozenExperiment(
+        experiment_id=uuid4(), task_id=uuid4(), project_id=uuid4(), organization_id=uuid4(),
+        base_sha="a" * 40, specification_hash="b" * 64, specification_revision=1,
+        policy_revision=1, mode="parallel", k=1, route_alias="probe", image_revision="image",
+        tool_revision="tools", root=tmp_path, claim_attempt=1,
+    )
+    task_input = TaskInput(frozen.task_id, frozen.project_id, "title", "description")
+
+    class Adapter:
+        def __init__(self, **_: Any) -> None:
+            self.substrate = OpencodeSubstrate()
+            self.records: list[dict[str, Any]] = []
+
+        def base_harness(self) -> Path:
+            return base
+
+        async def cancel_active(self) -> None:
+            return None
+
+    class Proposer:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            self.cancelled = threading.Event()
+
+    monkeypatch.setattr(module, "HarnessACPTaskAdapter", Adapter)
+    monkeypatch.setattr(module, "GatewayHarness2Proposer", Proposer)
+    monkeypatch.setattr(module, "_assert_holdout_free_tree", lambda *_: None)
+    monkeypatch.setattr(module.harness_tree, "read_tree", lambda *_: {"systemprompt.md": "base"})
+
+    async def inputs(_self: Any, _experiment_id: Any, _attempt: int) -> tuple[Any, ...]:
+        return frozen, task_input, frozen.organization_id, "repo/demo", base, [], 1
+
+    monkeypatch.setattr(HarnessExperimentWorker, "_inputs", inputs)
+    monkeypatch.setattr(module, "run_upstream_task", lambda *_args, **_kwargs: {"comparison_successful": True})
+    composed: list[dict[str, Any]] = []
+
+    async def compose(_self: Any, _frozen: Any, _adapter: Any, result: dict[str, Any]) -> None:
+        result["composed_successful"] = True
+        composed.append(result)
+
+    monkeypatch.setattr(HarnessExperimentWorker, "_execute_composed", compose)
+    persisted: list[dict[str, Any]] = []
+
+    async def persist(_self: Any, _frozen: Any, _adapter: Any, result: dict[str, Any]) -> None:
+        persisted.append(result)
+
+    monkeypatch.setattr(HarnessExperimentWorker, "_persist", persist)
+    finished: list[tuple[str, str | None]] = []
+
+    async def finish(_self: Any, _experiment_id: Any, _attempt: int, status: str, error: str | None) -> None:
+        finished.append((status, error))
+
+    monkeypatch.setattr(HarnessExperimentWorker, "_finish", finish)
+    heartbeat_release = asyncio.Event()
+
+    async def heartbeat(_self: Any, _experiment_id: Any, _attempt: int) -> None:
+        await heartbeat_release.wait()
+
+    monkeypatch.setattr(HarnessExperimentWorker, "_heartbeat_loop", heartbeat)
+    source = tmp_path / "repository"
+    source.mkdir()
+    execution = SimpleNamespace(repository_sources={str(frozen.project_id): source})
+    worker = HarnessExperimentWorker(execution)  # type: ignore[arg-type]
+    monkeypatch.setattr(worker, "_cancelled", lambda *_: asyncio.sleep(0, result=False))
+
+    await worker._run(frozen.experiment_id, 1)
+
+    assert composed and persisted
+    assert finished == [("succeeded", None)]
+
+    persisted.clear()
+    finished.clear()
+    monkeypatch.setattr(worker, "_cancelled", lambda *_: asyncio.sleep(0, result=True))
+    await worker._run(frozen.experiment_id, 1)
+    assert persisted == []
+    assert finished == [("cancelled", "Cancellation requested during probe execution")]
 
 
 def test_experiment_preflight_rejects_holdout_paths_in_frozen_repository(tmp_path: Path) -> None:
