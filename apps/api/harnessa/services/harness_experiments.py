@@ -695,6 +695,23 @@ class HarnessExperimentWorker:
             row = await db.scalar(select(HarnessExperiment).where(HarnessExperiment.id == experiment_id).with_for_update())
             if row is None or row.status != "running" or row.attempts != attempt:
                 return
+            if status == "succeeded" and row.cancel_requested_at is not None:
+                status = "cancelled"
+                error = "Cancellation was accepted before experiment finalization"
+                result = dict(row.result or {})
+                result["status"] = "cancelled"
+                result["composed_successful"] = False
+                result["cancellation_reason"] = error
+                result_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+                stored = await asyncio.to_thread(
+                    LocalArtifactStore(Path(settings.artifact_root)).put_bytes,
+                    result_bytes,
+                    media_type="application/vnd.harnessa.harness-experiment+json",
+                )
+                row.result = result
+                row.result_digest = stored.digest
+                row.result_storage_key = stored.storage_key
+                row.result_size_bytes = stored.size_bytes
             row.status, row.phase, row.last_error = status, "complete" if status == "succeeded" else status, error
             row.completed_at = datetime.now(UTC)
             proposer_run_id = uuid5(_RUN_NAMESPACE, f"{experiment_id}:{attempt}:proposer")

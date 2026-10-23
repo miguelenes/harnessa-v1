@@ -213,6 +213,69 @@ async def test_stale_attempt_cannot_persist_canonical_probe_evidence(tmp_path: P
     assert session.committed is False
 
 
+@pytest.mark.anyio
+async def test_finish_honors_cancellation_committed_after_persistence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harnessa.services import harness_experiments as module
+
+    experiment_id = uuid4()
+    row = type(
+        "CancelledExperiment",
+        (),
+        {
+            "id": experiment_id,
+            "task_id": uuid4(),
+            "status": "running",
+            "attempts": 4,
+            "cancel_requested_at": None,
+            "phase": "baseline_candidate_composed",
+            "last_error": None,
+            "completed_at": None,
+            "result": {"status": "succeeded", "composed_successful": True},
+            "result_digest": None,
+            "result_storage_key": None,
+            "result_size_bytes": None,
+        },
+    )()
+    row.cancel_requested_at = object()  # cancellation committed while persistence held the row lock
+
+    class Session:
+        committed = False
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def scalar(self, _statement: object) -> object:
+            return row
+
+        async def get(self, *_: object) -> None:
+            return None
+
+        async def scalars(self, _statement: object) -> list[object]:
+            return []
+
+        async def commit(self) -> None:
+            self.committed = True
+
+    session = Session()
+    monkeypatch.setattr(module.settings, "artifact_root", str(tmp_path))
+    worker = HarnessExperimentWorker(None, sessions=lambda: session)  # type: ignore[arg-type]
+
+    await worker._finish(experiment_id, 4, "succeeded", None)
+
+    assert row.status == "cancelled"
+    assert row.phase == "cancelled"
+    assert row.last_error == "Cancellation was accepted before experiment finalization"
+    assert row.result["status"] == "cancelled"
+    assert row.result["composed_successful"] is False
+    assert row.result_digest
+    assert session.committed is True
+
+
 def test_probe_record_labels_are_bounded_and_distinct() -> None:
     base = "harnessa-oc-agg1-experiment-tag/" + str(uuid4()) + "/"
     baseline_label = _probe_label(base + "base1")
