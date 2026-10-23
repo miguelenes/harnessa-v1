@@ -72,8 +72,19 @@ async def _expired_cursor_boundary(
     return latest if latest is not None and after < latest else None
 
 
-def _allowed_transitions(current: TaskStage, role: Role) -> frozenset[TaskStage]:
-    candidates = allowed_transition_targets(current)
+def _allowed_transitions(
+    current: TaskStage, role: Role, run_status: str
+) -> frozenset[TaskStage]:
+    # Match transition_task guards so advertised actions are directly executable.
+    candidates = allowed_transition_targets(current) - {
+        TaskStage.IN_PROGRESS,
+        TaskStage.RETRY_EXHAUSTED,
+        TaskStage.CANCELLED,
+    }
+    if current == TaskStage.IN_PROGRESS:
+        candidates -= {TaskStage.READY}  # checkpoint recovery is a command path
+    if run_status != "SUCCEEDED":
+        candidates -= {TaskStage.VERIFYING, TaskStage.LEARNING}
     if role == Role.ADMINISTRATOR:
         return candidates
     if role == Role.REVIEWER:
@@ -108,7 +119,8 @@ def _task_read(
     return TaskRead(
         **base,
         allowed_transitions=sorted(
-            _allowed_transitions(TaskStage(task.stage), role), key=lambda stage: stage.value
+            _allowed_transitions(TaskStage(task.stage), role, task.run_status),
+            key=lambda stage: stage.value,
         ),
         specification_readiness_state=interview.readiness_state if interview else None,
         specification_revision=interview.revision if interview else None,
@@ -191,7 +203,7 @@ async def task_capabilities(
         raise HTTPException(404, "Task not found")
     membership = await require_membership(db, actor, task.project_id)
     role = Role(membership.role)
-    transitions = _allowed_transitions(TaskStage(task.stage), role)
+    transitions = _allowed_transitions(TaskStage(task.stage), role, task.run_status)
     run_commands: list[TaskCommand] = []
     if role in {"administrator", "operator"}:
         if task.run_status in {"QUEUED", "RUNNING"}:
