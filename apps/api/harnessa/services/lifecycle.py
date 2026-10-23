@@ -25,7 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _digest(value: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _check_role(role: str, current: TaskStage, target: TaskStage, *, command: str) -> None:
@@ -60,7 +62,9 @@ async def _record_event(
     payload: dict[str, Any],
     run_id: UUID | None = None,
 ) -> DomainEvent:
-    project = await db.scalar(select(Project).where(Project.id == task.project_id).with_for_update())
+    project = await db.scalar(
+        select(Project).where(Project.id == task.project_id).with_for_update()
+    )
     if project is None:
         raise HTTPException(404, "Project not found")
     project.event_sequence += 1
@@ -78,8 +82,7 @@ async def _record_event(
         project_sequence=project.event_sequence,
         actor_id=actor_id,
         payload=payload,
-        retention_until=datetime.now(UTC)
-        + timedelta(days=settings.event_retention_days),
+        retention_until=datetime.now(UTC) + timedelta(days=settings.event_retention_days),
     )
     db.add(event)
     db.add(OutboxMessage(event_id=event.id, attempts=0))
@@ -150,16 +153,21 @@ async def record_system_transition(
             version_after=task.version,
         )
     )
-    event_payload = {"from_stage": current.value, "to_stage": target.value,
-                     "reason": reason, "version": task.version,
-                     "from_run_status": old_run_status,
-                     "run_status": task.run_status}
+    event_payload = {
+        "from_stage": current.value,
+        "to_stage": target.value,
+        "reason": reason,
+        "version": task.version,
+        "from_run_status": old_run_status,
+        "run_status": task.run_status,
+    }
     if payload:
         event_payload.update(payload)
     await _record_event(
         db,
         task=task,
-        event_type=event_type or ("task.ready" if target == TaskStage.READY else "task.transitioned"),
+        event_type=event_type
+        or ("task.ready" if target == TaskStage.READY else "task.transitioned"),
         actor_id=None,
         run_id=run_id,
         payload=event_payload,
@@ -207,8 +215,13 @@ async def create_task(
     membership = await require_membership(db, actor, project_id)
     if membership.role not in {"administrator", "operator"}:
         raise HTTPException(403, "Only administrators and operators can create tasks")
-    request = {"command": "create", "project_id": str(project_id), "title": title,
-               "description": description, "priority": priority}
+    request = {
+        "command": "create",
+        "project_id": str(project_id),
+        "title": title,
+        "description": description,
+        "priority": priority,
+    }
     digest = _digest(request)
     try:
         await _lock_command_key(db, actor.id, command_key)
@@ -250,8 +263,11 @@ async def create_task(
             )
         )
         await _record_event(
-            db, task=task, event_type="task.created", actor_id=actor.id,
-            payload={"stage": task.stage, "run_status": task.run_status, "version": 1}
+            db,
+            task=task,
+            event_type="task.created",
+            actor_id=actor.id,
+            payload={"stage": task.stage, "run_status": task.run_status, "version": 1},
         )
         await db.commit()
         return task, False
@@ -275,10 +291,15 @@ async def transition_task(
 ) -> tuple[Task, bool]:
     if not command_key or len(command_key) > 200:
         raise HTTPException(400, "A valid Idempotency-Key is required")
-    request = {"command": "transition", "task_id": str(task_id), "target": target.value,
-               "expected_version": expected_version, "reason": reason,
-               "return_stage": return_stage.value if return_stage else None,
-               "run_status": run_status.value if run_status else None}
+    request = {
+        "command": "transition",
+        "task_id": str(task_id),
+        "target": target.value,
+        "expected_version": expected_version,
+        "reason": reason,
+        "return_stage": return_stage.value if return_stage else None,
+        "run_status": run_status.value if run_status else None,
+    }
     digest = _digest(request)
     try:
         await _lock_command_key(db, actor.id, command_key)
@@ -294,9 +315,7 @@ async def transition_task(
         membership = await require_membership(db, actor, task.project_id)
         current = TaskStage(task.stage)
         _check_role(membership.role, current, target, command="transition")
-        if target in {
-            TaskStage.IN_PROGRESS, TaskStage.RETRY_EXHAUSTED, TaskStage.CANCELLED
-        }:
+        if target in {TaskStage.IN_PROGRESS, TaskStage.RETRY_EXHAUSTED, TaskStage.CANCELLED}:
             raise TransitionGuardFailed(
                 f"{target.value} is reserved for scheduler, retry-policy, or command handling"
             )
@@ -352,14 +371,19 @@ async def transition_task(
             )
         )
         await _record_event(
-            db, task=task,
+            db,
+            task=task,
             event_type="task.ready" if target == TaskStage.READY else "task.transitioned",
             actor_id=actor.id,
-            payload={"from_stage": current.value, "to_stage": target.value,
-                     "reason": reason, "version": task.version,
-                     "return_stage": task.return_stage,
-                     "from_run_status": from_run_status,
-                     "run_status": task.run_status}
+            payload={
+                "from_stage": current.value,
+                "to_stage": target.value,
+                "reason": reason,
+                "version": task.version,
+                "return_stage": task.return_stage,
+                "from_run_status": from_run_status,
+                "run_status": task.run_status,
+            },
         )
         await db.commit()
         return task, False
@@ -370,7 +394,9 @@ async def transition_task(
         ) from exc
     except (InvalidTaskTransition, TransitionGuardFailed) as exc:
         await db.rollback()
-        raise HTTPException(409, detail={"code": "transition_rejected", "reason": str(exc)}) from exc
+        raise HTTPException(
+            409, detail={"code": "transition_rejected", "reason": str(exc)}
+        ) from exc
     except Exception:
         await db.rollback()
         raise
@@ -388,8 +414,12 @@ async def command_task(
 ) -> tuple[Task, bool]:
     if not command_key or len(command_key) > 200:
         raise HTTPException(400, "A valid Idempotency-Key is required")
-    request = {"command": command.value, "task_id": str(task_id),
-               "expected_version": expected_version, "reason": reason}
+    request = {
+        "command": command.value,
+        "task_id": str(task_id),
+        "expected_version": expected_version,
+        "reason": reason,
+    }
     digest = _digest(request)
     try:
         await _lock_command_key(db, actor.id, command_key)
@@ -403,15 +433,19 @@ async def command_task(
         if task is None:
             raise HTTPException(404, "Task not found")
         membership = await require_membership(db, actor, task.project_id)
-        _check_role(membership.role, TaskStage(task.stage), TaskStage(task.stage), command=command.value)
+        _check_role(
+            membership.role, TaskStage(task.stage), TaskStage(task.stage), command=command.value
+        )
         if task.version != expected_version:
             raise TaskVersionConflict(expected_version, task.version)
         before_status = task.run_status
         before_stage = task.stage
         now = datetime.now(UTC)
         active_run = await db.scalar(
-            select(Run).where(Run.task_id == task.id, Run.status == RunStatus.RUNNING.value)
-            .order_by(Run.attempt.desc()).with_for_update()
+            select(Run)
+            .where(Run.task_id == task.id, Run.status == RunStatus.RUNNING.value)
+            .order_by(Run.attempt.desc())
+            .with_for_update()
         )
         if command == TaskCommand.PAUSE:
             if task.run_status not in {RunStatus.QUEUED.value, RunStatus.RUNNING.value}:
@@ -429,7 +463,9 @@ async def command_task(
             if task.run_status in {RunStatus.SUCCEEDED.value, RunStatus.CANCELLED.value}:
                 raise HTTPException(409, "Task is already terminal")
             if task.stage in {
-                TaskStage.DONE.value, TaskStage.REJECTED.value, TaskStage.CANCELLED.value
+                TaskStage.DONE.value,
+                TaskStage.REJECTED.value,
+                TaskStage.CANCELLED.value,
             }:
                 raise HTTPException(409, "Task lifecycle is already terminal")
             task.run_status = RunStatus.CANCELLED.value
@@ -467,23 +503,38 @@ async def command_task(
         task.version += 1
         db.add(
             TaskTransition(
-                task_id=task.id, project_id=task.project_id, actor_id=actor.id,
-                from_stage=before_stage, to_stage=task.stage,
-                from_run_status=before_status, to_run_status=task.run_status,
-                reason=reason, command=command.value, command_key=command_key,
-                request_hash=digest, version_before=version_before, version_after=task.version
+                task_id=task.id,
+                project_id=task.project_id,
+                actor_id=actor.id,
+                from_stage=before_stage,
+                to_stage=task.stage,
+                from_run_status=before_status,
+                to_run_status=task.run_status,
+                reason=reason,
+                command=command.value,
+                command_key=command_key,
+                request_hash=digest,
+                version_before=version_before,
+                version_after=task.version,
             )
         )
         await _record_event(
-            db, task=task,
-            event_type="task.ready" if task.stage == TaskStage.READY.value
+            db,
+            task=task,
+            event_type="task.ready"
+            if task.stage == TaskStage.READY.value
             and command in {TaskCommand.RESUME, TaskCommand.RETRY}
             else f"task.{command.value}",
             actor_id=actor.id,
             run_id=active_run.id if active_run else None,
-            payload={"command": command.value, "reason": reason,
-                     "run_status": task.run_status, "version": task.version,
-                     "cancel_requested": active_run is not None and command in {TaskCommand.PAUSE, TaskCommand.CANCEL}}
+            payload={
+                "command": command.value,
+                "reason": reason,
+                "run_status": task.run_status,
+                "version": task.version,
+                "cancel_requested": active_run is not None
+                and command in {TaskCommand.PAUSE, TaskCommand.CANCEL},
+            },
         )
         await db.commit()
         return task, False
@@ -494,7 +545,9 @@ async def command_task(
         ) from exc
     except (InvalidTaskTransition, TransitionGuardFailed) as exc:
         await db.rollback()
-        raise HTTPException(409, detail={"code": "transition_rejected", "reason": str(exc)}) from exc
+        raise HTTPException(
+            409, detail={"code": "transition_rejected", "reason": str(exc)}
+        ) from exc
     except Exception:
         await db.rollback()
         raise

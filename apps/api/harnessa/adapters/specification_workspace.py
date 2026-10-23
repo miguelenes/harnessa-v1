@@ -10,6 +10,7 @@ import re
 import shutil
 import signal
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -27,8 +28,24 @@ _SEARCH_FILE_LIMIT = 2500
 _SEARCH_TOTAL_BYTES_LIMIT = 32 * 1024 * 1024
 _SEARCH_FILE_BYTES_LIMIT = 512 * 1024
 _SEARCH_EXTENSIONS = frozenset(
-    {".astro", ".cs", ".go", ".java", ".js", ".jsx", ".kt", ".md", ".py", ".rs",
-     ".svelte", ".sql", ".ts", ".tsx", ".yaml", ".yml"}
+    {
+        ".astro",
+        ".cs",
+        ".go",
+        ".java",
+        ".js",
+        ".jsx",
+        ".kt",
+        ".md",
+        ".py",
+        ".rs",
+        ".svelte",
+        ".sql",
+        ".ts",
+        ".tsx",
+        ".yaml",
+        ".yml",
+    }
 )
 _SEARCH_EXCLUDED_PARTS = frozenset(
     {".git", ".next", ".svelte-kit", "build", "dist", "node_modules", "vendor"}
@@ -84,6 +101,30 @@ class SpecificationWorkspaceManager:
         source = await self.source_path(repository)
         return await asyncio.to_thread(self._contains_revision, source, revision)
 
+    async def read_file_at_revision(
+        self,
+        repository: Repository,
+        revision: str,
+        relative_path: str,
+        *,
+        limit_bytes: int = 262_144,
+    ) -> bytes:
+        """Read one bounded tracked file from a specific local repository revision."""
+        path = Path(relative_path)
+        if (
+            not re.fullmatch(r"[0-9a-f]{40,64}", revision)
+            or not relative_path
+            or path.is_absolute()
+            or ".." in path.parts
+            or ".git" in path.parts
+            or "\x00" in relative_path
+        ):
+            raise SpecificationWorkspaceError("Verification manifest source is invalid")
+        source = await self.source_path(repository)
+        return await asyncio.to_thread(
+            self._read_file_at_revision, source, revision, path.as_posix(), limit_bytes
+        )
+
     async def open(
         self,
         interview_id: UUID,
@@ -95,8 +136,13 @@ class SpecificationWorkspaceManager:
         allow_one_pending_commit: bool = False,
     ) -> SpecificationWorkspace:
         return await asyncio.to_thread(
-            self._open, interview_id, repository, change_id, base_sha, head_sha,
-            allow_one_pending_commit
+            self._open,
+            interview_id,
+            repository,
+            change_id,
+            base_sha,
+            head_sha,
+            allow_one_pending_commit,
         )
 
     async def create(
@@ -106,9 +152,7 @@ class SpecificationWorkspaceManager:
         change_id: str,
         files: dict[str, str],
     ) -> tuple[SpecificationWorkspace, str, str]:
-        return await asyncio.to_thread(
-            self._create, interview_id, repository, change_id, files
-        )
+        return await asyncio.to_thread(self._create, interview_id, repository, change_id, files)
 
     async def commit_bundle(
         self,
@@ -140,7 +184,9 @@ class SpecificationWorkspaceManager:
         try:
             payload = json.loads(result)
         except json.JSONDecodeError as exc:
-            raise SpecificationWorkspaceError("OpenSpec returned invalid JSON validation output") from exc
+            raise SpecificationWorkspaceError(
+                "OpenSpec returned invalid JSON validation output"
+            ) from exc
         if not isinstance(payload, dict):
             raise SpecificationWorkspaceError("OpenSpec validation output was not an object")
         items = payload.get("items")
@@ -168,9 +214,41 @@ class SpecificationWorkspaceManager:
             f"openspec/changes/{workspace.change_id}",
         )
 
-    async def read_bundle(
-        self, workspace: SpecificationWorkspace, head_sha: str
-    ) -> dict[str, str]:
+    async def archive_preview(self, workspace: SpecificationWorkspace) -> dict[str, str]:
+        """Preview OpenSpec sync and archive changes in a disposable copy."""
+        with tempfile.TemporaryDirectory(prefix="harnessa-openspec-archive-preview-") as temporary:
+            preview_path = Path(temporary) / "workspace"
+            await asyncio.to_thread(shutil.copytree, workspace.workspace_path, preview_path)
+            output = await self._run_cli(
+                preview_path,
+                ["archive", workspace.change_id, "--yes", "--json"],
+            )
+            await asyncio.to_thread(
+                self._git,
+                preview_path,
+                "add",
+                "--intent-to-add",
+                "--",
+                "openspec/changes/archive",
+            )
+            diff = await asyncio.to_thread(
+                self._git,
+                preview_path,
+                "diff",
+                "--no-ext-diff",
+                "--unified=3",
+                "HEAD",
+                "--",
+                "openspec/specs",
+                "openspec/changes",
+            )
+            if len(diff.encode("utf-8")) > 1_000_000:
+                raise SpecificationWorkspaceError(
+                    "OpenSpec archive preview exceeded its size limit"
+                )
+            return {"command_output": output, "diff": diff}
+
+    async def read_bundle(self, workspace: SpecificationWorkspace, head_sha: str) -> dict[str, str]:
         return await asyncio.to_thread(self._read_bundle, workspace, head_sha)
 
     async def search(
@@ -256,7 +334,15 @@ class SpecificationWorkspaceManager:
 
     def _contains_revision(self, source: Path, revision: str) -> bool:
         result = subprocess.run(
-            ["git", "-C", str(source), "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}"],
+            [
+                "git",
+                "-C",
+                str(source),
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                f"{revision}^{{commit}}",
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -264,6 +350,28 @@ class SpecificationWorkspaceManager:
             timeout=_GIT_TIMEOUT_SECONDS,
         )
         return result.returncode == 0 and result.stdout.strip() == revision
+
+    def _read_file_at_revision(
+        self, source: Path, revision: str, relative_path: str, limit_bytes: int
+    ) -> bytes:
+        if not self._contains_revision(source, revision):
+            raise SpecificationWorkspaceError(
+                "Verification manifest revision is not present in the connected repository"
+            )
+        result = subprocess.run(
+            ["git", "-C", str(source), "show", f"{revision}:{relative_path}"],
+            check=False,
+            capture_output=True,
+            env=self._git_env(),
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+        if result.returncode:
+            raise SpecificationWorkspaceError(
+                "Verification manifest file is unavailable at the approved revision"
+            )
+        if len(result.stdout) > limit_bytes:
+            raise SpecificationWorkspaceError("Verification manifest file exceeds its size limit")
+        return result.stdout
 
     def _create(
         self,
@@ -281,8 +389,13 @@ class SpecificationWorkspaceManager:
         workspace_path = self.root / interview_id.hex
         if workspace_path.exists() or workspace_path.is_symlink():
             recovered = self._recover_created_workspace(
-                workspace_path, interview_id, source, repository.default_branch,
-                base_sha, change_id, files
+                workspace_path,
+                interview_id,
+                source,
+                repository.default_branch,
+                base_sha,
+                change_id,
+                files,
             )
             if recovered is not None:
                 head = self._git(recovered.workspace_path, "rev-parse", "HEAD").strip()
@@ -326,7 +439,9 @@ class SpecificationWorkspaceManager:
             ):
                 self._git(workspace_path, "config", key, value)
             if not (workspace_path / "openspec" / "config.yaml").is_file():
-                asyncio.run(self._run_cli(workspace_path, ["init", "--tools", "none", "--no-animation"]))
+                asyncio.run(
+                    self._run_cli(workspace_path, ["init", "--tools", "none", "--no-animation"])
+                )
             if (workspace_path / "openspec" / "changes" / change_id).exists():
                 raise SpecificationWorkspaceError("OpenSpec change ID already exists in the source")
             asyncio.run(self._run_cli(workspace_path, ["new", "change", change_id]))
@@ -334,7 +449,14 @@ class SpecificationWorkspaceManager:
             paths = ["openspec/config.yaml", *self._bundle_paths(change_id)]
             paths = [path for path in paths if (workspace_path / path).is_file()]
             self._git(workspace_path, "add", "--", *paths)
-            self._git(workspace_path, "commit", "--quiet", "--no-gpg-sign", "-m", "Harnessa specification revision 1")
+            self._git(
+                workspace_path,
+                "commit",
+                "--quiet",
+                "--no-gpg-sign",
+                "-m",
+                "Harnessa specification revision 1",
+            )
             head = self._git(workspace_path, "rev-parse", "HEAD").strip()
             return workspace, head, digest
         except Exception:
@@ -352,13 +474,19 @@ class SpecificationWorkspaceManager:
         files: dict[str, str],
     ) -> SpecificationWorkspace | None:
         if workspace_path.is_symlink() or not workspace_path.is_dir():
-            raise SpecificationWorkspaceError("An OpenSpec workspace path is not a private directory")
+            raise SpecificationWorkspaceError(
+                "An OpenSpec workspace path is not a private directory"
+            )
         expected_branch = f"harnessa/spec-{interview_id.hex}"
         top = Path(self._git(workspace_path, "rev-parse", "--show-toplevel").strip()).resolve()
         if top != workspace_path.resolve():
-            raise SpecificationWorkspaceError("Existing OpenSpec workspace is not an owned Git root")
+            raise SpecificationWorkspaceError(
+                "Existing OpenSpec workspace is not an owned Git root"
+            )
         if self._git(workspace_path, "remote").strip():
-            raise SpecificationWorkspaceError("Existing OpenSpec workspace unexpectedly has a remote")
+            raise SpecificationWorkspaceError(
+                "Existing OpenSpec workspace unexpectedly has a remote"
+            )
         branch = self._git(workspace_path, "branch", "--show-current").strip()
         head = self._git(workspace_path, "rev-parse", "HEAD").strip()
         if branch != expected_branch:
@@ -368,7 +496,9 @@ class SpecificationWorkspaceManager:
             return None
         parent = self._git(workspace_path, "rev-parse", "HEAD^").strip()
         if parent != base_sha:
-            raise SpecificationWorkspaceError("Existing OpenSpec workspace has an unexpected base commit")
+            raise SpecificationWorkspaceError(
+                "Existing OpenSpec workspace has an unexpected base commit"
+            )
         workspace = SpecificationWorkspace(
             interview_id=interview_id,
             repository_path=source,
@@ -404,7 +534,9 @@ class SpecificationWorkspaceManager:
         if top != workspace_path.resolve():
             raise SpecificationWorkspaceError("The private OpenSpec workspace root changed")
         if self._git(workspace_path, "remote").strip():
-            raise SpecificationWorkspaceError("The private OpenSpec workspace unexpectedly has a remote")
+            raise SpecificationWorkspaceError(
+                "The private OpenSpec workspace unexpectedly has a remote"
+            )
         if self._git(workspace_path, "branch", "--show-current").strip() != expected_branch:
             raise SpecificationWorkspaceError("The private OpenSpec workspace branch changed")
         actual_head = self._git(workspace_path, "rev-parse", "HEAD").strip()
@@ -433,7 +565,9 @@ class SpecificationWorkspaceManager:
     ) -> tuple[str, str, list[str]]:
         paths = self._bundle_paths(workspace.change_id)
         if set(files) != set(paths):
-            raise SpecificationWorkspaceError("Artifact update must contain the complete OpenSpec bundle")
+            raise SpecificationWorkspaceError(
+                "Artifact update must contain the complete OpenSpec bundle"
+            )
         digest = self._content_digest(files, paths)
         actual_head = self._git(workspace.workspace_path, "rev-parse", "HEAD").strip()
         if actual_head != expected_head:
@@ -471,7 +605,9 @@ class SpecificationWorkspaceManager:
     ) -> tuple[str, list[str]]:
         expected = self._bundle_paths(workspace.change_id)
         if set(files) != set(expected):
-            raise SpecificationWorkspaceError("Artifact update must contain the complete OpenSpec bundle")
+            raise SpecificationWorkspaceError(
+                "Artifact update must contain the complete OpenSpec bundle"
+            )
         digest = self._content_digest(files, expected)
         for relative in sorted(expected):
             destination = workspace.workspace_path / relative
@@ -502,20 +638,18 @@ class SpecificationWorkspaceManager:
     def _hash_committed_bundle(self, workspace: SpecificationWorkspace, head_sha: str) -> str:
         digest = hashlib.sha256()
         for relative in sorted(self._bundle_paths(workspace.change_id)):
-            content = self._git(workspace.workspace_path, "show", f"{head_sha}:{relative}").encode("utf-8")
+            content = self._git(workspace.workspace_path, "show", f"{head_sha}:{relative}").encode(
+                "utf-8"
+            )
             digest.update(relative.encode("utf-8"))
             digest.update(b"\0")
             digest.update(content)
         return digest.hexdigest()
 
-    def _read_bundle(
-        self, workspace: SpecificationWorkspace, head_sha: str
-    ) -> dict[str, str]:
+    def _read_bundle(self, workspace: SpecificationWorkspace, head_sha: str) -> dict[str, str]:
         result: dict[str, str] = {}
         for relative in self._bundle_paths(workspace.change_id):
-            result[relative] = self._git(
-                workspace.workspace_path, "show", f"{head_sha}:{relative}"
-            )
+            result[relative] = self._git(workspace.workspace_path, "show", f"{head_sha}:{relative}")
         return result
 
     def _search(
@@ -551,9 +685,7 @@ class SpecificationWorkspaceManager:
 
         checked = cast(
             list[str],
-            self._git_batch(
-                source, "cat-file", "--batch-check", objects=[oid for oid, _ in blobs]
-            ),
+            self._git_batch(source, "cat-file", "--batch-check", objects=[oid for oid, _ in blobs]),
         )
         bounded: list[tuple[str, str, int]] = []
         total_bytes = 0
@@ -608,9 +740,7 @@ class SpecificationWorkspaceManager:
                 ranked.sort(key=lambda item: (-item[0], item[1].path, item[1].line))
                 del ranked[max(2000, limit * 100) :]
         ranked.sort(key=lambda item: (-item[0], item[1].path, item[1].line))
-        return RepositorySearchResult(
-            revision, tuple(citation for _, citation in ranked[:limit])
-        )
+        return RepositorySearchResult(revision, tuple(citation for _, citation in ranked[:limit]))
 
     def _snapshot(
         self, target_id: str, default_branch: str, approved_skill_paths: tuple[str, ...]
@@ -743,7 +873,9 @@ class SpecificationWorkspaceManager:
 
         omitted: dict[str, int] = {}
         bounded_paths = changed_paths
-        changed_files = [(current_blobs[path], path) for path in bounded_paths if path in current_blobs]
+        changed_files = [
+            (current_blobs[path], path) for path in bounded_paths if path in current_blobs
+        ]
         deleted_paths = tuple(path for path in bounded_paths if path not in current_blobs)
         checked = cast(
             list[str],
@@ -753,7 +885,9 @@ class SpecificationWorkspaceManager:
         )
         bounded: list[tuple[str, str]] = []
         total_bytes = 0
-        for index, ((oid, relative), metadata) in enumerate(zip(changed_files, checked, strict=True)):
+        for index, ((oid, relative), metadata) in enumerate(
+            zip(changed_files, checked, strict=True)
+        ):
             fields = metadata.split()
             if len(fields) < 3 or fields[1] != "blob":
                 omitted["invalid_file_size"] = omitted.get("invalid_file_size", 0) + 1
@@ -808,9 +942,20 @@ class SpecificationWorkspaceManager:
             return True
         if path.suffix.casefold() not in _SEARCH_EXTENSIONS:
             return False
-        return relative.startswith(
-            ("openspec/specs/", "openspec/changes/", "apps/", "packages/", "planning/adr", "docs/")
-        ) or relative in {"planning/architecture-decisions.md", "docs/architecture.md"} or approved_skill
+        return (
+            relative.startswith(
+                (
+                    "openspec/specs/",
+                    "openspec/changes/",
+                    "apps/",
+                    "packages/",
+                    "planning/adr",
+                    "docs/",
+                )
+            )
+            or relative in {"planning/architecture-decisions.md", "docs/architecture.md"}
+            or approved_skill
+        )
 
     @classmethod
     def _git_batch(
@@ -844,14 +989,22 @@ class SpecificationWorkspaceManager:
                 raise SpecificationWorkspaceError("Git returned a truncated batch response")
             header = output[offset:header_end].split()
             if len(header) < 3 or header[0].decode("ascii", errors="ignore") != expected_oid:
-                raise SpecificationWorkspaceError("Git batch response did not match requested content")
+                raise SpecificationWorkspaceError(
+                    "Git batch response did not match requested content"
+                )
             try:
                 size = int(header[2])
             except ValueError as exc:
-                raise SpecificationWorkspaceError("Git returned an invalid batch object size") from exc
+                raise SpecificationWorkspaceError(
+                    "Git returned an invalid batch object size"
+                ) from exc
             content_start = header_end + 1
             content_end = content_start + size
-            if size < 0 or content_end >= len(output) or output[content_end : content_end + 1] != b"\n":
+            if (
+                size < 0
+                or content_end >= len(output)
+                or output[content_end : content_end + 1] != b"\n"
+            ):
                 raise SpecificationWorkspaceError("Git returned a truncated batch object")
             items.append(output[content_start:content_end])
             offset = content_end + 1
@@ -864,9 +1017,13 @@ class SpecificationWorkspaceManager:
             resolved_workspace.parent != resolved_root
             or resolved_workspace.name != workspace.interview_id.hex
         ):
-            raise SpecificationWorkspaceError("Refusing to remove an unowned specification workspace")
+            raise SpecificationWorkspaceError(
+                "Refusing to remove an unowned specification workspace"
+            )
         if workspace.workspace_path.is_symlink():
-            raise SpecificationWorkspaceError("Refusing to remove a symlinked specification workspace")
+            raise SpecificationWorkspaceError(
+                "Refusing to remove a symlinked specification workspace"
+            )
         shutil.rmtree(workspace.workspace_path, ignore_errors=False)
 
     @staticmethod
@@ -912,6 +1069,7 @@ class SpecificationWorkspaceManager:
             process.kill()
             await process.wait()
             raise SpecificationWorkspaceError("OpenSpec CLI pipes could not be initialized")
+
         async def read_bounded(stream: asyncio.StreamReader) -> bytes:
             chunks: list[bytes] = []
             size = 0
@@ -950,9 +1108,8 @@ class SpecificationWorkspaceManager:
                     validation_payload = json.loads(stdout.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     validation_payload = None
-                if (
-                    isinstance(validation_payload, dict)
-                    and isinstance(validation_payload.get("items"), list)
+                if isinstance(validation_payload, dict) and isinstance(
+                    validation_payload.get("items"), list
                 ):
                     # OpenSpec 1.14.3 exits nonzero for invalid changes while
                     # still returning the machine-readable validation result.

@@ -62,6 +62,11 @@ async def test_workspace_is_independent_shallow_and_exact_at_base_commit(tmp_pat
         changed = await manager.changed_files(workspace)
         assert changed[0]["path"] == "new file.txt"
         assert (await manager.patch(workspace, 1024)).startswith(b"diff --git")
+        result_revision = await manager.capture_result_revision(workspace)
+        assert result_revision != base
+        assert _git(source, "show", f"{result_revision}:new file.txt") == "agent change"
+        assert _git(source, "rev-parse", "HEAD") == base
+        assert (source / "README.md").read_text(encoding="utf-8") == "uncommitted user content\n"
         assert await manager.size_bytes(workspace) > 0
         assert outside.read_text(encoding="utf-8") == "never mounted"
     finally:
@@ -116,9 +121,6 @@ def test_podman_command_exposes_only_workspace_with_no_engine_or_network_access(
     assert command[volume_index + 1] == f"{workspace.resolve()}:/workspace:rw,rprivate,Z"
     assert command.count("--volume") == 1
     assert not any("podman.sock" in item or "docker.sock" in item for item in command)
-    assert not any(
-        item.startswith(("OPENAI_API_KEY=", "ANTHROPIC_API_KEY="))
-        for item in command
-    )
+    assert not any(item.startswith(("OPENAI_API_KEY=", "ANTHROPIC_API_KEY=")) for item in command)
     with pytest.raises(SandboxPolicyError, match="digest"):
         PodmanSandboxBackend(image="registry.invalid/agent:latest", owner_id="installation")

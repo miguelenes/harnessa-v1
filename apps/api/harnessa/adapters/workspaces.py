@@ -164,6 +164,10 @@ class WorkspaceManager:
     async def patch(self, workspace: ManagedWorkspace, limit: int) -> bytes:
         return await asyncio.to_thread(_patch, workspace, limit)
 
+    async def capture_result_revision(self, workspace: ManagedWorkspace) -> str:
+        """Store a fenced result commit object in the connected repository without moving refs."""
+        return await asyncio.to_thread(_capture_result_revision, workspace)
+
     async def stale_manifests(self) -> list[dict[str, Any]]:
         return await asyncio.to_thread(self._stale_manifests)
 
@@ -368,6 +372,112 @@ def _patch(workspace: ManagedWorkspace, limit: int) -> bytes:
     if result:
         raise WorkspaceError("Could not construct the bounded workspace patch")
     return b"".join(chunks)
+
+
+def _capture_result_revision(workspace: ManagedWorkspace) -> str:
+    """Apply the bounded workspace patch to a fresh trusted clone and import its commit object."""
+    import subprocess
+    import tempfile
+
+    patch = _patch(workspace, 10 * 1024 * 1024)
+    if not patch:
+        return workspace.base_commit
+    with tempfile.TemporaryDirectory(prefix="harnessa-result-") as temporary:
+        result_repo = Path(temporary) / "result"
+        env = {
+            "PATH": os.defpath,
+            "HOME": "/nonexistent",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_TEMPLATE_DIR": "/dev/null",
+            "GIT_ALLOW_PROTOCOL": "file",
+            "GIT_AUTHOR_NAME": "Harnessa Agent",
+            "GIT_AUTHOR_EMAIL": "agent@harnessa.invalid",
+            "GIT_COMMITTER_NAME": "Harnessa Runner",
+            "GIT_COMMITTER_EMAIL": "runner@harnessa.invalid",
+        }
+
+        def git(path: Path, *args: str, input_bytes: bytes | None = None) -> str:
+            process = subprocess.run(
+                ["git", "-C", str(path), *args],
+                check=False,
+                input=input_bytes,
+                capture_output=True,
+                env=env,
+                timeout=120,
+            )
+            if process.returncode:
+                raise WorkspaceError("Could not capture the trusted implementation revision")
+            return process.stdout.decode("ascii", errors="strict").strip()
+
+        git(
+            result_repo.parent,
+            "clone",
+            "--quiet",
+            "--no-hardlinks",
+            "--no-checkout",
+            str(workspace.repository_path),
+            str(result_repo),
+        )
+        git(
+            result_repo,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "checkout",
+            "--quiet",
+            "--detach",
+            workspace.base_commit,
+        )
+        apply = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(result_repo),
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "core.attributesFile=/dev/null",
+                "apply",
+                "--index",
+                "--binary",
+                "-",
+            ],
+            input=patch,
+            check=False,
+            capture_output=True,
+            env=env,
+            timeout=120,
+        )
+        if apply.returncode:
+            raise WorkspaceError("The workspace patch did not apply cleanly to its exact base")
+        tree = git(result_repo, "write-tree")
+        revision = git(
+            result_repo,
+            "commit-tree",
+            tree,
+            "-p",
+            workspace.base_commit,
+            "-m",
+            f"Harnessa run {workspace.run_id} attempt {workspace.attempt}",
+        )
+        if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", revision):
+            raise WorkspaceError("Captured result revision was not a full Git object ID")
+        git(
+            workspace.repository_path,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            str(result_repo),
+            revision,
+        )
+        verified = git(workspace.repository_path, "cat-file", "-t", revision)
+        if verified != "commit":
+            raise WorkspaceError("Captured result revision is missing from its repository")
+        return revision
 
 
 def _size_bytes(workspace: ManagedWorkspace, stop_after: int) -> int:

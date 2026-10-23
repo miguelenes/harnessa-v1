@@ -262,6 +262,9 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
         async def patch(self, _: object, __: int) -> bytes:
             return b"diff --git a/README.md b/README.md\n"
 
+        async def capture_result_revision(self, _: object) -> str:
+            return "d" * 40
+
         async def size_bytes(self, _: object) -> int:
             return 1
 
@@ -397,6 +400,7 @@ async def test_execute_completes_through_fake_acp_and_cleans_owned_resources(
     assert "Exact approved task artifact content" in prompt_texts[0]
     assert result["agent_version"] == "1.19.4"
     assert result["patch_artifact"] == {"artifact_id": "fixture"}
+    assert result["source_revision"] == "d" * 40
     assert checkpoints[0]["fencing_token"] == run.fencing_token
     assert [event for event in completed if event.endswith("removed")] == [
         "container:removed",

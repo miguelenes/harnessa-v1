@@ -26,8 +26,14 @@ _TRANSITIONS: dict[TaskStage, frozenset[TaskStage]] = {
         {TaskStage.READY, TaskStage.CLARIFYING, TaskStage.REJECTED, TaskStage.CANCELLED}
     ),
     TaskStage.READY: frozenset(
-        {TaskStage.SPECIFYING, TaskStage.IN_PROGRESS, TaskStage.CLARIFYING, TaskStage.RETRY_EXHAUSTED,
-         TaskStage.REJECTED, TaskStage.CANCELLED}
+        {
+            TaskStage.SPECIFYING,
+            TaskStage.IN_PROGRESS,
+            TaskStage.CLARIFYING,
+            TaskStage.RETRY_EXHAUSTED,
+            TaskStage.REJECTED,
+            TaskStage.CANCELLED,
+        }
     ),
     TaskStage.IN_PROGRESS: frozenset(
         {
@@ -43,6 +49,7 @@ _TRANSITIONS: dict[TaskStage, frozenset[TaskStage]] = {
     TaskStage.VERIFYING: frozenset(
         {
             TaskStage.IN_PROGRESS,
+            TaskStage.READY,  # bounded repair after an independent failed verification
             TaskStage.HUMAN_REVIEW,
             TaskStage.CLARIFYING,
             TaskStage.RETRY_EXHAUSTED,
@@ -51,14 +58,23 @@ _TRANSITIONS: dict[TaskStage, frozenset[TaskStage]] = {
         }
     ),
     TaskStage.HUMAN_REVIEW: frozenset(
-        {TaskStage.LEARNING, TaskStage.IN_PROGRESS, TaskStage.REJECTED, TaskStage.CANCELLED}
+        {
+            TaskStage.LEARNING,
+            TaskStage.IN_PROGRESS,
+            TaskStage.READY,
+            TaskStage.DONE,
+            TaskStage.REJECTED,
+            TaskStage.CANCELLED,
+        }
     ),
     TaskStage.LEARNING: frozenset({TaskStage.DONE}),
     TaskStage.CLARIFYING: frozenset(
         {TaskStage.SPECIFYING, TaskStage.READY, TaskStage.IN_PROGRESS, TaskStage.CANCELLED}
     ),
     TaskStage.HARNESS_PROBE: frozenset({TaskStage.IN_PROGRESS, TaskStage.CANCELLED}),
-    TaskStage.RETRY_EXHAUSTED: frozenset({TaskStage.READY, TaskStage.REJECTED, TaskStage.CANCELLED}),
+    TaskStage.RETRY_EXHAUSTED: frozenset(
+        {TaskStage.READY, TaskStage.REJECTED, TaskStage.CANCELLED}
+    ),
     TaskStage.REJECTED: frozenset(),
     TaskStage.CANCELLED: frozenset(),
     TaskStage.DONE: frozenset(),
@@ -90,7 +106,11 @@ def assert_transition(
         raise TransitionGuardFailed("A transition reason is required")
     if current == TaskStage.IN_PROGRESS and target == TaskStage.READY and not recovery:
         raise TransitionGuardFailed("Returning to READY requires an authorized checkpoint recovery")
-    if current == TaskStage.READY and target == TaskStage.RETRY_EXHAUSTED and "limit" not in reason.lower():
+    if (
+        current == TaskStage.READY
+        and target == TaskStage.RETRY_EXHAUSTED
+        and "limit" not in reason.lower()
+    ):
         raise TransitionGuardFailed("READY can only exhaust through an explicit retry limit")
     if target in {TaskStage.CLARIFYING, TaskStage.HARNESS_PROBE} and return_stage is None:
         raise TransitionGuardFailed("Branch transitions must preserve a return stage")

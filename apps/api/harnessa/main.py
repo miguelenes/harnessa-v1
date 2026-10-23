@@ -16,6 +16,7 @@ from starlette.responses import Response
 
 from harnessa.api.model_routes import router as model_router
 from harnessa.api.retrieval_routes import router as retrieval_router
+from harnessa.api.review_routes import router as review_router
 from harnessa.api.routes import router
 from harnessa.api.specification_routes import router as specification_router
 from harnessa.api.task_routes import router as task_router
@@ -95,6 +96,8 @@ from harnessa.contracts import (
     TaskState,
     TaskTransitionRead,
     TaskTransitionRequest,
+    VerificationManifestApprovalRequest,
+    VerificationManifestRevisionRead,
 )
 
 
@@ -152,6 +155,8 @@ CONTRACT_MODELS = (
     EvidenceIntegerValue,
     EvidenceTimestampValue,
     CoreEvidenceEnvelope,
+    VerificationManifestApprovalRequest,
+    VerificationManifestRevisionRead,
     RunOrchestrationIdentity,
     RunCheckpointReference,
     RunStartRequest,
@@ -226,9 +231,7 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def security_headers(
-    request: Request, call_next: RequestResponseEndpoint
-) -> Response:
+async def security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
     request_id = str(uuid4())
     request.state.request_id = request_id
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -280,7 +283,8 @@ async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
             message=str(detail.get("reason", detail.get("message", detail["code"]))),
             request_id=getattr(request.state, "request_id", None),
             details={
-                key: value for key, value in detail.items()
+                key: value
+                for key, value in detail.items()
                 if key not in {"code", "reason", "message"}
             },
         )
@@ -321,6 +325,7 @@ app.include_router(task_router)
 app.include_router(model_router)
 app.include_router(specification_router)
 app.include_router(retrieval_router)
+app.include_router(review_router)
 
 
 @app.get("/health/live", tags=["health"])

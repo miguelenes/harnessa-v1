@@ -119,18 +119,30 @@ async def _configured_route_candidates(
     requirements: RouteRequirements,
 ) -> tuple[ModelPool, list[RouteCandidate]]:
     pool = (
-        await db.execute(
-            select(ModelPool).where(
-                ModelPool.organization_id == organization_id,
-                ModelPool.kind == pool_kind,
+        (
+            await db.execute(
+                select(ModelPool).where(
+                    ModelPool.organization_id == organization_id,
+                    ModelPool.kind == pool_kind,
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if pool is None:
-        raise ModelGatewayError("model_pool_not_configured", 503, "The model workload pool is not configured")
+        raise ModelGatewayError(
+            "model_pool_not_configured", 503, "The model workload pool is not configured"
+        )
 
     stmt = (
-        select(ModelAlias, ModelDeployment, ProviderAccount, PoolAlias.priority, AliasDeployment.priority)
+        select(
+            ModelAlias,
+            ModelDeployment,
+            ProviderAccount,
+            PoolAlias.priority,
+            AliasDeployment.priority,
+        )
         .join(PoolAlias, PoolAlias.alias_id == ModelAlias.id)
         .join(AliasDeployment, AliasDeployment.alias_id == ModelAlias.id)
         .join(ModelDeployment, ModelDeployment.id == AliasDeployment.deployment_id)
@@ -163,7 +175,9 @@ async def _configured_route_candidates(
     ]
     if not enabled:
         raise ModelGatewayError(
-            "no_authorized_compatible_route", 503, "All compatible provider accounts or deployments are disabled"
+            "no_authorized_compatible_route",
+            503,
+            "All compatible provider accounts or deployments are disabled",
         )
     return pool, enabled
 
@@ -213,7 +227,9 @@ async def route_candidates(
     ]
     if not available:
         raise ModelGatewayError(
-            "no_available_compatible_route", 503, "All authorized compatible routes are cooling down"
+            "no_available_compatible_route",
+            503,
+            "All authorized compatible routes are cooling down",
         )
     return pool, available
 
@@ -232,12 +248,30 @@ def estimate_cost(
     return max([_MIN_RESERVATION, *estimates])
 
 
+def budget_policy_digest(policy: ModelBudgetPolicy) -> str:
+    """Stable content hash of the limits frozen into specification readiness."""
+    fields = (
+        "project_limit_usd",
+        "task_limit_usd",
+        "run_limit_usd",
+        "project_token_limit",
+        "task_token_limit",
+        "run_token_limit",
+        "max_steps",
+        "max_wall_seconds",
+        "max_output_tokens",
+        "max_attempts",
+    )
+    values = {name: str(getattr(policy, name)) for name in fields}
+    return hashlib.sha256(
+        json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def _scope_values(
     project_id: UUID, task_id: UUID | None, run_id: UUID | None
 ) -> list[tuple[str, UUID, UUID | None, UUID | None]]:
-    result: list[tuple[str, UUID, UUID | None, UUID | None]] = [
-        ("project", project_id, None, None)
-    ]
+    result: list[tuple[str, UUID, UUID | None, UUID | None]] = [("project", project_id, None, None)]
     if task_id is not None:
         result.append(("task", task_id, task_id, None))
     if run_id is not None:
@@ -255,16 +289,16 @@ async def _extend_reservation_lease(db: AsyncSession, reservation_id: UUID) -> N
             ModelReservation.status == "pending",
             ModelReservation.lease_expires_at > now,
         )
-        .values(
-            lease_expires_at=now + timedelta(seconds=_reservation_lease_seconds())
-        )
+        .values(lease_expires_at=now + timedelta(seconds=_reservation_lease_seconds()))
         .returning(ModelReservation.id)
         .execution_options(synchronize_session=False)
     )
     await db.commit()
     if result.scalar_one_or_none() is None:
         raise ModelGatewayError(
-            "model_reservation_expired", 409, "The model request reservation expired before dispatch"
+            "model_reservation_expired",
+            409,
+            "The model request reservation expired before dispatch",
         )
 
 
@@ -284,9 +318,7 @@ async def _reservation_heartbeat(request_id: UUID, max_wall_seconds: int) -> Non
                     ModelReservation.status == "pending",
                     ModelReservation.lease_expires_at > now,
                 )
-                .values(
-                    lease_expires_at=now + timedelta(seconds=lease_seconds)
-                )
+                .values(lease_expires_at=now + timedelta(seconds=lease_seconds))
                 .returning(ModelReservation.id)
                 .execution_options(synchronize_session=False)
             )
@@ -316,21 +348,31 @@ async def _reserve(
     idempotency_key: str,
 ) -> ReservationContext:
     if not idempotency_key or len(idempotency_key) > 200:
-        raise ModelGatewayError("idempotency_key_required", 400, "A valid Idempotency-Key is required")
+        raise ModelGatewayError(
+            "idempotency_key_required", 400, "A valid Idempotency-Key is required"
+        )
     if request.max_output_tokens > 1_000_000:
-        raise ModelGatewayError("invalid_token_limit", 422, "Output token limit exceeds the supported maximum")
+        raise ModelGatewayError(
+            "invalid_token_limit", 422, "Output token limit exceeds the supported maximum"
+        )
 
     policy = (
-        await db.execute(
-            select(ModelBudgetPolicy)
-            .where(ModelBudgetPolicy.project_id == project_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+        (
+            await db.execute(
+                select(ModelBudgetPolicy)
+                .where(ModelBudgetPolicy.project_id == project_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if policy is None:
         raise ModelGatewayError(
-            "model_budget_not_configured", 409, "Configure project, task, and run budgets before dispatch"
+            "model_budget_not_configured",
+            409,
+            "Configure project, task, and run budgets before dispatch",
         )
     candidates = [
         item
@@ -340,15 +382,21 @@ async def _reserve(
     ]
     if not candidates:
         raise ModelGatewayError(
-            "no_authorized_compatible_route", 422, "No route can hold the estimated input and output token limits"
+            "no_authorized_compatible_route",
+            422,
+            "No route can hold the estimated input and output token limits",
         )
     if request.max_output_tokens > policy.max_output_tokens:
         raise ModelGatewayError(
-            "output_token_limit_exceeded", 409, "Requested output exceeds the configured budget policy"
+            "output_token_limit_exceeded",
+            409,
+            "Requested output exceeds the configured budget policy",
         )
     max_attempts = min(policy.max_attempts, settings.model_max_attempts, 5)
     input_and_output_tokens = request.estimated_input_tokens + request.max_output_tokens
-    per_attempt_usd = estimate_cost(candidates, request.estimated_input_tokens, request.max_output_tokens)
+    per_attempt_usd = estimate_cost(
+        candidates, request.estimated_input_tokens, request.max_output_tokens
+    )
     per_attempt_tokens = input_and_output_tokens
     reserved_usd = per_attempt_usd * max_attempts
     reserved_tokens = per_attempt_tokens * max_attempts
@@ -361,7 +409,9 @@ async def _reserve(
         if task is None or task.project_id != project_id:
             raise ModelGatewayError("task_not_found", 404, "Task is not in this project")
         if (datetime.now(UTC) - task.created_at).total_seconds() > policy.max_wall_seconds:
-            raise ModelGatewayError("task_time_limit_exceeded", 409, "Task has reached its wall-time limit")
+            raise ModelGatewayError(
+                "task_time_limit_exceeded", 409, "Task has reached its wall-time limit"
+            )
     if run_id is not None:
         run = await db.get(Run, run_id)
         if run is None or run.project_id != project_id or run.task_id != task_id:
@@ -370,20 +420,28 @@ async def _reserve(
             raise ModelGatewayError("run_not_active", 409, "Model calls require an active run")
         run_started = run.started_at or run.created_at
         if (datetime.now(UTC) - run_started).total_seconds() > policy.max_wall_seconds:
-            raise ModelGatewayError("run_time_limit_exceeded", 409, "Run has reached its wall-time limit")
+            raise ModelGatewayError(
+                "run_time_limit_exceeded", 409, "Run has reached its wall-time limit"
+            )
 
     idempotency_hash = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
     previous = (
-        await db.execute(
-            select(ModelReservation).where(
-                ModelReservation.project_id == project_id,
-                ModelReservation.idempotency_hash == idempotency_hash,
+        (
+            await db.execute(
+                select(ModelReservation).where(
+                    ModelReservation.project_id == project_id,
+                    ModelReservation.idempotency_hash == idempotency_hash,
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if previous is not None:
         status = "in progress" if previous.status == "pending" else "already used"
-        raise ModelGatewayError("model_request_replayed", 409, f"Idempotency-Key was {status}; request was not repeated")
+        raise ModelGatewayError(
+            "model_request_replayed", 409, f"Idempotency-Key was {status}; request was not repeated"
+        )
 
     # The project policy lock serializes all scopes for this project, including parallel probes.
     limits = {
@@ -392,19 +450,25 @@ async def _reserve(
         "run": (Decimal(policy.run_limit_usd), policy.run_token_limit),
     }
     counters: list[ModelBudgetCounter] = []
-    for scope, scope_id, counter_task_id, counter_run_id in _scope_values(project_id, task_id, run_id):
+    for scope, scope_id, counter_task_id, counter_run_id in _scope_values(
+        project_id, task_id, run_id
+    ):
         counter = (
-            await db.execute(
-                select(ModelBudgetCounter)
-                .where(
-                    ModelBudgetCounter.project_id == project_id,
-                    ModelBudgetCounter.scope == scope,
-                    ModelBudgetCounter.scope_id == scope_id,
+            (
+                await db.execute(
+                    select(ModelBudgetCounter)
+                    .where(
+                        ModelBudgetCounter.project_id == project_id,
+                        ModelBudgetCounter.scope == scope,
+                        ModelBudgetCounter.scope_id == scope_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
                 )
-                .with_for_update()
-                .execution_options(populate_existing=True)
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if counter is None:
             counter = ModelBudgetCounter(
                 organization_id=organization_id,
@@ -426,45 +490,84 @@ async def _reserve(
 
     for counter in counters:
         amount_limit, token_limit = limits[counter.scope]
-        if counter.billed_usd + counter.estimated_usd + counter.reserved_usd + reserved_usd > amount_limit:
-            raise ModelGatewayError("model_budget_exceeded", 409, f"{counter.scope.title()} spend ceiling would be exceeded")
+        if (
+            counter.billed_usd + counter.estimated_usd + counter.reserved_usd + reserved_usd
+            > amount_limit
+        ):
+            raise ModelGatewayError(
+                "model_budget_exceeded",
+                409,
+                f"{counter.scope.title()} spend ceiling would be exceeded",
+            )
         if counter.used_tokens + counter.reserved_tokens + reserved_tokens > token_limit:
-            raise ModelGatewayError("model_token_limit_exceeded", 409, f"{counter.scope.title()} token ceiling would be exceeded")
+            raise ModelGatewayError(
+                "model_token_limit_exceeded",
+                409,
+                f"{counter.scope.title()} token ceiling would be exceeded",
+            )
         if counter.used_steps >= policy.max_steps:
-            raise ModelGatewayError("model_step_limit_exceeded", 409, f"{counter.scope.title()} step limit is exhausted")
+            raise ModelGatewayError(
+                "model_step_limit_exceeded", 409, f"{counter.scope.title()} step limit is exhausted"
+            )
 
     capacity = (
-        await db.execute(
-            select(ModelPool)
-            .where(ModelPool.organization_id == organization_id, ModelPool.kind == "interactive")
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-    ).scalars().first()
-    if capacity is None:
-        raise ModelGatewayError("model_capacity_not_configured", 503, "Interactive model capacity is not configured")
-    routable: list[RouteCandidate] = []
-    for candidate in candidates:
-        deployment = (
+        (
             await db.execute(
-                select(ModelDeployment)
-                .where(ModelDeployment.id == candidate.deployment.id)
+                select(ModelPool)
+                .where(
+                    ModelPool.organization_id == organization_id, ModelPool.kind == "interactive"
+                )
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
-        ).scalars().one()
+        )
+        .scalars()
+        .first()
+    )
+    if capacity is None:
+        raise ModelGatewayError(
+            "model_capacity_not_configured", 503, "Interactive model capacity is not configured"
+        )
+    routable: list[RouteCandidate] = []
+    for candidate in candidates:
+        deployment = (
+            (
+                await db.execute(
+                    select(ModelDeployment)
+                    .where(ModelDeployment.id == candidate.deployment.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            )
+            .scalars()
+            .one()
+        )
         if deployment.active_interactive + deployment.active_probe < deployment.max_concurrency:
             routable.append(candidate)
     candidates = routable
     if not candidates:
-        raise ModelGatewayError("deployment_capacity_exhausted", 429, "All compatible deployments are currently at capacity")
-    if request.estimated_input_tokens + request.max_output_tokens > candidates[0].deployment.context_window:
-        raise ModelGatewayError("context_limit_exceeded", 422, "Estimated input and output exceed route context")
+        raise ModelGatewayError(
+            "deployment_capacity_exhausted",
+            429,
+            "All compatible deployments are currently at capacity",
+        )
+    if (
+        request.estimated_input_tokens + request.max_output_tokens
+        > candidates[0].deployment.context_window
+    ):
+        raise ModelGatewayError(
+            "context_limit_exceeded", 422, "Estimated input and output exceed route context"
+        )
     normal_probe_capacity = max(0, capacity.max_concurrency - capacity.interactive_reserve)
     if pool.kind == "interactive":
         allowed_overflow = max(0, capacity.active_probe - normal_probe_capacity)
-        if capacity.active_interactive + capacity.active_probe >= capacity.max_concurrency + allowed_overflow:
-            raise ModelGatewayError("model_capacity_exhausted", 429, "Interactive model capacity is currently full")
+        if (
+            capacity.active_interactive + capacity.active_probe
+            >= capacity.max_concurrency + allowed_overflow
+        ):
+            raise ModelGatewayError(
+                "model_capacity_exhausted", 429, "Interactive model capacity is currently full"
+            )
         capacity.active_interactive += 1
         workload = "interactive"
     else:
@@ -473,9 +576,14 @@ async def _reserve(
         allowed_overflow = max(0, next_probe_count - normal_probe_capacity)
         if (
             capacity.active_probe >= probe_limit
-            or capacity.active_interactive + next_probe_count > capacity.max_concurrency + allowed_overflow
+            or capacity.active_interactive + next_probe_count
+            > capacity.max_concurrency + allowed_overflow
         ):
-            raise ModelGatewayError("probe_capacity_exhausted", 429, "Probe capacity is full; interactive capacity is reserved")
+            raise ModelGatewayError(
+                "probe_capacity_exhausted",
+                429,
+                "Probe capacity is full; interactive capacity is reserved",
+            )
         capacity.active_probe += 1
         workload = "probe"
 
@@ -507,8 +615,7 @@ async def _reserve(
         per_attempt_tokens=per_attempt_tokens,
         max_attempts=max_attempts,
         workload=workload,
-        lease_expires_at=datetime.now(UTC)
-        + timedelta(seconds=_reservation_lease_seconds()),
+        lease_expires_at=datetime.now(UTC) + timedelta(seconds=_reservation_lease_seconds()),
     )
     db.add(reservation)
     db.add(
@@ -601,13 +708,17 @@ async def _record_failure(
     retry_after: float | None,
 ) -> datetime:
     deployment = (
-        await db.execute(
-            select(ModelDeployment)
-            .where(ModelDeployment.id == candidate.deployment.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+        (
+            await db.execute(
+                select(ModelDeployment)
+                .where(ModelDeployment.id == candidate.deployment.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         )
-    ).scalars().one()
+        .scalars()
+        .one()
+    )
     deployment.failure_count += 1
     deployment.last_failure_code = error_code
     now = datetime.now(UTC)
@@ -626,13 +737,17 @@ async def _record_failure(
 
 async def _record_success(db: AsyncSession, deployment_id: UUID) -> None:
     deployment = (
-        await db.execute(
-            select(ModelDeployment)
-            .where(ModelDeployment.id == deployment_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+        (
+            await db.execute(
+                select(ModelDeployment)
+                .where(ModelDeployment.id == deployment_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         )
-    ).scalars().one()
+        .scalars()
+        .one()
+    )
     deployment.failure_count = 0
     deployment.last_failure_code = None
     deployment.cooldown_until = None
@@ -644,13 +759,17 @@ async def _switch_deployment(
 ) -> bool:
     """Move this request's deployment slot without changing its parent capacity slot."""
     reservation = (
-        await db.execute(
-            select(ModelReservation)
-            .where(ModelReservation.id == context.reservation.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+        (
+            await db.execute(
+                select(ModelReservation)
+                .where(ModelReservation.id == context.reservation.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         )
-    ).scalars().one()
+        .scalars()
+        .one()
+    )
     await db.execute(
         select(ModelPool)
         .where(
@@ -661,15 +780,19 @@ async def _switch_deployment(
         .execution_options(populate_existing=True)
     )
     deployments = (
-        await db.execute(
-            select(ModelDeployment)
-            .where(ModelDeployment.id.in_([reservation.deployment_id, candidate.deployment.id]))
-            .order_by(ModelDeployment.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-            .execution_options(populate_existing=True)
+        (
+            await db.execute(
+                select(ModelDeployment)
+                .where(ModelDeployment.id.in_([reservation.deployment_id, candidate.deployment.id]))
+                .order_by(ModelDeployment.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+                .execution_options(populate_existing=True)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     by_id = {item.id: item for item in deployments}
     current = by_id[reservation.deployment_id]
     target = by_id[candidate.deployment.id]
@@ -754,9 +877,7 @@ def _extract_usage(response: dict[str, Any]) -> tuple[int | None, int | None, bo
     return input_count, output_count, True
 
 
-def _stream_usage(
-    payload: str, protocol: ModelProtocol
-) -> tuple[int | None, int | None] | None:
+def _stream_usage(payload: str, protocol: ModelProtocol) -> tuple[int | None, int | None] | None:
     if payload == "[DONE]":
         return None
     try:
@@ -814,30 +935,38 @@ async def _settle(
     event_type: str = "settled",
 ) -> None:
     reservation = (
-        await db.execute(
-            select(ModelReservation)
-            .where(ModelReservation.id == context.reservation.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+        (
+            await db.execute(
+                select(ModelReservation)
+                .where(ModelReservation.id == context.reservation.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         )
-    ).scalars().one()
+        .scalars()
+        .one()
+    )
     if reservation.status != "pending":
         return
     for scope, scope_id, _, _ in _scope_values(
         reservation.project_id, reservation.task_id, reservation.run_id
     ):
         counter = (
-            await db.execute(
-                select(ModelBudgetCounter)
-                .where(
-                    ModelBudgetCounter.project_id == reservation.project_id,
-                    ModelBudgetCounter.scope == scope,
-                    ModelBudgetCounter.scope_id == scope_id,
+            (
+                await db.execute(
+                    select(ModelBudgetCounter)
+                    .where(
+                        ModelBudgetCounter.project_id == reservation.project_id,
+                        ModelBudgetCounter.scope == scope,
+                        ModelBudgetCounter.scope_id == scope_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
                 )
-                .with_for_update()
-                .execution_options(populate_existing=True)
             )
-        ).scalars().one()
+            .scalars()
+            .one()
+        )
         counter.reserved_usd = max(_ZERO, counter.reserved_usd - reservation.reserved_usd)
         counter.reserved_tokens = max(0, counter.reserved_tokens - reservation.reserved_tokens)
         counter.billed_usd += billed_usd
@@ -845,25 +974,33 @@ async def _settle(
         counter.used_tokens += used_tokens
 
     pool = (
-        await db.execute(
-            select(ModelPool)
-            .where(
-                ModelPool.organization_id == reservation.organization_id,
-                ModelPool.kind == "interactive",
+        (
+            await db.execute(
+                select(ModelPool)
+                .where(
+                    ModelPool.organization_id == reservation.organization_id,
+                    ModelPool.kind == "interactive",
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
-            .with_for_update()
-            .execution_options(populate_existing=True)
         )
-    ).scalars().one()
+        .scalars()
+        .one()
+    )
     deployment = (
-        await db.execute(
-            select(ModelDeployment)
-            .where(ModelDeployment.id == reservation.deployment_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-            .execution_options(populate_existing=True)
+        (
+            await db.execute(
+                select(ModelDeployment)
+                .where(ModelDeployment.id == reservation.deployment_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+                .execution_options(populate_existing=True)
+            )
         )
-    ).scalars().one()
+        .scalars()
+        .one()
+    )
     if reservation.workload == "interactive":
         pool.active_interactive = max(0, pool.active_interactive - 1)
         deployment.active_interactive = max(0, deployment.active_interactive - 1)
@@ -907,7 +1044,9 @@ class LiteLLMModelRouter:
         if self.client_factory is not None:
             return self.client_factory(), True
         if not settings.model_gateway_url:
-            raise ModelGatewayError("model_gateway_unavailable", 503, "LiteLLM gateway URL is not configured")
+            raise ModelGatewayError(
+                "model_gateway_unavailable", 503, "LiteLLM gateway URL is not configured"
+            )
         return httpx.AsyncClient(timeout=settings.model_http_timeout_seconds), True
 
     async def complete(
@@ -921,15 +1060,25 @@ class LiteLLMModelRouter:
         tool_choice: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if self.client is None and self.client_factory is None and not settings.model_gateway_url:
-            raise ModelGatewayError("model_gateway_unavailable", 503, "LiteLLM gateway URL is not configured")
+            raise ModelGatewayError(
+                "model_gateway_unavailable", 503, "LiteLLM gateway URL is not configured"
+            )
         if request.stream:
-            raise ModelGatewayError("stream_endpoint_required", 400, "Use the streaming route for stream requests")
+            raise ModelGatewayError(
+                "stream_endpoint_required", 400, "Use the streaming route for stream requests"
+            )
         if request.tools and not request.requirements.tools:
-            raise ModelGatewayError("route_requirements_mismatch", 422, "Tool requests must require tool support")
+            raise ModelGatewayError(
+                "route_requirements_mismatch", 422, "Tool requests must require tool support"
+            )
         if tool_choice is not None and not request.tools:
-            raise ModelGatewayError("route_requirements_mismatch", 422, "Tool choice requires configured tools")
+            raise ModelGatewayError(
+                "route_requirements_mismatch", 422, "Tool choice requires configured tools"
+            )
         if request.stream and not request.requirements.streaming:
-            raise ModelGatewayError("route_requirements_mismatch", 422, "Streaming requires streaming capability")
+            raise ModelGatewayError(
+                "route_requirements_mismatch", 422, "Streaming requires streaming capability"
+            )
         pool, candidates = await route_candidates(
             db,
             organization_id=organization_id,
@@ -1019,10 +1168,16 @@ class LiteLLMModelRouter:
                         0,
                         int((asyncio.get_running_loop().time() - started) * 1000),
                     )
-                    if transport_error is not None or response is None or response.status_code >= 400:
+                    if (
+                        transport_error is not None
+                        or response is None
+                        or response.status_code >= 400
+                    ):
                         status = response.status_code if response is not None else None
                         error_code = _error_code(status, transport_error)
-                        retry_after = _retry_after(response.headers.get("Retry-After")) if response else None
+                        retry_after = (
+                            _retry_after(response.headers.get("Retry-After")) if response else None
+                        )
                         if response is not None:
                             await response.aclose()
                         await _record_failure(
@@ -1059,7 +1214,10 @@ class LiteLLMModelRouter:
                             await asyncio.sleep(retry_wait)
                         if retry_same:
                             continue
-                        if candidate_index + 1 < len(context.candidates) and attempts < context.max_attempts:
+                        if (
+                            candidate_index + 1 < len(context.candidates)
+                            and attempts < context.max_attempts
+                        ):
                             next_candidate = context.candidates[candidate_index + 1]
                             decisions.append(
                                 f"fallback after {candidate.deployment.name} failure to {next_candidate.deployment.name}"
@@ -1084,7 +1242,11 @@ class LiteLLMModelRouter:
                     if not isinstance(body, dict):
                         error_code = "provider_invalid_response"
                         await _record_failure(
-                            db, candidate, error_code=error_code, status_code=response.status_code, retry_after=None
+                            db,
+                            candidate,
+                            error_code=error_code,
+                            status_code=response.status_code,
+                            retry_after=None,
                         )
                         unknown_attempts += 1
                         await _append_ledger(
@@ -1114,8 +1276,7 @@ class LiteLLMModelRouter:
                         estimated = context.per_attempt_usd
                         usage_known = False
                     request_identifier = (
-                        response.headers.get("x-litellm-call-id")
-                        or str(body.get("id") or call_id)
+                        response.headers.get("x-litellm-call-id") or str(body.get("id") or call_id)
                     )[:200]
                     actual_model = str(body.get("model") or candidate.deployment.actual_model)[:200]
                     latency_ms = max(
@@ -1173,7 +1334,9 @@ class LiteLLMModelRouter:
                     unknown_usage=True,
                 )
                 raise ModelGatewayError(
-                    "model_provider_unavailable", 503, "All compatible routes failed within the configured attempt bound"
+                    "model_provider_unavailable",
+                    503,
+                    "All compatible routes failed within the configured attempt bound",
                 )
 
             input_tokens, output_tokens, usage_known = successful_usage
@@ -1203,7 +1366,8 @@ class LiteLLMModelRouter:
                 "output_tokens": outcome.output_tokens,
                 "usage_known": outcome.usage_known and unknown_attempts == 0,
                 "billed_usd": outcome.billed_usd,
-                "estimated_usd": (outcome.estimated_usd or _ZERO) + context.per_attempt_usd * unknown_attempts,
+                "estimated_usd": (outcome.estimated_usd or _ZERO)
+                + context.per_attempt_usd * unknown_attempts,
                 "route_decisions": decisions,
                 "response": outcome.response or {},
             }
@@ -1222,11 +1386,17 @@ class LiteLLMModelRouter:
     ) -> tuple[UUID, AsyncIterator[bytes]]:
         """Open a stream with pre-body failover; once any body is exposed it never retries."""
         if not request.stream or not request.requirements.streaming:
-            raise ModelGatewayError("route_requirements_mismatch", 422, "Streaming must be explicitly required")
+            raise ModelGatewayError(
+                "route_requirements_mismatch", 422, "Streaming must be explicitly required"
+            )
         if request.tools and not request.requirements.tools:
-            raise ModelGatewayError("route_requirements_mismatch", 422, "Tool requests must require tool support")
+            raise ModelGatewayError(
+                "route_requirements_mismatch", 422, "Tool requests must require tool support"
+            )
         if self.client is None and self.client_factory is None and not settings.model_gateway_url:
-            raise ModelGatewayError("model_gateway_unavailable", 503, "LiteLLM gateway URL is not configured")
+            raise ModelGatewayError(
+                "model_gateway_unavailable", 503, "LiteLLM gateway URL is not configured"
+            )
         pool, candidates = await route_candidates(
             db,
             organization_id=organization_id,
@@ -1261,10 +1431,17 @@ class LiteLLMModelRouter:
             if attempts >= context.max_attempts:
                 break
             if candidate_index > 0 and not await _switch_deployment(db, context, candidate):
-                decisions.append(f"fallback route skipped for {candidate.deployment.name}: cooldown or capacity")
+                decisions.append(
+                    f"fallback route skipped for {candidate.deployment.name}: cooldown or capacity"
+                )
                 await _append_ledger(
-                    db, context, candidate, event_type="fallback_selected", attempt=attempts,
-                    route_decision=decisions[-1], error_code="fallback_route_unavailable",
+                    db,
+                    context,
+                    candidate,
+                    event_type="fallback_selected",
+                    attempt=attempts,
+                    route_decision=decisions[-1],
+                    error_code="fallback_route_unavailable",
                     details={"route_skipped": True},
                 )
                 continue
@@ -1274,10 +1451,17 @@ class LiteLLMModelRouter:
                 attempts += 1
                 call_id = str(uuid4())
                 await _extend_reservation_lease(db, context.reservation.id)
-                decisions.append(f"attempt {attempts}: {candidate.alias.name} -> {candidate.deployment.name}")
+                decisions.append(
+                    f"attempt {attempts}: {candidate.alias.name} -> {candidate.deployment.name}"
+                )
                 await _append_ledger(
-                    db, context, candidate, event_type="attempt_started", attempt=attempts,
-                    route_decision=decisions[-1], request_identifier=call_id,
+                    db,
+                    context,
+                    candidate,
+                    event_type="attempt_started",
+                    attempt=attempts,
+                    route_decision=decisions[-1],
+                    request_identifier=call_id,
                 )
                 headers = {"X-Request-ID": call_id}
                 if request.requirements.protocol == ModelProtocol.ANTHROPIC_MESSAGES:
@@ -1301,28 +1485,49 @@ class LiteLLMModelRouter:
                         response = None
                         error_code = _error_code(status)
                         await _record_failure(
-                            db, candidate, error_code=error_code, status_code=status, retry_after=retry_after
+                            db,
+                            candidate,
+                            error_code=error_code,
+                            status_code=status,
+                            retry_after=retry_after,
                         )
                         unknown_attempts += 1
                         await _append_ledger(
-                            db, context, candidate, event_type="attempt_failed", attempt=attempts,
-                            route_decision=decisions[-1], request_identifier=call_id,
-                            latency_ms=latency_ms, estimated_usd=context.per_attempt_usd,
-                            http_status=status, error_code=error_code, details={"usage_unknown": True},
+                            db,
+                            context,
+                            candidate,
+                            event_type="attempt_failed",
+                            attempt=attempts,
+                            route_decision=decisions[-1],
+                            request_identifier=call_id,
+                            latency_ms=latency_ms,
+                            estimated_usd=context.per_attempt_usd,
+                            http_status=status,
+                            error_code=error_code,
+                            details={"usage_unknown": True},
                         )
                         retryable = status in {408, 429, 500, 502, 503, 504}
                         wait_seconds = retry_after or 0.0
                         if (
-                            retryable and route_local_attempts < 2 and attempts < context.max_attempts
+                            retryable
+                            and route_local_attempts < 2
+                            and attempts < context.max_attempts
                             and wait_seconds <= settings.model_max_retry_after_seconds
                         ):
                             if wait_seconds:
                                 await asyncio.sleep(wait_seconds)
                             continue
-                        if candidate_index + 1 < len(context.candidates) and attempts < context.max_attempts:
+                        if (
+                            candidate_index + 1 < len(context.candidates)
+                            and attempts < context.max_attempts
+                        ):
                             next_candidate = context.candidates[candidate_index + 1]
                             await _append_ledger(
-                                db, context, next_candidate, event_type="fallback_selected", attempt=attempts,
+                                db,
+                                context,
+                                next_candidate,
+                                event_type="fallback_selected",
+                                attempt=attempts,
                                 route_decision=f"fallback after {candidate.deployment.name} failure to {next_candidate.deployment.name}",
                                 error_code=error_code,
                                 details={"from_deployment_id": str(candidate.deployment.id)},
@@ -1338,21 +1543,41 @@ class LiteLLMModelRouter:
                         await response_context.__aexit__(type(exc), exc, exc.__traceback__)
                     response_context = None
                     response = None
-                    error_code = "provider_timeout" if isinstance(exc, httpx.TimeoutException) else "provider_transport_error"
-                    await _record_failure(db, candidate, error_code=error_code, status_code=None, retry_after=None)
+                    error_code = (
+                        "provider_timeout"
+                        if isinstance(exc, httpx.TimeoutException)
+                        else "provider_transport_error"
+                    )
+                    await _record_failure(
+                        db, candidate, error_code=error_code, status_code=None, retry_after=None
+                    )
                     unknown_attempts += 1
                     await _append_ledger(
-                        db, context, candidate, event_type="attempt_failed", attempt=attempts,
-                        route_decision=decisions[-1], request_identifier=call_id,
-                        latency_ms=latency_ms, estimated_usd=context.per_attempt_usd,
-                        error_code=error_code, details={"usage_unknown": True, "before_first_chunk": True},
+                        db,
+                        context,
+                        candidate,
+                        event_type="attempt_failed",
+                        attempt=attempts,
+                        route_decision=decisions[-1],
+                        request_identifier=call_id,
+                        latency_ms=latency_ms,
+                        estimated_usd=context.per_attempt_usd,
+                        error_code=error_code,
+                        details={"usage_unknown": True, "before_first_chunk": True},
                     )
                     if route_local_attempts < 2 and attempts < context.max_attempts:
                         continue
-                    if candidate_index + 1 < len(context.candidates) and attempts < context.max_attempts:
+                    if (
+                        candidate_index + 1 < len(context.candidates)
+                        and attempts < context.max_attempts
+                    ):
                         next_candidate = context.candidates[candidate_index + 1]
                         await _append_ledger(
-                            db, context, next_candidate, event_type="fallback_selected", attempt=attempts,
+                            db,
+                            context,
+                            next_candidate,
+                            event_type="fallback_selected",
+                            attempt=attempts,
                             route_decision=f"fallback after {candidate.deployment.name} transport failure to {next_candidate.deployment.name}",
                             error_code=error_code,
                             details={"from_deployment_id": str(candidate.deployment.id)},
@@ -1374,7 +1599,9 @@ class LiteLLMModelRouter:
                 unknown_usage=True,
             )
             raise ModelGatewayError(
-                "model_provider_unavailable", 503, "All compatible routes failed before the first stream chunk"
+                "model_provider_unavailable",
+                503,
+                "All compatible routes failed before the first stream chunk",
             )
 
         heartbeat_task = asyncio.create_task(
@@ -1420,25 +1647,34 @@ class LiteLLMModelRouter:
                     billed = Decimal(billed_header) if billed_header is not None else _ZERO
                 except (InvalidOperation, TypeError):
                     billed = _ZERO
-                estimated = _cost_from_usage(winner, input_tokens, output_tokens) if usage_seen else None
+                estimated = (
+                    _cost_from_usage(winner, input_tokens, output_tokens) if usage_seen else None
+                )
                 unknown = not usage_seen
                 if unknown and billed == _ZERO:
                     estimated = context.per_attempt_usd
                 actual_tokens = (input_tokens or 0) + (output_tokens or 0)
                 await _record_success(db, winner.deployment.id)
                 await _append_ledger(
-                    db, context, winner, event_type="attempt_succeeded", attempt=attempts,
+                    db,
+                    context,
+                    winner,
+                    event_type="attempt_succeeded",
+                    attempt=attempts,
                     route_decision=decisions[-1],
                     request_identifier=response.headers.get("x-litellm-call-id") or call_id,
-                    input_tokens=input_tokens, output_tokens=output_tokens,
-                    usage_known=usage_seen, latency_ms=latency_ms,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    usage_known=usage_seen,
+                    latency_ms=latency_ms,
                     billed_usd=billed if billed > _ZERO else None,
                     estimated_usd=estimated,
                     http_status=200,
                     details={"stream_complete": True},
                 )
                 await _settle(
-                    db, context,
+                    db,
+                    context,
                     billed_usd=billed,
                     estimated_usd=(estimated or _ZERO) + context.per_attempt_usd * unknown_attempts,
                     used_tokens=actual_tokens + context.per_attempt_tokens * unknown_attempts,
@@ -1448,18 +1684,30 @@ class LiteLLMModelRouter:
                 stream_error = exc
                 await asyncio.shield(
                     _append_ledger(
-                        db, context, winner, event_type="attempt_failed", attempt=attempts,
+                        db,
+                        context,
+                        winner,
+                        event_type="attempt_failed",
+                        attempt=attempts,
                         route_decision="stream consumer disconnected; no workflow or tool effect was replayed",
                         request_identifier=response.headers.get("x-litellm-call-id") or call_id,
-                        input_tokens=input_tokens, output_tokens=output_tokens, usage_known=False,
-                        latency_ms=latency_ms, estimated_usd=context.per_attempt_usd,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        usage_known=False,
+                        latency_ms=latency_ms,
+                        estimated_usd=context.per_attempt_usd,
                         error_code="stream_disconnected",
-                        details={"partial_stream": emitted, "tool_call_chunks_emitted": tool_call_chunks},
+                        details={
+                            "partial_stream": emitted,
+                            "tool_call_chunks_emitted": tool_call_chunks,
+                        },
                     )
                 )
                 await asyncio.shield(
                     _settle(
-                        db, context, billed_usd=_ZERO,
+                        db,
+                        context,
+                        billed_usd=_ZERO,
                         estimated_usd=context.per_attempt_usd * (unknown_attempts + 1),
                         used_tokens=context.per_attempt_tokens * (unknown_attempts + 1),
                         unknown_usage=True,
@@ -1470,11 +1718,18 @@ class LiteLLMModelRouter:
                 stream_error = exc
                 error_code = "partial_stream_failure" if emitted else "provider_stream_failure"
                 await _append_ledger(
-                    db, context, winner, event_type="attempt_failed", attempt=attempts,
+                    db,
+                    context,
+                    winner,
+                    event_type="attempt_failed",
+                    attempt=attempts,
                     route_decision="stream terminated after response began; transport retry suppressed",
                     request_identifier=response.headers.get("x-litellm-call-id") or call_id,
-                    input_tokens=input_tokens, output_tokens=output_tokens, usage_known=False,
-                    latency_ms=latency_ms, estimated_usd=context.per_attempt_usd,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    usage_known=False,
+                    latency_ms=latency_ms,
+                    estimated_usd=context.per_attempt_usd,
                     error_code=error_code,
                     details={
                         "partial_stream": emitted,
@@ -1483,19 +1738,24 @@ class LiteLLMModelRouter:
                     },
                 )
                 await _settle(
-                    db, context, billed_usd=_ZERO,
+                    db,
+                    context,
+                    billed_usd=_ZERO,
                     estimated_usd=context.per_attempt_usd * (unknown_attempts + 1),
                     used_tokens=context.per_attempt_tokens * (unknown_attempts + 1),
                     unknown_usage=True,
                 )
                 if emitted:
                     yield (
-                        'event: model.error\ndata: '
-                        + json.dumps({
-                            "code": error_code,
-                            "message": "The provider stream ended early; no agent workflow or tool side effect was replayed.",
-                            "tool_call_chunks_emitted": tool_call_chunks,
-                        }, separators=(",", ":"))
+                        "event: model.error\ndata: "
+                        + json.dumps(
+                            {
+                                "code": error_code,
+                                "message": "The provider stream ended early; no agent workflow or tool side effect was replayed.",
+                                "tool_call_chunks_emitted": tool_call_chunks,
+                            },
+                            separators=(",", ":"),
+                        )
                         + "\n\n"
                     ).encode()
             finally:
@@ -1518,52 +1778,76 @@ async def reconcile_stale_model_reservations(
     reconciled = 0
     async with session_factory() as db:
         stale = (
-            await db.execute(
-                select(ModelReservation)
-                .where(
-                    ModelReservation.status == "pending",
-                    ModelReservation.lease_expires_at <= datetime.now(UTC),
-                )
-                .order_by(ModelReservation.lease_expires_at)
-                .limit(limit)
-                .with_for_update(skip_locked=True)
-                .execution_options(populate_existing=True)
-            )
-        ).scalars().all()
-        for reservation in stale:
-            counters = (
+            (
                 await db.execute(
-                    select(ModelBudgetCounter)
-                    .where(ModelBudgetCounter.project_id == reservation.project_id)
-                    .with_for_update()
+                    select(ModelReservation)
+                    .where(
+                        ModelReservation.status == "pending",
+                        ModelReservation.lease_expires_at <= datetime.now(UTC),
+                    )
+                    .order_by(ModelReservation.lease_expires_at)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
                     .execution_options(populate_existing=True)
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
+        )
+        for reservation in stale:
+            counters = (
+                (
+                    await db.execute(
+                        select(ModelBudgetCounter)
+                        .where(ModelBudgetCounter.project_id == reservation.project_id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                )
+                .scalars()
+                .all()
+            )
             for counter in counters:
-                if counter.scope_id in {reservation.project_id, reservation.task_id, reservation.run_id}:
-                    counter.reserved_usd = max(_ZERO, counter.reserved_usd - reservation.reserved_usd)
-                    counter.reserved_tokens = max(0, counter.reserved_tokens - reservation.reserved_tokens)
+                if counter.scope_id in {
+                    reservation.project_id,
+                    reservation.task_id,
+                    reservation.run_id,
+                }:
+                    counter.reserved_usd = max(
+                        _ZERO, counter.reserved_usd - reservation.reserved_usd
+                    )
+                    counter.reserved_tokens = max(
+                        0, counter.reserved_tokens - reservation.reserved_tokens
+                    )
                     counter.estimated_usd += reservation.reserved_usd
                     counter.used_tokens += reservation.reserved_tokens
             capacity = (
-                await db.execute(
-                    select(ModelPool)
-                    .where(
-                        ModelPool.organization_id == reservation.organization_id,
-                        ModelPool.kind == "interactive",
+                (
+                    await db.execute(
+                        select(ModelPool)
+                        .where(
+                            ModelPool.organization_id == reservation.organization_id,
+                            ModelPool.kind == "interactive",
+                        )
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
                     )
-                    .with_for_update()
-                    .execution_options(populate_existing=True)
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             deployment = (
-                await db.execute(
-                    select(ModelDeployment)
-                    .where(ModelDeployment.id == reservation.deployment_id)
-                    .with_for_update()
-                    .execution_options(populate_existing=True)
+                (
+                    await db.execute(
+                        select(ModelDeployment)
+                        .where(ModelDeployment.id == reservation.deployment_id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             if capacity is not None:
                 if reservation.workload == "interactive":
                     capacity.active_interactive = max(0, capacity.active_interactive - 1)
@@ -1589,7 +1873,10 @@ async def reconcile_stale_model_reservations(
                     route_decision="stale request reservation charged conservatively; provider usage unknown",
                     usage_known=False,
                     estimated_usd=reservation.reserved_usd,
-                    details={"reservation_status": "unknown", "reserved_tokens": reservation.reserved_tokens},
+                    details={
+                        "reservation_status": "unknown",
+                        "reserved_tokens": reservation.reserved_tokens,
+                    },
                 )
             )
             reconciled += 1

@@ -40,6 +40,10 @@ from redis.asyncio import Redis
 from sqlalchemy import func, select, text
 
 from tests.adapters.fake_execution import FakeExecutionAdapter
+from tests.integration.test_specifications import (
+    _create_ready_interview,
+    _specification_fixture,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -69,22 +73,37 @@ async def ready_task(project_id: UUID, actor_id: UUID, *, key: str = "create-tas
     async with SessionLocal() as db:
         actor = await db.get(User, actor_id)
         task, _ = await create_task(
-            db, project_id=project_id, actor=actor, title="Run fixture",
-            description="Deterministic test input", priority=1, command_key=key,
+            db,
+            project_id=project_id,
+            actor=actor,
+            title="Run fixture",
+            description="Deterministic test input",
+            priority=1,
+            command_key=key,
         )
         task_id = task.id
     async with SessionLocal() as db:
         actor = await db.get(User, actor_id)
         await transition_task(
-            db, task_id=task_id, actor=actor, target=TaskStage.SPECIFYING,
-            expected_version=1, reason="Integration setup", return_stage=None,
+            db,
+            task_id=task_id,
+            actor=actor,
+            target=TaskStage.SPECIFYING,
+            expected_version=1,
+            reason="Integration setup",
+            return_stage=None,
             command_key=f"{key}-specifying",
         )
     async with SessionLocal() as db:
         actor = await db.get(User, actor_id)
         await transition_task(
-            db, task_id=task_id, actor=actor, target=TaskStage.READY,
-            expected_version=2, reason="Fixture is ready", return_stage=None,
+            db,
+            task_id=task_id,
+            actor=actor,
+            target=TaskStage.READY,
+            expected_version=2,
+            reason="Fixture is ready",
+            return_stage=None,
             command_key=f"{key}-ready",
         )
     return task_id
@@ -95,10 +114,31 @@ async def row_count(model) -> int:
         return await db.scalar(select(func.count()).select_from(model)) or 0
 
 
+async def ready_dispatch_fixture(tmp_path, monkeypatch, *, key: str = "dispatch"):
+    project_id, repository_id, actor, repository, manager = await _specification_fixture(
+        tmp_path, monkeypatch
+    )
+    interview_id = await _create_ready_interview(
+        project_id, repository_id, actor, idempotency_key=key
+    )
+    async with SessionLocal() as db:
+        from harnessa.db.specification import SpecificationInterview
+
+        interview = await db.get(SpecificationInterview, interview_id)
+        assert interview is not None
+        return project_id, interview.task_id, actor.id, repository_id, repository, manager
+
+
+async def _user(user_id: UUID) -> User:
+    async with SessionLocal() as db:
+        user = await db.get(User, user_id)
+        assert user is not None
+        return user
+
+
 @pytest.mark.anyio
-async def test_concurrent_claim_and_expired_worker_fencing_with_checkpoint():
-    _, project_id, actor_id = await seed_project()
-    task_id = await ready_task(project_id, actor_id)
+async def test_concurrent_claim_and_expired_worker_fencing_with_checkpoint(tmp_path, monkeypatch):
+    _, task_id, _, *_ = await ready_dispatch_fixture(tmp_path, monkeypatch)
     scheduler_a = Scheduler(global_limit=4, lease_seconds=5, heartbeat_seconds=1)
     scheduler_b = Scheduler(global_limit=4, lease_seconds=5, heartbeat_seconds=1)
     claims = await asyncio.gather(
@@ -126,9 +166,10 @@ async def test_concurrent_claim_and_expired_worker_fencing_with_checkpoint():
 
 
 @pytest.mark.anyio
-async def test_artifact_and_progress_publication_are_fenced_and_orphans_reconcile(tmp_path):
-    _, project_id, actor_id = await seed_project()
-    task_id = await ready_task(project_id, actor_id)
+async def test_artifact_and_progress_publication_are_fenced_and_orphans_reconcile(
+    tmp_path, monkeypatch
+):
+    _, task_id, _, *_ = await ready_dispatch_fixture(tmp_path, monkeypatch)
     artifact_root = tmp_path / "artifacts"
     scheduler = Scheduler(
         global_limit=1,
@@ -150,10 +191,10 @@ async def test_artifact_and_progress_publication_are_fenced_and_orphans_reconcil
     async with SessionLocal() as db:
         stored = await db.scalar(select(RunArtifact).where(RunArtifact.run_id == job.run_id))
         events = (
-            await db.execute(
-                select(DomainEvent).where(DomainEvent.run_id == job.run_id)
-            )
-        ).scalars().all()
+            (await db.execute(select(DomainEvent).where(DomainEvent.run_id == job.run_id)))
+            .scalars()
+            .all()
+        )
         assert stored is not None
         progress = next(event for event in events if event.event_type == "run.progress")
         publication = next(
@@ -184,9 +225,10 @@ async def test_artifact_and_progress_publication_are_fenced_and_orphans_reconcil
 
 
 @pytest.mark.anyio
-async def test_expired_worker_without_checkpoint_fails_visibly_without_relaunch():
-    _, project_id, actor_id = await seed_project()
-    task_id = await ready_task(project_id, actor_id)
+async def test_expired_worker_without_checkpoint_fails_visibly_without_relaunch(
+    tmp_path, monkeypatch
+):
+    _, task_id, _, *_ = await ready_dispatch_fixture(tmp_path, monkeypatch)
     scheduler = Scheduler(global_limit=2, lease_seconds=1)
     job = await scheduler.claim("worker-a", "test-fake-execution")
     assert job
@@ -206,10 +248,21 @@ async def test_expired_worker_without_checkpoint_fails_visibly_without_relaunch(
 
 
 @pytest.mark.anyio
-async def test_priority_and_project_concurrency_are_enforced_during_atomic_claims():
-    _, project_id, actor_id = await seed_project()
-    first_task = await ready_task(project_id, actor_id, key="low-priority")
-    second_task = await ready_task(project_id, actor_id, key="high-priority")
+async def test_priority_and_project_concurrency_are_enforced_during_atomic_claims(
+    tmp_path, monkeypatch
+):
+    project_id, first_task, actor_id, repository_id, *_ = await ready_dispatch_fixture(
+        tmp_path, monkeypatch, key="low-priority"
+    )
+    second_interview_id = await _create_ready_interview(
+        project_id, repository_id, await _user(actor_id), idempotency_key="high-priority"
+    )
+    async with SessionLocal() as db:
+        from harnessa.db.specification import SpecificationInterview
+
+        second_interview = await db.get(SpecificationInterview, second_interview_id)
+        assert second_interview is not None
+        second_task = second_interview.task_id
     async with SessionLocal() as db:
         low = await db.get(Task, first_task)
         high = await db.get(Task, second_task)
@@ -230,9 +283,8 @@ async def test_priority_and_project_concurrency_are_enforced_during_atomic_claim
 
 
 @pytest.mark.anyio
-async def test_wall_time_limit_stops_retry_and_creates_dead_letter():
-    _, project_id, actor_id = await seed_project()
-    task_id = await ready_task(project_id, actor_id)
+async def test_wall_time_limit_stops_retry_and_creates_dead_letter(tmp_path, monkeypatch):
+    _, task_id, _, *_ = await ready_dispatch_fixture(tmp_path, monkeypatch)
     scheduler = Scheduler(global_limit=1, max_attempts=3, max_wall_seconds=1)
     job = await scheduler.claim("slow-worker", "test-fake-execution")
     assert job is not None
@@ -254,12 +306,9 @@ async def test_wall_time_limit_stops_retry_and_creates_dead_letter():
 
 
 @pytest.mark.anyio
-async def test_active_cancel_is_forwarded_to_adapter_and_audited():
-    _, project_id, actor_id = await seed_project()
-    task_id = await ready_task(project_id, actor_id)
-    scheduler = Scheduler(
-        global_limit=1, lease_seconds=5, heartbeat_seconds=0.05, max_attempts=2
-    )
+async def test_active_cancel_is_forwarded_to_adapter_and_audited(tmp_path, monkeypatch):
+    _, task_id, actor_id, *_ = await ready_dispatch_fixture(tmp_path, monkeypatch)
+    scheduler = Scheduler(global_limit=1, lease_seconds=5, heartbeat_seconds=0.05, max_attempts=2)
     adapter = FakeExecutionAdapter(mode="wait_for_cancel")
     running = asyncio.create_task(scheduler.run_once(adapter, "cancel-worker"))
     await asyncio.wait_for(adapter.started.wait(), timeout=2)
@@ -267,8 +316,12 @@ async def test_active_cancel_is_forwarded_to_adapter_and_audited():
         task = await db.get(Task, task_id)
         actor = await db.get(User, actor_id)
         cancelled, _ = await command_task(
-            db, task_id=task_id, actor=actor, command=TaskCommand.CANCEL,
-            expected_version=task.version, reason="Operator stopped active execution",
+            db,
+            task_id=task_id,
+            actor=actor,
+            command=TaskCommand.CANCEL,
+            expected_version=task.version,
+            reason="Operator stopped active execution",
             command_key="cancel-active-run",
         )
         assert cancelled.stage == TaskStage.CANCELLED.value
@@ -279,17 +332,18 @@ async def test_active_cancel_is_forwarded_to_adapter_and_audited():
         task = await db.get(Task, task_id)
         run = await db.scalar(select(Run).where(Run.task_id == task_id))
         transitions = (
-            await db.execute(select(TaskTransition).where(TaskTransition.task_id == task_id))
-        ).scalars().all()
+            (await db.execute(select(TaskTransition).where(TaskTransition.task_id == task_id)))
+            .scalars()
+            .all()
+        )
         assert task.stage == TaskStage.CANCELLED.value
         assert run.status == RunStatus.CANCELLED.value
         assert any(item.command == "cancel" for item in transitions)
 
 
 @pytest.mark.anyio
-async def test_retry_exhaustion_cancellation_commands_and_operator_replay():
-    _, project_id, actor_id = await seed_project()
-    task_id = await ready_task(project_id, actor_id)
+async def test_retry_exhaustion_cancellation_commands_and_operator_replay(tmp_path, monkeypatch):
+    _, task_id, actor_id, *_ = await ready_dispatch_fixture(tmp_path, monkeypatch)
     scheduler = Scheduler(global_limit=2, max_attempts=1, rng=lambda: 0.5)
     assert await scheduler.run_once(FakeExecutionAdapter(mode="transient_failure"), "worker-a")
     async with SessionLocal() as db:
@@ -299,7 +353,9 @@ async def test_retry_exhaustion_cancellation_commands_and_operator_replay():
         dead = await db.scalar(select(DeadLetter).where(DeadLetter.task_id == task_id))
         actor = await db.get(User, actor_id)
         recovered, replayed = await replay_dead_letter(
-            db, dead_letter_id=dead.id, actor=actor,
+            db,
+            dead_letter_id=dead.id,
+            actor=actor,
             reason="Operator reviewed failure and requested recovery",
             command_key="replay-dead-letter",
         )
@@ -310,8 +366,12 @@ async def test_retry_exhaustion_cancellation_commands_and_operator_replay():
         task = await db.get(Task, task_id)
         actor = await db.get(User, actor_id)
         paused, _ = await command_task(
-            db, task_id=task_id, actor=actor, command=TaskCommand.PAUSE,
-            expected_version=task.version, reason="Pause during recovery test",
+            db,
+            task_id=task_id,
+            actor=actor,
+            command=TaskCommand.PAUSE,
+            expected_version=task.version,
+            reason="Pause during recovery test",
             command_key="pause-recovered",
         )
         assert paused.run_status == RunStatus.PAUSED.value
@@ -319,8 +379,13 @@ async def test_retry_exhaustion_cancellation_commands_and_operator_replay():
         task = await db.get(Task, task_id)
         actor = await db.get(User, actor_id)
         resumed, _ = await command_task(
-            db, task_id=task_id, actor=actor, command=TaskCommand.RESUME,
-            expected_version=task.version, reason="Resume test", command_key="resume-recovered",
+            db,
+            task_id=task_id,
+            actor=actor,
+            command=TaskCommand.RESUME,
+            expected_version=task.version,
+            reason="Resume test",
+            command_key="resume-recovered",
         )
         assert resumed.run_status == RunStatus.QUEUED.value
     assert retry_delay_seconds(3, "rate_limited", retry_after_seconds=7) == 7
@@ -333,16 +398,26 @@ async def test_duplicate_commands_outbox_crash_ack_dedup_and_redis_rebuild(monke
     async with SessionLocal() as db:
         actor = await db.get(User, actor_id)
         task, replayed = await create_task(
-            db, project_id=project_id, actor=actor, title="One command",
-            description="Deduplicate", priority=0, command_key="same-create-key",
+            db,
+            project_id=project_id,
+            actor=actor,
+            title="One command",
+            description="Deduplicate",
+            priority=0,
+            command_key="same-create-key",
         )
         task_id = task.id
         assert not replayed
     async with SessionLocal() as db:
         actor = await db.get(User, actor_id)
         task, replayed = await create_task(
-            db, project_id=project_id, actor=actor, title="One command",
-            description="Deduplicate", priority=0, command_key="same-create-key",
+            db,
+            project_id=project_id,
+            actor=actor,
+            title="One command",
+            description="Deduplicate",
+            priority=0,
+            command_key="same-create-key",
         )
         assert replayed
         assert task.id == task_id
@@ -489,7 +564,10 @@ async def test_api_task_contracts_authorization_and_project_cursor_replay():
             login = await client.post(
                 "/auth/cookie/login",
                 headers={"Origin": origin, "X-CSRF-Token": csrf},
-                data={"username": "administrator@example.test", "password": "test-password-long-enough"},
+                data={
+                    "username": "administrator@example.test",
+                    "password": "test-password-long-enough",
+                },
             )
             assert login.status_code == 204
             write_headers = {
