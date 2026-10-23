@@ -49,6 +49,7 @@ nav:
   - Architecture: architecture.md
   - Compatibility: compatibility.md
   - Development MCPs: development/mcp-servers.md
+  - Local model gateway: development/model-gateway-local.md
   - Retrieval and MCP integration: integrations/retrieval-mcp.md
   - GitHub App integration: integrations/github-app.md
   - Evidence provenance: integrations/evidence-plane.md
