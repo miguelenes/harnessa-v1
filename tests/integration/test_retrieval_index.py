@@ -41,6 +41,7 @@ from harnessa.services.retrieval_index import sync_repository_index
 from harnessa.services.specifications import search_repository
 from harnessa.services.verification_evidence import (
     VerificationEvidenceInput,
+    bind_run_source_revision,
     record_verification_evidence,
 )
 from pwdlib import PasswordHash
@@ -495,13 +496,17 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, project_id, repository_id, actor, manager = await _source_fixture(tmp_path, monkeypatch)
+    (root / "docs/guide.md").write_text("Second commit for revision binding evidence.\n")
+    _git(root, "add", "docs/guide.md")
+    await asyncio.to_thread(_commit, root, "second revision")
+    source_revision = await asyncio.to_thread(_git, root, "rev-parse", "HEAD")
+    other_valid_revision = await asyncio.to_thread(_git, root, "rev-parse", "HEAD^")
     async with SessionLocal() as db:
         project = await db.get(Project, project_id)
         assert project is not None
         task = Task(project_id=project_id, title="Fixture verification", stage="DONE", run_status="SUCCEEDED")
         db.add(task)
         await db.flush()
-        source_revision = await asyncio.to_thread(_git, root, "rev-parse", "HEAD")
         db.add(
             SpecificationInterview(
                 organization_id=project.organization_id,
@@ -528,6 +533,18 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
         )
         db.add(run)
         await db.flush()
+        await bind_run_source_revision(
+            db,
+            organization_id=project.organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            task_id=task.id,
+            run_id=run.id,
+            attempt=1,
+            fencing_token=7,
+            source_revision=source_revision,
+            workspace_manager=manager,
+        )
         evidence = VerificationEvidenceInput(
             organization_id=project.organization_id,
             project_id=project_id,
@@ -575,6 +592,13 @@ async def test_verified_run_evidence_is_explicit_scoped_and_searchable(
                 workspace_manager=manager,
             )
         assert wrong_repository.value.status_code == 409
+        with pytest.raises(HTTPException) as different_valid_revision:
+            await record_verification_evidence(
+                db,
+                replace(evidence, source_record_id="fixture-verifier-other-revision", source_revision=other_valid_revision),
+                workspace_manager=manager,
+            )
+        assert different_valid_revision.value.status_code == 409
         with pytest.raises(HTTPException) as unknown_revision:
             await record_verification_evidence(
                 db,

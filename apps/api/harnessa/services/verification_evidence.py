@@ -41,6 +41,58 @@ class VerificationEvidenceInput:
     artifact_digest: str | None = None
 
 
+async def bind_run_source_revision(
+    db: AsyncSession,
+    *,
+    organization_id: UUID,
+    project_id: UUID,
+    repository_id: UUID,
+    task_id: UUID,
+    run_id: UUID,
+    attempt: int,
+    fencing_token: int,
+    source_revision: str,
+    workspace_manager: SpecificationWorkspaceManager,
+) -> Run:
+    """Bind the tested Git commit to a run exactly once from trusted execution code."""
+    run = await db.scalar(select(Run).where(Run.id == run_id))
+    task = await db.scalar(select(Task).where(Task.id == task_id))
+    project = await db.scalar(select(Project).where(Project.id == project_id))
+    interview = await db.scalar(
+        select(SpecificationInterview).where(SpecificationInterview.task_id == task_id)
+    )
+    repository = await db.scalar(
+        select(Repository).where(
+            Repository.id == repository_id,
+            Repository.project_id == project_id,
+        )
+    )
+    if (
+        run is None
+        or task is None
+        or project is None
+        or repository is None
+        or interview is None
+        or run.task_id != task_id
+        or run.project_id != project_id
+        or run.attempt != attempt
+        or run.fencing_token != fencing_token
+        or task.project_id != project_id
+        or project.organization_id != organization_id
+        or interview.project_id != project_id
+        or interview.repository_id != repository_id
+    ):
+        raise HTTPException(409, "Run source revision scope does not match the durable task")
+    if not await workspace_manager.contains_revision(repository, source_revision):
+        raise HTTPException(409, "Tested source revision is not a commit in the bound repository")
+    if run.source_revision is not None and run.source_revision != source_revision:
+        raise HTTPException(409, "Run source revision is already bound to a different commit")
+    if run.source_revision is None:
+        run.source_revision = source_revision
+        await db.flush()
+    return run
+
+
 async def record_verification_evidence(
     db: AsyncSession,
     evidence: VerificationEvidenceInput,
@@ -96,6 +148,7 @@ async def record_verification_evidence(
         or run.project_id != evidence.project_id
         or run.attempt != evidence.attempt
         or run.fencing_token != evidence.fencing_token
+        or run.source_revision != evidence.source_revision
         or task.project_id != evidence.project_id
         or interview is None
         or interview.project_id != evidence.project_id

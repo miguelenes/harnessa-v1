@@ -13,6 +13,7 @@ JSON_DOCUMENT = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 
 
 
 def upgrade() -> None:
+    op.add_column("runs", sa.Column("source_revision", sa.String(64), nullable=True))
     op.create_table(
         "verification_evidence",
         sa.Column("organization_id", sa.Uuid(), nullable=False),
@@ -50,3 +51,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_verification_evidence_scope", table_name="verification_evidence")
     op.drop_table("verification_evidence")
+    op.drop_column("runs", "source_revision")
