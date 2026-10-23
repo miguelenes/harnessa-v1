@@ -9,6 +9,15 @@ from ag_ui.core import (
     RunStartedEvent,
     StateDeltaEvent,
     StateSnapshotEvent,
+    StepFinishedEvent,
+    StepStartedEvent,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
+    ToolCallResultEvent,
+    ToolCallStartEvent,
 )
 from ag_ui.encoder import EventEncoder
 from harnessa.adapters.ui_events import project_domain_event
@@ -82,3 +91,73 @@ def test_progress_is_an_allowlisted_delta_and_failure_text_is_redacted() -> None
     encoded = EventEncoder().encode(failed)
     assert "worker_error" in encoded
     assert "hidden" not in encoded
+
+
+def test_agent_messages_project_to_standard_events_and_screen_credentials() -> None:
+    step_started = project_domain_event(domain_event("run.step_started"))
+    message_started = project_domain_event(
+        domain_event("run.message_started", {"message_id": "opaque-message-id"})
+    )
+    safe_content = project_domain_event(
+        domain_event(
+            "run.message_content",
+            {"message_id": "opaque-message-id", "text": "The task is ready."},
+        )
+    )
+    secret_content = project_domain_event(
+        domain_event(
+            "run.message_content",
+            {"message_id": "opaque-message-id", "text": "api_key=do-not-render"},
+        )
+    )
+    empty_content = project_domain_event(
+        domain_event("run.message_content", {"message_id": "opaque-message-id", "text": ""})
+    )
+    message_ended = project_domain_event(
+        domain_event("run.message_ended", {"message_id": "opaque-message-id"})
+    )
+    step_finished = project_domain_event(
+        domain_event("run.step_finished", {"outcome": "completed"})
+    )
+
+    assert isinstance(step_started, StepStartedEvent)
+    assert isinstance(message_started, TextMessageStartEvent)
+    assert isinstance(safe_content, TextMessageContentEvent)
+    assert safe_content.delta == "The task is ready."
+    assert isinstance(secret_content, TextMessageContentEvent)
+    assert "do-not-render" not in EventEncoder().encode(secret_content)
+    assert isinstance(empty_content, TextMessageContentEvent)
+    assert empty_content.delta == "Agent message omitted by Harnessa's display safety policy."
+    assert isinstance(message_ended, TextMessageEndEvent)
+    assert isinstance(step_finished, StepFinishedEvent)
+
+
+def test_tool_activity_projects_lifecycle_but_never_arguments_or_results() -> None:
+    start = project_domain_event(
+        domain_event(
+            "run.tool_started",
+            {"tool_call_id": "opaque-tool-id", "tool_name": "read", "title": "private/path"},
+        )
+    )
+    args = project_domain_event(
+        domain_event("run.tool_args_redacted", {"tool_call_id": "opaque-tool-id", "args": "secret"})
+    )
+    ended = project_domain_event(
+        domain_event("run.tool_ended", {"tool_call_id": "opaque-tool-id", "outcome": "completed"})
+    )
+    result = project_domain_event(
+        domain_event(
+            "run.tool_result_redacted",
+            {"tool_call_id": "opaque-tool-id", "result": "private command output"},
+        )
+    )
+
+    assert isinstance(start, ToolCallStartEvent)
+    assert isinstance(args, ToolCallArgsEvent)
+    assert isinstance(ended, ToolCallEndEvent)
+    assert isinstance(result, ToolCallResultEvent)
+    for projected in (start, args, ended, result):
+        encoded = EventEncoder().encode(projected)
+        assert "private" not in encoded
+        assert "secret" not in encoded
+        assert "private command output" not in encoded

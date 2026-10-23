@@ -9,11 +9,13 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 from acp import PROTOCOL_VERSION, connect_to_agent, text_block
 from acp.interfaces import Client
 from acp.schema import (
     AcpMcpServer,
+    AgentMessageChunk,
     AllowedOutcome,
     ClientCapabilities,
     DeniedOutcome,
@@ -25,10 +27,14 @@ from acp.schema import (
     PermissionOption,
     RequestPermissionResponse,
     SseMcpServer,
+    TextContent,
+    ToolCallProgress,
+    ToolCallStart,
     ToolCallUpdate,
 )
 
 from harnessa.adapters.sandbox_policy import permission_allowed
+from harnessa.domain.content_safety import safe_content_for_ui
 
 logger = logging.getLogger("harnessa.acp_session")
 
@@ -135,14 +141,92 @@ class _SandboxACPClient:
         self,
         max_updates: int,
         on_progress: Callable[[Mapping[str, int]], Awaitable[None]] | None = None,
+        on_ui_event: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None,
         workspace_root: Path | None = None,
     ) -> None:
         self.max_updates = max_updates
         self.on_progress = on_progress
+        self.on_ui_event = on_ui_event
         self.workspace_root = workspace_root
         self.update_counts: Counter[str] = Counter()
         self.limit_exceeded = asyncio.Event()
         self.progress_error: Exception | None = None
+        self._max_ui_events = min(max_updates, 512)
+        self._ui_event_count = 0
+        self._message_source_id: str | None = None
+        self._message_id: str | None = None
+        self._message_chunks: list[str] = []
+        self._message_char_count = 0
+        self._message_overflow = False
+        self._message_count = 0
+        self._tool_ids: dict[str, str] = {}
+
+    async def _emit_ui_event(self, event: Mapping[str, Any]) -> None:
+        if self.on_ui_event is None or self._ui_event_count >= self._max_ui_events:
+            return
+        try:
+            await self.on_ui_event(event)
+            self._ui_event_count += 1
+        except Exception as exc:  # noqa: BLE001 - durable event failure stops unsafe continuation.
+            self.progress_error = exc
+            self.limit_exceeded.set()
+
+    async def start_step(self) -> None:
+        await self._emit_ui_event({"kind": "step_started", "step_name": "agent_execution"})
+
+    async def finish_step(self, outcome: str) -> None:
+        await self.finish_message()
+        await self._emit_ui_event(
+            {"kind": "step_finished", "step_name": "agent_execution", "outcome": outcome}
+        )
+
+    async def finish_message(self) -> None:
+        if self._message_id is None:
+            return
+        message_id = self._message_id
+        self._message_count += 1
+        if self._message_overflow:
+            text = "Agent message omitted because it exceeded the safe display limit."
+        else:
+            text = "".join(self._message_chunks)
+            if not safe_content_for_ui(text):
+                text = "Agent message omitted by Harnessa's credential safety policy."
+        await self._emit_ui_event(
+            {"kind": "message_content", "message_id": message_id, "text": text}
+        )
+        await self._emit_ui_event({"kind": "message_ended", "message_id": message_id})
+        self._message_source_id = None
+        self._message_id = None
+        self._message_chunks.clear()
+        self._message_char_count = 0
+        self._message_overflow = False
+
+    async def _tool_update(self, update: ToolCallStart | ToolCallProgress | ToolCallUpdate) -> None:
+        source_id = getattr(update, "tool_call_id", "")
+        if not isinstance(source_id, str) or not source_id:
+            return
+        await self.finish_message()
+        tool_id = self._tool_ids.get(source_id)
+        if isinstance(update, ToolCallStart) and tool_id is None:
+            tool_id = str(uuid4())
+            self._tool_ids[source_id] = tool_id
+            kind = getattr(update, "kind", None)
+            safe_kind = kind if kind in {
+                "read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"
+            } else "other"
+            await self._emit_ui_event(
+                {"kind": "tool_started", "tool_call_id": tool_id, "tool_name": safe_kind}
+            )
+            await self._emit_ui_event({"kind": "tool_args_redacted", "tool_call_id": tool_id})
+        status = getattr(update, "status", None)
+        if tool_id and status in {"completed", "failed"}:
+            await self._emit_ui_event(
+                {"kind": "tool_ended", "tool_call_id": tool_id, "outcome": status}
+            )
+            await self._emit_ui_event(
+                {"kind": "tool_result_redacted", "tool_call_id": tool_id}
+            )
+            self._tool_ids.pop(source_id, None)
 
     async def request_permission(
         self,
@@ -166,6 +250,28 @@ class _SandboxACPClient:
         count = sum(self.update_counts.values())
         if count > self.max_updates:
             self.limit_exceeded.set()
+        elif isinstance(update, AgentMessageChunk):
+            content = update.content
+            if not isinstance(content, TextContent):
+                await self.finish_message()
+                return
+            source_id = update.message_id or f"anonymous-{self._message_count + 1}"
+            if source_id != self._message_source_id:
+                await self.finish_message()
+                self._message_source_id = source_id
+                self._message_id = str(uuid4())
+                await self._emit_ui_event(
+                    {"kind": "message_started", "message_id": self._message_id}
+                )
+            chunk = content.text
+            if self._message_char_count + len(chunk) > 8192:
+                self._message_overflow = True
+                self._message_chunks.clear()
+            elif not self._message_overflow:
+                self._message_chunks.append(chunk)
+            self._message_char_count += len(chunk)
+        elif isinstance(update, (ToolCallStart, ToolCallProgress, ToolCallUpdate)):
+            await self._tool_update(update)
         elif self.on_progress is not None and count % 100 == 0:
             try:
                 await self.on_progress(dict(self.update_counts))
@@ -186,12 +292,15 @@ class ACPAgentSession:
         max_updates: int,
         idle_timeout_seconds: float = 300,
         on_progress: Callable[[Mapping[str, int]], Awaitable[None]] | None = None,
+        on_ui_event: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None,
         workspace_root: Path | None = None,
     ) -> None:
         if process.stdin is None or process.stdout is None:
             raise ACPProtocolError("ACP subprocess requires stdin and stdout pipes")
         self.process = process
-        self.client = _SandboxACPClient(max_updates, on_progress, workspace_root)
+        self.client = _SandboxACPClient(
+            max_updates, on_progress, on_ui_event, workspace_root
+        )
         self.transport = BoundedStdioTransport(
             process.stdout,
             process.stdin,
@@ -243,10 +352,12 @@ class ACPAgentSession:
     async def prompt(self, content: str, *, timeout_seconds: float) -> str:
         if self.session_id is None:
             raise ACPProtocolError("ACP session was not created")
+        await self.client.start_step()
         prompt_task = asyncio.create_task(
             self.connection.prompt(self.session_id, [text_block(content)])
         )
         limit_task = asyncio.create_task(self.client.limit_exceeded.wait())
+        outcome = "failed"
         try:
             done, _ = await asyncio.wait(
                 {prompt_task, limit_task},
@@ -263,12 +374,14 @@ class ACPAgentSession:
                 response = await prompt_task
             except Exception as exc:
                 raise ACPProtocolError("ACP agent failed while handling a prompt") from exc
+            outcome = "cancelled" if response.stop_reason == "cancelled" else "completed"
             return str(response.stop_reason)
         finally:
             for task in (prompt_task, limit_task):
                 if not task.done():
                     task.cancel()
             await asyncio.gather(prompt_task, limit_task, return_exceptions=True)
+            await self.client.finish_step(outcome)
 
     async def cancel(self) -> None:
         if self.session_id is not None and self.process.returncode is None:

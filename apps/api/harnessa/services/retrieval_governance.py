@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Protocol
 
+from harnessa.domain.content_safety import safe_content_for_ui
+
 MAX_DOCUMENT_BYTES = 2_000_000
 MAX_CHUNK_BYTES = 4_000
 MAX_TOOL_OUTPUT_BYTES = 64_000
@@ -22,11 +24,6 @@ SUPPORTED_MCP_PROTOCOLS = (
     "2025-03-26",
     "2024-11-05",
 )
-_SECRET_WORDS = re.compile(
-    r"(?i)(api[_-]?key|secret|password|token|credential)\s*[:=]|"
-    r"-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----|"
-    r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})\b"
-)
 _HIDDEN_EVAL_PARTS = frozenset(
     {".evals", "evals", "evaluation", "benchmarks", "fixtures-private", "grader", "golden"}
 )
@@ -35,7 +32,7 @@ _SECRET_NAMES = frozenset({".env", ".env.local", "id_rsa", "id_ed25519", "creden
 
 def safe_retrieval_content(content: str) -> bool:
     """Apply the same secret-content exclusion at every retrieval boundary."""
-    return _SECRET_WORDS.search(content) is None
+    return safe_content_for_ui(content)
 
 
 @dataclass(frozen=True)
