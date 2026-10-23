@@ -449,7 +449,6 @@ class HarnessExperimentWorker:
                     await adapter.cancel_active()
             result = await runner
             if await self._cancelled(experiment_id, attempt):
-                await self._persist(frozen, adapter, result)
                 await self._finish(experiment_id, attempt, "cancelled", "Cancellation requested during probe execution")
                 return
             await self._execute_composed(frozen, adapter, result)
@@ -564,6 +563,23 @@ class HarnessExperimentWorker:
 
     async def _persist(self, frozen: FrozenExperiment, adapter: HarnessACPTaskAdapter, result: dict[str, Any]) -> None:
         async with self._sessions() as db:
+            exp = await db.scalar(select(HarnessExperiment).where(
+                HarnessExperiment.id == frozen.experiment_id
+            ).with_for_update())
+            policy = await db.scalar(select(HarnessPolicy).where(
+                HarnessPolicy.project_id == frozen.project_id
+            ))
+            interview = await db.scalar(select(SpecificationInterview).where(
+                SpecificationInterview.task_id == frozen.task_id
+            ))
+            if (
+                exp is None or not _experiment_current(exp, frozen)
+                or policy is None or policy.revision != frozen.policy_revision
+                or interview is None or interview.readiness_state != "READY"
+                or (interview.base_sha, interview.artifact_hash, interview.revision)
+                != (frozen.base_sha, frozen.specification_hash, frozen.specification_revision)
+            ):
+                return
             base_tree = harness_tree.read_tree(adapter.substrate.surface(), adapter.base_harness())
             for record in adapter.records:
                 trace = (Path(record["run_dir"]) / "trajectory.txt").read_bytes()[:200_000]
@@ -587,7 +603,6 @@ class HarnessExperimentWorker:
                     trace_size_bytes=stored.size_bytes, component_diff=record.get("component_diff", component_diff(base_tree, record["tree"])),
                     outcome_detail=record["outcome"][:4_000],
                 ))
-            exp = await db.get(HarnessExperiment, frozen.experiment_id)
             if exp:
                 proposer_ledger = list(await db.scalars(select(ModelRequestLedger).where(
                     ModelRequestLedger.run_id == frozen.proposer_run_id,

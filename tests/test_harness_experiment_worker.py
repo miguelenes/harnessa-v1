@@ -4,7 +4,7 @@ import asyncio
 import subprocess
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from uuid import uuid4
 
 import pytest
@@ -160,6 +160,57 @@ async def test_probe_trace_records_behavior_shape_without_message_content() -> N
     assert events[0]["tool_name"] == "execute"
     assert events[0]["text_chars"] == len("private command content")
     assert "private command content" not in str(events)
+
+
+@pytest.mark.anyio
+async def test_stale_attempt_cannot_persist_canonical_probe_evidence(tmp_path: Path) -> None:
+    experiment_id = uuid4()
+    task_id = uuid4()
+    project_id = uuid4()
+    frozen = FrozenExperiment(
+        experiment_id=experiment_id,
+        task_id=task_id,
+        project_id=project_id,
+        organization_id=uuid4(),
+        base_sha="a" * 40,
+        specification_hash="b" * 64,
+        specification_revision=2,
+        policy_revision=3,
+        mode="parallel",
+        k=1,
+        route_alias="probe-route",
+        image_revision="sha256:agent",
+        tool_revision="upstream-revision",
+        root=tmp_path,
+        claim_attempt=4,
+    )
+    stale_experiment = type(
+        "StaleExperiment",
+        (),
+        {"id": experiment_id, "status": "running", "attempts": 5, "cancel_requested_at": None},
+    )()
+
+    class Session:
+        committed = False
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def scalar(self, _statement: object) -> object:
+            return stale_experiment
+
+        async def commit(self) -> None:
+            self.committed = True
+
+    session = Session()
+    worker = HarnessExperimentWorker(None, sessions=lambda: session)  # type: ignore[arg-type]
+
+    await worker._persist(frozen, object(), {})  # type: ignore[arg-type]
+
+    assert session.committed is False
 
 
 def test_probe_record_labels_are_bounded_and_distinct() -> None:
