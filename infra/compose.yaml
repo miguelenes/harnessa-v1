@@ -2,6 +2,11 @@ name: harnessa
 services:
   db:
     image: postgres:16.13-bookworm@sha256:472efd9a66f2b2f1a5aeb18b28de74332e6ef88c2b93a1a5d812fb6db67a5f60
+    restart: unless-stopped
+    stop_grace_period: 60s
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 256
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-harnessa}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-harnessa}
@@ -18,6 +23,11 @@ services:
       - pgdata:/var/lib/postgresql/data
   redis:
     image: redis:8.10.2-alpine@sha256:615b4cedaff0c1437a1548acae4222572df8c021eeb7382d64cb8b5e3a13ac7a
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -36,6 +46,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SECRET_KEY: ${SECRET_KEY:-}
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       REPOSITORY_TARGETS: ${REPOSITORY_TARGETS:-}
@@ -68,6 +79,13 @@ services:
       GITHUB_WEBHOOK_MAX_BYTES: ${GITHUB_WEBHOOK_MAX_BYTES:-262144}
       GITHUB_WEBHOOK_MAX_ATTEMPTS: ${GITHUB_WEBHOOK_MAX_ATTEMPTS:-12}
     networks: [app_internal]
+    restart: unless-stopped
+    stop_grace_period: 45s
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 256
+    volumes:
+      - artifacts:/var/lib/harnessa/artifacts
     command: ["sh", "-c", "cd apps/api && uv run --no-sync alembic upgrade head && uv run --no-sync uvicorn harnessa.main:app --host 0.0.0.0 --port 8000"]
     ports:
       - "${API_PORT:-8010}:8000"
@@ -93,6 +111,11 @@ services:
       NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8010}
     ports:
       - "${WEB_PORT:-3000}:3000"
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
     depends_on:
       - api
     networks: [app_internal]
@@ -138,6 +161,13 @@ services:
       GITHUB_WEBHOOK_MAX_BYTES: ${GITHUB_WEBHOOK_MAX_BYTES:-262144}
       GITHUB_WEBHOOK_MAX_ATTEMPTS: ${GITHUB_WEBHOOK_MAX_ATTEMPTS:-12}
     networks: [app_internal]
+    restart: unless-stopped
+    stop_grace_period: 60s
+    mem_limit: 4g
+    cpus: 2.0
+    pids_limit: 256
+    volumes:
+      - artifacts:/var/lib/harnessa/artifacts
     command: ["uv", "run", "--no-sync", "python", "-m", "harnessa.worker"]
     depends_on:
       api:
@@ -162,6 +192,11 @@ services:
       timeout: 3s
       retries: 30
     networks: [app_internal, provider_egress]
+    restart: unless-stopped
+    stop_grace_period: 45s
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 256
   qdrant:
     profiles: [retrieval]
     image: docker.io/qdrant/qdrant:v1.19.2@sha256:390ca16351185f9913c23d0c95ded0cdf2ce17e525dd7fbe58d3339c9c80e633
@@ -185,6 +220,7 @@ services:
       retries: 20
 volumes:
   pgdata: {}
+  artifacts: {}
   qdrantdata: {}
 networks:
   app_internal:

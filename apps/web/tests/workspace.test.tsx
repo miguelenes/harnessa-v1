@@ -64,7 +64,7 @@ describe("workspace routes and task board", () => {
       if (url.endsWith("/models/usage")) return response({ billed_usd: "0.00", estimated_usd: "0.00", input_tokens: 0, output_tokens: 0, unknown_usage_requests: 0, pending_reservations: 0 });
       if (url.endsWith("/models/requests?limit=50")) return response([]);
       if (url.endsWith("/models/budget")) return response({}, 404);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.endsWith("/tasks/task-1/runs")) return response([]);
       if (url.endsWith("/tasks/task-1/capabilities")) return response({ allowed_commands: [], allowed_transitions: ["SPECIFYING"] });
       if (url.endsWith("/tasks/task-1/specification-interview")) return response({}, 404);
@@ -105,17 +105,91 @@ describe("workspace routes and task board", () => {
     ));
   });
 
+  it("searches and filters task cards by authorized stage", async () => {
+    const second = { ...task, id: "task-2", title: "Audit migration", stage: "READY" as const };
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/projects")) return response([project]);
+      if (url.includes("/events/stream")) return response({}, 403);
+      if (url.endsWith("/tasks?limit=100")) return response([task, second]);
+      if (url.endsWith("/tasks/task-1/runs") || url.endsWith("/tasks/task-2/runs")) return response([]);
+      return response({}, 404);
+    });
+    render(<Workspace section="board" />);
+    expect(await screen.findByRole("button", { name: /Prepare release/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Audit migration/ })).toBeTruthy();
+    fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: "audit" } });
+    expect(screen.getByRole("button", { name: /Audit migration/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Prepare release/ })).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: "" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Stage" }), { target: { value: "READY" } });
+    expect(screen.getByRole("button", { name: /Audit migration/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Prepare release/ })).toBeNull();
+  });
+
+  it("loads older task pages from the last visible task cursor", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      ...task,
+      id: `task-${index + 1}`,
+      title: `Task ${index + 1}`,
+    }));
+    const older = { ...task, id: "task-101", title: "Task 101" };
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/projects")) return response([project]);
+      if (url.includes("/events/stream")) return response({}, 403);
+      if (url.endsWith("/tasks?limit=100")) return response(firstPage);
+      if (url.endsWith("/tasks?limit=100&before=task-100")) return response([older]);
+      if (url.includes("/runs")) return response([]);
+      return response({}, 404);
+    });
+
+    render(<Workspace section="board" />);
+    expect(await screen.findByRole("button", { name: /Task 100/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Load older tasks" }));
+    expect(await screen.findByRole("button", { name: /Task 101/ })).toBeTruthy();
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/tasks?limit=100&before=task-100"),
+      expect.objectContaining({ credentials: "include", cache: "no-store" }),
+    );
+  });
+
+  it("reports task pagination failures without hiding the loaded page", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      ...task,
+      id: `task-${index + 1}`,
+      title: `Task ${index + 1}`,
+    }));
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/projects")) return response([project]);
+      if (url.includes("/events/stream")) return response({}, 403);
+      if (url.endsWith("/tasks?limit=100")) return response(firstPage);
+      if (url.includes("/tasks?limit=100&before=")) return response({}, 503);
+      if (url.includes("/runs")) return response([]);
+      return response({}, 404);
+    });
+
+    render(<Workspace section="board" />);
+    expect(await screen.findByRole("button", { name: /Task 100/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Load older tasks" }));
+    expect(await screen.findByText("Older tasks could not be loaded. Retry after checking the connection.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Task 100/ })).toBeTruthy();
+  });
+
   it("renders named application routes and the durable events state", async () => {
     const sampleRun = { id: "run-1", attempt: 2, status: "FAILED", started_at: null, error_code: null };
+    const sampleExperiment = { id: "experiment-1", task_id: task.id, status: "succeeded", mode: "parallel", k: 1, base_sha: "b".repeat(40), specification_hash: "c".repeat(64), policy_revision: 2, upstream_revision: "a".repeat(40), created_at: "2026-10-23T00:00:00Z", result: {} };
     const sampleRequest = { id: "request-1", request_id: "request-1", attempt: 1, event_type: "completed", project_id: project.id, task_id: task.id, run_id: "run-1", account_id: null, deployment_id: null, pool_name: "default", model_alias: "safe-alias", actual_model: null, request_identifier: null, route_decision: "primary", price_revision: null, input_tokens: 10, output_tokens: 5, usage_known: true };
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.endsWith("/tasks/task-1/runs")) return response([sampleRun]);
-      if (url.endsWith("/repositories")) return response([{ id: "repository-1" }]);
-      if (url.endsWith("/specification-explorer")) return response({ revision: "rev-1", entries: [{ revision: "rev-1", path: "openspec/specs/release/spec.md", section: "Requirements", archived: true }] });
+      if (url.endsWith("/projects/project-1/harness")) return response({ experiments: [sampleExperiment] });
+      if (url.endsWith("/repositories")) return response([{ id: "repository-1", target_id: "https://github.com/acme/repo.git", display_name: "Acme repo" }]);
+      if (url.endsWith("/specification-explorer")) return response({ revision: "rev-1", entries: [{ revision: "a".repeat(40), path: "openspec/specs/release/spec.md", section: "Requirements", archived: true }] });
       if (url.endsWith("/models/usage")) return response({ billed_usd: "1.25", estimated_usd: "0.25", input_tokens: 10, output_tokens: 5, unknown_usage_requests: 0, pending_reservations: 0 });
       if (url.endsWith("/models/requests?limit=50")) return response([sampleRequest]);
       if (url.endsWith("/models/budget")) return response({ project_limit_usd: "10", task_limit_usd: "5", run_limit_usd: "2", project_token_limit: 1000, task_token_limit: 500, run_token_limit: 250, max_steps: 10, max_wall_seconds: 60, max_output_tokens: 500, max_attempts: 3 });
@@ -131,15 +205,43 @@ describe("workspace routes and task board", () => {
     for (const [section, heading] of routes) {
       const view = render(<Workspace section={section} />);
       expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
-      if (section === "openspec") expect(await screen.findByText("openspec/specs/release/spec.md")).toBeTruthy();
+      if (section === "openspec") {
+        expect(await screen.findByText("openspec/specs/release/spec.md")).toBeTruthy();
+        expect(screen.getByRole("link", { name: new RegExp(`Open openspec/specs/release/spec.md at source revision ${"a".repeat(40)}`) }).getAttribute("href")).toBe(`https://github.com/acme/repo/blob/${"a".repeat(40)}/openspec/specs/release/spec.md`);
+      }
       if (section === "harness") expect(await screen.findByText("Attempt 2")).toBeTruthy();
       if (section === "evals") expect(await screen.findByText("Specification READY")).toBeTruthy();
+      if (section === "evals") {
+        expect(await screen.findByText("Experiment experiment-1")).toBeTruthy();
+        expect(screen.getByText("b".repeat(40))).toBeTruthy();
+      }
       if (section === "routing") {
         expect(await screen.findByText("Billed spend")).toBeTruthy();
         expect(screen.getByText("Project budget policy")).toBeTruthy();
         expect(screen.getByText("safe-alias")).toBeTruthy();
       }
       if (section === "events") expect(await screen.findByText(/Event access was revoked/)).toBeTruthy();
+      view.unmount();
+    }
+  });
+
+  it("shows empty and unavailable evaluation states without inventing records", async () => {
+    for (const [status, message] of [
+      [403, "Evaluation evidence is not authorized for this project."],
+      [503, "Evaluation evidence is unavailable."],
+      [200, "No Harness² evaluation records are available for this project."],
+    ] as const) {
+      vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/projects")) return response([project]);
+        if (url.includes("/events/stream")) return response({}, 403);
+        if (url.endsWith("/tasks?limit=100")) return response([task]);
+        if (url.endsWith("/projects/project-1/harness")) return response(status === 200 ? { experiments: [] } : {}, status);
+        if (url.includes("/runs")) return response([]);
+        return response({}, 404);
+      });
+      const view = render(<Workspace section="evals" />);
+      expect(await screen.findByText(message)).toBeTruthy();
       view.unmount();
     }
   });
@@ -164,7 +266,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.endsWith("/tasks/task-1/runs")) return response([run]);
       if (url.endsWith("/projects/project-1/harness")) return response(harness);
       if (url.includes("/harness-experiences/") && init?.method === "POST") return response({ status: "recorded" });
@@ -203,7 +305,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.endsWith("/github/status")) return response(status);
       if (url.endsWith("/github/deliveries/delivery-row-1/retry") && init?.method === "POST") return response({ status: "queued" }, 202);
       return response({}, 404);
@@ -255,7 +357,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.endsWith("/tasks/task-1/runs")) return response([run]);
       if (url.endsWith("/tasks/task-1/capabilities")) return response({ allowed_commands: [], allowed_transitions: [] });
       if (url.endsWith("/tasks/task-1/specification-interview")) return response({}, 404);
@@ -295,7 +397,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.endsWith("/tasks/task-1/runs")) return response([]);
       if (url.endsWith("/tasks/task-1/capabilities")) return response({ allowed_commands: ["cancel"], allowed_transitions: [], can_answer_questions: true, can_edit_artifacts: false });
       if (url.endsWith("/tasks/task-1/specification-interview")) return response(interview);
@@ -325,7 +427,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.endsWith("/tasks/task-1/runs")) return response([]);
       if (url.endsWith("/tasks/task-1/capabilities")) return response({ allowed_commands: [], allowed_transitions: [], can_answer_questions: false, can_edit_artifacts: true });
       if (url.endsWith("/tasks/task-1/specification-interview")) return response(interview);
@@ -353,7 +455,7 @@ describe("workspace routes and task board", () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.includes("/events/stream")) {
         streamRequests += 1;
         if (streamRequests > 1) return response({}, 403);
@@ -374,6 +476,7 @@ describe("workspace routes and task board", () => {
             [{ type: "STATE_DELTA", delta: [] }, "Task progress updated"],
             [{ type: "CUSTOM", name: "harnessa.domain_event", value: { private: true } }, "Workspace update"],
             [{ type: "TEXT_MESSAGE_START", messageId: "private-message", role: "assistant" }, "Workspace update"],
+            ...Array.from({ length: 20 }, (_, index) => [{ type: "RUN_STARTED", threadId: "t", runId: `r-${index}` }, "Run started"]),
           ].map(([event], index) => `id: ${index + 7}\ndata: ${JSON.stringify(event)}\n\n`),
         ].join("");
         const body = new ReadableStream<Uint8Array>({
@@ -395,6 +498,16 @@ describe("workspace routes and task board", () => {
     }
     expect(screen.queryByText("private assistant content")).toBeNull();
     expect(screen.queryByText("must not render")).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Search events" }), { target: { value: "Run finished" } });
+    expect(screen.getByText("Run finished")).toBeTruthy();
+    expect(screen.queryByText("Run failed")).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Search events" }), { target: { value: "" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Filter event type" }), { target: { value: "RUN_FINISHED" } });
+    expect(screen.getByText("Run finished")).toBeTruthy();
+    expect(screen.queryByText("Run started")).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Filter event type" }), { target: { value: "all" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load 25 more events" }));
+    expect(await screen.findByText("RUN_STARTED · cursor 36")).toBeTruthy();
   });
 
   it("shows project denial and refreshes an optimistic transition conflict", async () => {
@@ -403,7 +516,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) {
+      if (url.endsWith("/tasks?limit=100")) {
         boardLoads += 1;
         return response([boardLoads === 1 ? task : { ...task, version: 4, stage: "SPECIFYING" }]);
       }
@@ -425,7 +538,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response({}, 403);
+      if (url.endsWith("/tasks?limit=100")) return response({}, 403);
       return response({}, 404);
     });
     render(<Workspace section="board" />);
@@ -437,7 +550,7 @@ describe("workspace routes and task board", () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.includes("/events/stream")) {
         streamRequests += 1;
         if (streamRequests === 1) return response({ detail: { oldest_available_cursor: 10 } }, 410);
@@ -470,7 +583,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response(created ? [task, { ...task, id: "task-2", title: "Follow-up task" }] : [task]);
+      if (url.endsWith("/tasks?limit=100")) return response(created ? [task, { ...task, id: "task-2", title: "Follow-up task" }] : [task]);
       if (url.endsWith("/projects/project-1/tasks") && init?.method === "POST") {
         createRequests += 1;
         if (createRequests > 1) return response({}, 403);
@@ -497,7 +610,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.endsWith("/tasks/task-1/runs")) return response([run]);
       if (url.endsWith("/tasks/task-1/capabilities")) return response({ allowed_commands: ["cancel"], allowed_transitions: [] });
       if (url.endsWith("/tasks/task-1/specification-interview")) return response({}, 404);
@@ -522,7 +635,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.endsWith("/tasks/task-1/runs")) return response([]);
       if (url.endsWith("/tasks/task-1/capabilities")) return response({ allowed_commands: [], allowed_transitions: ["SPECIFYING"] });
       if (url.endsWith("/tasks/task-1/specification-interview")) return response({}, 404);
@@ -573,7 +686,7 @@ describe("workspace routes and task board", () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
-      if (url.endsWith("/tasks?limit=500")) return response({}, 401);
+      if (url.endsWith("/tasks?limit=100")) return response({}, 401);
       return response({}, 404);
     });
     render(<Workspace section="board" />);
@@ -585,7 +698,7 @@ describe("workspace routes and task board", () => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
       if (url.includes("/events/stream")) return response({}, 403);
-      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
       if (url.endsWith("/tasks/task-1/runs")) return response([]);
       if (url.endsWith("/tasks/task-1/capabilities")) return response({ allowed_commands: [], allowed_transitions: [] });
       if (url.endsWith("/tasks/task-1/specification-interview")) return response(interview);

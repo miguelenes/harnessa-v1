@@ -15,7 +15,7 @@ An open-source foundation for scoped, observable, reviewable repository work.
 </div>
 
 <p align="center">
-  <img src="docs/assets/readme-hero.png" alt="Illustration of repository work moving through verification to human review" width="100%" />
+  <img src="apps/marketing/public/images/governed-workflow.jpg" alt="Illustration of governed agent workspaces connected by a central workflow with verification and review gates" width="100%" />
 </p>
 
 Harnessa is a self-hosted control plane for repository change workflows. It brings project-scoped access, durable orchestration, evidence, and human review together. The cloud portal is a static preview; account provisioning is not available yet.

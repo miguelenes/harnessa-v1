@@ -61,6 +61,16 @@ Buttons have `primary`, `secondary`, `outline`, `ghost`, and `destructive` varia
 - Board task stage, run status, and specification readiness are separate signals. Green indicates verified or ready state only; unavailable routes must say when their backend workflow is not yet available.
 - Astro can render standalone Svelte components through `@astrojs/svelte`; it does not embed or replace the separate SvelteKit app.
 
+## Release asset inventory
+
+| Asset | Format and location | Current use | Provenance/status |
+|---|---|---|---|
+| Harnessa bracket-and-path mark | Native SVG in `apps/web/app/icon.svg` and `apps/marketing/public/favicon.svg`; inline mark in the workspace and cloud portal data URI | Workspace, marketing and cloud portal | Repository-authored vector geometry; no external image license |
+| Governed workflow illustration | JPEG, `apps/marketing/public/images/governed-workflow.jpg` (1536 × 1024) | Marketing hero and README | Generated for this project with the built-in image generation tool; prompt, source dimensions, conversion, and usage are recorded in [`assets/workflow-hero-provenance.md`](assets/workflow-hero-provenance.md). |
+| Next.js workspace favicon/app icon | `apps/web/app/icon.svg`, referenced through Next.js metadata | Browser tab | Repository-authored SVG using Next.js's documented `app/icon.svg` convention |
+
+The legacy `docs/assets/readme-hero.png` remains in the repository for historical continuity but is no longer referenced by the README or product UI; its origin is unknown. The new illustration has recorded provenance and is integrated into both the marketing hero and README. All app shells use the native vector mark as their browser icon.
+
 ## References
 
 - Source tokens: `packages/design-tokens/src/tokens.css`

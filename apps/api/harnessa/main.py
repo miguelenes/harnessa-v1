@@ -1,14 +1,18 @@
+import json
+import logging
+import re
 import secrets
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic.json_schema import models_json_schema
 from redis.asyncio import Redis
 from starlette.middleware.base import RequestResponseEndpoint
@@ -128,6 +132,7 @@ from harnessa.contracts import (
     VerificationManifestApprovalRequest,
     VerificationManifestRevisionRead,
 )
+from harnessa.observability import request_metrics
 
 
 @asynccontextmanager
@@ -144,6 +149,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Harnessa API", version="0.1.0", lifespan=lifespan)
+request_logger = logging.getLogger("harnessa.http")
 
 # These contracts are canonical even before their milestone-specific endpoints exist.
 # Keep them server-owned and publish them in OpenAPI for generated client types.
@@ -279,14 +285,26 @@ app.add_middleware(
         "X-Bootstrap-Token",
         "Idempotency-Key",
         "If-Match",
+        "X-Request-ID",
+        "X-Trace-ID",
     ],
+    expose_headers=["X-Request-ID", "X-Trace-ID"],
 )
 
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
-    request_id = str(uuid4())
+    supplied_request_id = request.headers.get("x-request-id", "")
+    try:
+        request_id = str(UUID(supplied_request_id))
+    except (ValueError, AttributeError):
+        request_id = str(uuid4())
+    supplied_trace_id = request.headers.get("x-trace-id", "")
+    trace_id = supplied_trace_id if re.fullmatch(r"[0-9a-fA-F]{32}", supplied_trace_id) else uuid4().hex
     request.state.request_id = request_id
+    request.state.trace_id = trace_id
+    started = time.perf_counter()
+    response: Response | None = None
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         origin = request.headers.get("origin")
         path = request.url.path
@@ -296,7 +314,7 @@ async def security_headers(request: Request, call_next: RequestResponseEndpoint)
             and not is_github_webhook
             and (not origin or origin not in origins)
         ):
-            return JSONResponse(
+            response = JSONResponse(
                 ErrorResponse(
                     code="origin_denied",
                     message="Origin is not allowed",
@@ -305,11 +323,11 @@ async def security_headers(request: Request, call_next: RequestResponseEndpoint)
                 status_code=403,
                 headers={"X-Request-ID": request_id},
             )
-        if path not in {"/auth/bootstrap", "/auth/csrf"} and not is_github_webhook:
+        if response is None and path not in {"/auth/bootstrap", "/auth/csrf"} and not is_github_webhook:
             cookie = request.cookies.get("harnessa_csrf", "")
             header = request.headers.get("x-csrf-token", "")
             if not cookie or not secrets.compare_digest(cookie, header):
-                return JSONResponse(
+                response = JSONResponse(
                     ErrorResponse(
                         code="csrf_failed",
                         message="CSRF validation failed",
@@ -318,11 +336,50 @@ async def security_headers(request: Request, call_next: RequestResponseEndpoint)
                     status_code=403,
                     headers={"X-Request-ID": request_id},
                 )
-    response = await call_next(request)
+    if response is None:
+        response = await call_next(request)
+    duration = time.perf_counter() - started
+    route = getattr(request.scope.get("route"), "path", "/unmatched")
+    if route != "/internal/metrics":
+        request_metrics.observe(request.method, route, response.status_code, duration)
+    request_logger.info(
+        json.dumps(
+            {
+                "event": "http.request",
+                "request_id": request_id,
+                "trace_id": trace_id,
+                "method": request.method,
+                "route": route,
+                "status": response.status_code,
+                "duration_ms": round(duration * 1000, 3),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Trace-ID"] = trace_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
     return response
+
+
+@app.get("/internal/metrics", include_in_schema=False, response_class=PlainTextResponse)
+async def metrics(request: Request) -> PlainTextResponse:
+    configured_token = settings.metrics_token
+    authorization = request.headers.get("authorization", "")
+    presented_token = authorization.removeprefix("Bearer ")
+    expected_token = configured_token.get_secret_value() if configured_token is not None else ""
+    if (
+        not expected_token
+        or not authorization.startswith("Bearer ")
+        or not secrets.compare_digest(presented_token, expected_token)
+    ):
+        raise HTTPException(status_code=404, detail="Not found")
+    return PlainTextResponse(
+        request_metrics.render(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.exception_handler(HTTPException)
