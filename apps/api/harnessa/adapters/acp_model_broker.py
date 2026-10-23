@@ -44,6 +44,7 @@ class BrokerScope:
     run_id: UUID
     fencing_token: int
     model_alias: str | None = None
+    model_pool: ModelPoolKind = ModelPoolKind.INTERACTIVE
 
 
 class ACPModelBroker:
@@ -270,7 +271,7 @@ def _route_request(
     return ModelRouteRequest(
         task_id=scope.task_id,
         run_id=scope.run_id,
-        pool=ModelPoolKind.INTERACTIVE,
+        pool=scope.model_pool,
         model_alias=scope.model_alias,
         requirements=RouteRequirements(
             protocol=ModelProtocol.CHAT_COMPLETIONS,

@@ -7,8 +7,8 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from harnessa.adapters.acp_model_broker import ACPModelBroker, BrokerScope
-from harnessa.contracts import ModelRouteRequest
+from harnessa.adapters.acp_model_broker import ACPModelBroker, BrokerScope, _route_request
+from harnessa.contracts import ModelPoolKind, ModelRouteRequest
 
 
 class _Session(AbstractAsyncContextManager[object]):
@@ -114,6 +114,29 @@ async def test_broker_binds_model_calls_to_run_scope_and_forwards_tools(tmp_path
     finally:
         await client.aclose()
         await broker.close()
+
+
+def test_broker_preserves_probe_pool_for_adaptation_rollouts() -> None:
+    scope = BrokerScope(
+        token="scoped-token",
+        organization_id=uuid4(),
+        project_id=uuid4(),
+        task_id=uuid4(),
+        run_id=uuid4(),
+        fencing_token=3,
+        model_alias="probe-route",
+        model_pool=ModelPoolKind.PROBE,
+    )
+
+    request = _route_request(
+        {"max_tokens": 128, "messages": [{"role": "user", "content": "bounded probe"}]},
+        scope,
+        256,
+    )
+
+    assert request.pool is ModelPoolKind.PROBE
+    assert request.model_alias == "probe-route"
+    assert request.run_id == scope.run_id
 
 
 @pytest.mark.anyio

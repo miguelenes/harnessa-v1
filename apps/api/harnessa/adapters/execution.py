@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
+from harnessa.contracts import ModelPoolKind
+
 
 @dataclass(frozen=True)
 class TaskInput:
@@ -29,6 +31,10 @@ class RunInput:
     id: UUID
     attempt: int
     fencing_token: int
+    model_pool: ModelPoolKind = ModelPoolKind.INTERACTIVE
+    model_alias: str | None = None
+    persist_ui_events: bool = True
+    probe_event_sink: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None
 
 
 class ExecutionFailure(Exception):

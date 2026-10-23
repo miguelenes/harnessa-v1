@@ -144,6 +144,52 @@ describe("workspace routes and task board", () => {
     }
   });
 
+  it("projects Harness Studio history and sends reviewed promotion and rollback decisions", async () => {
+    const run = { id: "run-1", attempt: 1, status: "SUCCEEDED", started_at: "2026-10-23T00:00:00Z" };
+    const harness = {
+      manifest: {
+        upstream_revision: "a".repeat(40),
+        upstream_license: "Apache-2.0",
+        components: [{ category: "system_prompt", paths: ["systemprompt.md"] }],
+      },
+      experiments: [{ id: "experiment-1", status: "succeeded", mode: "parallel", k: 1, task_id: task.id, base_sha: "b".repeat(40), specification_hash: "c".repeat(64), upstream_revision: "a".repeat(40), result: { composed_successful: true } }],
+      probes: [{ label: "baseline-1", phase: "baseline", status: "succeeded", delivered: true, wall_ms: 100, trace_digest: "d".repeat(64), harness_digest: "e".repeat(64), component_diff: { changed: [] } }],
+      experiences: [
+        { id: "experience-1", cue: "Use narrow fixtures", lesson: "Keep fixture setup local.", status: "candidate", version: 1, repository_scope: "repo/demo", domain_scope: "testing", conflict_key: "fixture-style", expiry_at: "2026-12-01T00:00:00Z", evidence_refs: [{ digest: "f".repeat(64) }], candidate_digest: "1".repeat(64) },
+        { id: "experience-2", cue: "Retain previous rule", lesson: "Restore the reviewed version.", status: "superseded", version: 2, repository_scope: "repo/demo", domain_scope: "testing", conflict_key: "fixture-style", expiry_at: "2026-12-01T00:00:00Z", evidence_refs: [], candidate_digest: "2".repeat(64) },
+      ],
+    };
+    vi.spyOn(window, "prompt").mockReturnValue("Reviewed exact candidate evidence.");
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/projects")) return response([project]);
+      if (url.includes("/events/stream")) return response({}, 403);
+      if (url.endsWith("/tasks?limit=500")) return response([task]);
+      if (url.endsWith("/tasks/task-1/runs")) return response([run]);
+      if (url.endsWith("/projects/project-1/harness")) return response(harness);
+      if (url.includes("/harness-experiences/") && init?.method === "POST") return response({ status: "recorded" });
+      return response({}, 404);
+    });
+
+    render(<Workspace section="harness" />);
+
+    expect(await screen.findByText(/Harness² .* Apache-2.0/)).toBeTruthy();
+    expect(await screen.findByText("Experiment history")).toBeTruthy();
+    expect(screen.getByText("Probe comparisons")).toBeTruthy();
+    expect(screen.getByText("Use narrow fixtures")).toBeTruthy();
+    expect(screen.getByText(/Evidence: .*f{64}/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review and promote" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/harness-experiences/experience-1/promote"),
+      expect.objectContaining({ method: "POST", body: expect.stringContaining("Reviewed exact candidate evidence.") }),
+    ));
+    fireEvent.click(screen.getByRole("button", { name: "Review and roll back to this version" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/harness-experiences/experience-2/rollback"),
+      expect.objectContaining({ method: "POST" }),
+    ));
+  });
+
   it("shows authenticated GitHub health and queues an administrator repair", async () => {
     const status = {
       configured_apps: [{ id: "app-1", app_id: 55, connection_status: "permission_missing", checked_at: null, last_error: "Missing Checks:write" }],
