@@ -467,9 +467,10 @@ async def test_worker_run_persists_success_and_keeps_cancelled_attempts_unpublis
     worker = HarnessExperimentWorker(execution, evaluator=Evaluator())  # type: ignore[arg-type]
     monkeypatch.setattr(worker, "_cancelled", lambda *_: asyncio.sleep(0, result=False))
 
-    async def persist_grade(_frozen: Any, result: dict[str, Any]) -> None:
+    async def persist_grade(_frozen: Any, result: dict[str, Any]) -> bool:
         assert result["holdout_evaluation"]["status"] == "passed"
         assert "score" not in result["holdout_evaluation"]
+        return True
 
     monkeypatch.setattr(worker, "_persist_holdout_evaluation", persist_grade)
 
@@ -498,8 +499,9 @@ async def test_unconfigured_holdout_evaluator_fails_closed(tmp_path: Path, monke
     worker = HarnessExperimentWorker(None)
     persisted: list[dict[str, Any]] = []
 
-    async def persist(_frozen: Any, result: dict[str, Any]) -> None:
+    async def persist(_frozen: Any, result: dict[str, Any]) -> bool:
         persisted.append(result)
+        return True
 
     monkeypatch.setattr(worker, "_persist_holdout_evaluation", persist)
     result: dict[str, Any] = {
@@ -527,8 +529,8 @@ async def test_holdout_evaluator_timeout_stays_unknown(tmp_path: Path, monkeypat
 
     worker = HarnessExperimentWorker(None, evaluator=SlowEvaluator())  # type: ignore[arg-type]
 
-    async def persist(_frozen: Any, _result: dict[str, Any]) -> None:
-        return None
+    async def persist(_frozen: Any, _result: dict[str, Any]) -> bool:
+        return True
 
     monkeypatch.setattr(worker, "_persist_holdout_evaluation", persist)
     result: dict[str, Any] = {
@@ -547,6 +549,45 @@ async def test_holdout_evaluator_timeout_stays_unknown(tmp_path: Path, monkeypat
 
     assert grade["status"] == "unknown"
     assert grade["reason_code"] == "evaluator_timeout"
+
+
+@pytest.mark.anyio
+async def test_rejected_holdout_receipt_commit_cannot_pass_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frozen = FrozenExperiment(
+        experiment_id=uuid4(), task_id=uuid4(), project_id=uuid4(), organization_id=uuid4(),
+        base_sha="a" * 40, specification_hash="b" * 64, specification_revision=1,
+        policy_revision=1, mode="parallel", k=1, route_alias="probe", image_revision="image",
+        tool_revision="tools", root=tmp_path, claim_attempt=2,
+    )
+
+    class PassingEvaluator:
+        async def evaluate(self, manifest: dict[str, Any]) -> dict[str, str]:
+            return {
+                "status": "passed",
+                "manifest_digest": manifest["digest"],
+                "judge_revision": "fixture-v1",
+            }
+
+    worker = HarnessExperimentWorker(None, evaluator=PassingEvaluator())  # type: ignore[arg-type]
+
+    async def reject_commit(_frozen: Any, _result: dict[str, Any]) -> bool:
+        return False
+
+    monkeypatch.setattr(worker, "_persist_holdout_evaluation", reject_commit)
+    result: dict[str, Any] = {
+        "holdout_manifest": {"schema_version": 1, "digest": "c" * 64, "artifacts": []}
+    }
+
+    grade = await worker._grade_holdout(frozen, result)
+
+    assert grade == {
+        "status": "unknown",
+        "reason_code": "frozen_identity_changed_before_receipt_commit",
+        "manifest_digest": "c" * 64,
+    }
+    assert result["holdout_evaluation"] == grade
 
 
 def test_experiment_preflight_rejects_holdout_paths_in_frozen_repository(tmp_path: Path) -> None:

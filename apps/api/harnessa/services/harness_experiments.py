@@ -763,12 +763,19 @@ class HarnessExperimentWorker:
             except Exception as exc:  # noqa: BLE001 - evaluator outage must not bypass the gate
                 safe["status"], safe["reason_code"] = "unknown", f"evaluator_error_{type(exc).__name__}"
         result["holdout_evaluation"] = safe
-        await self._persist_holdout_evaluation(frozen, result)
+        persisted = await self._persist_holdout_evaluation(frozen, result)
+        if not persisted:
+            safe = {
+                "status": "unknown",
+                "reason_code": "frozen_identity_changed_before_receipt_commit",
+                "manifest_digest": manifest_digest,
+            }
+            result["holdout_evaluation"] = safe
         return safe
 
     async def _persist_holdout_evaluation(
         self, frozen: FrozenExperiment, result: dict[str, Any]
-    ) -> None:
+    ) -> bool:
         async with self._sessions() as db:
             exp = await db.scalar(select(HarnessExperiment).where(
                 HarnessExperiment.id == frozen.experiment_id
@@ -786,7 +793,7 @@ class HarnessExperimentWorker:
                 or (interview.base_sha, interview.artifact_hash, interview.revision)
                 != (frozen.base_sha, frozen.specification_hash, frozen.specification_revision)
             ):
-                return
+                return False
             exp.result = dict(result)
             result_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
             stored = await asyncio.to_thread(
@@ -798,6 +805,7 @@ class HarnessExperimentWorker:
             exp.result_storage_key = stored.storage_key
             exp.result_size_bytes = stored.size_bytes
             await db.commit()
+            return True
 
     async def _cancelled(self, experiment_id: UUID, attempt: int) -> bool:
         async with self._sessions() as db:
@@ -853,7 +861,7 @@ class HarnessExperimentWorker:
             row = await db.scalar(select(HarnessExperiment).where(HarnessExperiment.id == experiment_id).with_for_update())
             if row is None or row.status != "running" or row.attempts != attempt:
                 return
-            if status == "succeeded" and row.cancel_requested_at is not None:
+            if status != "cancelled" and row.cancel_requested_at is not None:
                 status = "cancelled"
                 error = "Cancellation was accepted before experiment finalization"
                 result = dict(row.result or {})
