@@ -846,6 +846,280 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/repositories/{repository_id}/verification-manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Latest Verification Manifest */
+        get: operations["latest_verification_manifest_repositories__repository_id__verification_manifest_get"];
+        /** Approve Verification Manifest */
+        put: operations["approve_verification_manifest_repositories__repository_id__verification_manifest_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/review-bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Review Bundle */
+        get: operations["get_review_bundle_tasks__task_id__review_bundle_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/review-decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Review Bundle */
+        post: operations["decide_review_bundle_tasks__task_id__review_decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/integration-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Manual Integration */
+        post: operations["record_manual_integration_tasks__task_id__integration_evidence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integration-evidence/{integration_id}/steps/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Post Integration Step */
+        put: operations["update_post_integration_step_integration_evidence__integration_id__steps__kind__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/github/apps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Github App */
+        post: operations["register_github_app_github_apps_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/github/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Github Status */
+        get: operations["github_status_github_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/github/installations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Github Installation */
+        post: operations["register_github_installation_github_installations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/github/installations/{installation_id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Github Installation */
+        post: operations["refresh_github_installation_github_installations__installation_id__refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/repositories/{repository_id}/github": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Opt In Github Repository */
+        post: operations["opt_in_github_repository_projects__project_id__repositories__repository_id__github_post"];
+        /** Opt Out Github Repository */
+        delete: operations["opt_out_github_repository_projects__project_id__repositories__repository_id__github_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/github/actors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Map Github Actor */
+        post: operations["map_github_actor_github_actors_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/github/deliveries/{delivery_row_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Github Delivery */
+        post: operations["retry_github_delivery_github_deliveries__delivery_row_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/github-publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue Github Review Publication */
+        post: operations["queue_github_review_publication_tasks__task_id__github_publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/github-issue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue Github Issue Creation */
+        post: operations["queue_github_issue_creation_tasks__task_id__github_issue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/github-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue Github Commit Status */
+        post: operations["queue_github_commit_status_tasks__task_id__github_status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/github": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Receive Github Webhook */
+        post: operations["receive_github_webhook_webhooks_github_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -1085,6 +1359,251 @@ export interface components {
             /** Replay Limit */
             replay_limit: number;
         };
+        /** GitHubActorMappingCreate */
+        GitHubActorMappingCreate: {
+            /**
+             * Installation Id
+             * Format: uuid
+             */
+            installation_id: string;
+            /** Github User Id */
+            github_user_id: number;
+            /** Github Login */
+            github_login: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /** GitHubActorMappingRead */
+        GitHubActorMappingRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Installation Id
+             * Format: uuid
+             */
+            installation_id: string;
+            /** Github User Id */
+            github_user_id: number;
+            /** Github Login */
+            github_login: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /** Active */
+            active: boolean;
+        };
+        /** GitHubAppConfigurationCreate */
+        GitHubAppConfigurationCreate: {
+            /** App Id */
+            app_id: number;
+            /** Webhook Id */
+            webhook_id: number;
+            /** Private Key Secret Ref */
+            private_key_secret_ref: string;
+            /** Webhook Secret Ref */
+            webhook_secret_ref: string;
+        };
+        /** GitHubAppConfigurationRead */
+        GitHubAppConfigurationRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** App Id */
+            app_id: number;
+            /** Webhook Id */
+            webhook_id: number;
+            /** Enabled */
+            enabled: boolean;
+            /** Connection Status */
+            connection_status: string;
+            /**
+             * Checked At
+             * @default null
+             */
+            checked_at: string | null;
+            /**
+             * Last Error
+             * @default null
+             */
+            last_error: string | null;
+        };
+        /** GitHubCommitStatusRequest */
+        GitHubCommitStatusRequest: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "success" | "error" | "failure";
+            /** Description */
+            description: string;
+            /** Target Url */
+            target_url?: string | null;
+        };
+        /** GitHubConnectionStatusRead */
+        GitHubConnectionStatusRead: {
+            /** Configured Apps */
+            configured_apps: components["schemas"]["GitHubAppConfigurationRead"][];
+            /** Installations */
+            installations: components["schemas"]["GitHubInstallationRead"][];
+            /** Repository Links */
+            repository_links: components["schemas"]["GitHubRepositoryLinkRead"][];
+            /** Actor Mappings */
+            actor_mappings: components["schemas"]["GitHubActorMappingRead"][];
+            /** Webhook Health */
+            webhook_health: {
+                [key: string]: number;
+            };
+            /** Recent Deliveries */
+            recent_deliveries: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** GitHubDeliveryRepairRequest */
+        GitHubDeliveryRepairRequest: {
+            /** Reason */
+            reason: string;
+        };
+        /** GitHubEffectQueuedRead */
+        GitHubEffectQueuedRead: {
+            /** Queued */
+            queued: boolean;
+            /** Stable Keys */
+            stable_keys: string[];
+        };
+        /** GitHubInstallationCreate */
+        GitHubInstallationCreate: {
+            /**
+             * App Configuration Id
+             * Format: uuid
+             */
+            app_configuration_id: string;
+            /** Installation Id */
+            installation_id: number;
+        };
+        /** GitHubInstallationRead */
+        GitHubInstallationRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * App Configuration Id
+             * Format: uuid
+             */
+            app_configuration_id: string;
+            /** Installation Id */
+            installation_id: number;
+            /** Account Id */
+            account_id: number | null;
+            /** Account Login */
+            account_login: string;
+            /** Account Type */
+            account_type: string;
+            /** Repository Selection */
+            repository_selection: string;
+            /** Granted Permissions */
+            granted_permissions: {
+                [key: string]: string;
+            };
+            /** Active */
+            active: boolean;
+            /**
+             * Checked At
+             * @default null
+             */
+            checked_at: string | null;
+            /**
+             * Last Error
+             * @default null
+             */
+            last_error: string | null;
+        };
+        /** GitHubPublishRequest */
+        GitHubPublishRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /** GitHubRepositoryLinkRead */
+        GitHubRepositoryLinkRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Repository Id
+             * Format: uuid
+             */
+            repository_id: string;
+            /**
+             * Installation Id
+             * Format: uuid
+             */
+            installation_id: string;
+            /** Github Repository Id */
+            github_repository_id: number;
+            /** Full Name */
+            full_name: string;
+            /** Opted In */
+            opted_in: boolean;
+            /** Required Checks */
+            required_checks: string[];
+            /** Topic Label */
+            topic_label: string;
+            /** Setup Status */
+            setup_status: string;
+            /**
+             * Last Synced At
+             * @default null
+             */
+            last_synced_at: string | null;
+            /**
+             * Last Error
+             * @default null
+             */
+            last_error: string | null;
+        };
+        /** GitHubRepositoryOptIn */
+        GitHubRepositoryOptIn: {
+            /**
+             * Installation Id
+             * Format: uuid
+             */
+            installation_id: string;
+            /** Github Repository Id */
+            github_repository_id: number;
+            /** Required Checks */
+            required_checks: string[];
+            /**
+             * Topic Label
+             * @default harnessa
+             */
+            topic_label: string;
+        };
+        /** GitHubWebhookReceipt */
+        GitHubWebhookReceipt: {
+            /**
+             * Accepted
+             * @default true
+             */
+            accepted: boolean;
+            /**
+             * Duplicate
+             * @default false
+             */
+            duplicate: boolean;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1189,6 +1708,19 @@ export interface components {
              * @default true
              */
             untrusted_source_content: boolean;
+        };
+        /** ManualIntegrationRequest */
+        ManualIntegrationRequest: {
+            /** Expected Base Sha */
+            expected_base_sha: string;
+            /** Stable Key */
+            stable_key: string;
+            /** Integration Revision */
+            integration_revision: string;
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
         };
         /** ModelAliasCreate */
         ModelAliasCreate: {
@@ -1793,6 +2325,20 @@ export interface components {
             /** Pending Reservations */
             pending_reservations: number;
         };
+        /** PostIntegrationStepRequest */
+        PostIntegrationStepRequest: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "succeeded" | "failed";
+            /** Result */
+            result?: {
+                [key: string]: unknown;
+            };
+            /** Error */
+            error?: string | null;
+        };
         /** ProjectCreate */
         ProjectCreate: {
             /** Name */
@@ -2056,6 +2602,20 @@ export interface components {
          * @enum {string}
          */
         RetryClass: "transient" | "rate_limited" | "permanent" | "operator";
+        /** ReviewDecisionRequest */
+        ReviewDecisionRequest: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "approve" | "request_changes" | "comment";
+            /** Rationale */
+            rationale: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Bundle Digest */
+            bundle_digest: string;
+        };
         /**
          * Role
          * @enum {string}
@@ -2134,6 +2694,51 @@ export interface components {
              * @default null
              */
             checkpoint_id: string | null;
+            /**
+             * Source Revision
+             * @default null
+             */
+            source_revision: string | null;
+            /**
+             * Base Sha
+             * @default null
+             */
+            base_sha: string | null;
+            /**
+             * Specification Hash
+             * @default null
+             */
+            specification_hash: string | null;
+            /**
+             * Specification Revision
+             * @default null
+             */
+            specification_revision: number | null;
+            /**
+             * Policy Revision
+             * @default null
+             */
+            policy_revision: string | null;
+            /**
+             * Budget Policy Digest
+             * @default null
+             */
+            budget_policy_digest: string | null;
+            /**
+             * Harness Revision
+             * @default null
+             */
+            harness_revision: string | null;
+            /**
+             * Harness Digest
+             * @default null
+             */
+            harness_digest: string | null;
+            /**
+             * Verification Manifest Revision Id
+             * @default null
+             */
+            verification_manifest_revision_id: string | null;
         };
         /**
          * RunStatus
@@ -2523,6 +3128,11 @@ export interface components {
              * @default null
              */
             specification_revision: number | null;
+            /**
+             * Specification Commit Sha
+             * @default null
+             */
+            specification_commit_sha: string | null;
             /** Allowed Transitions */
             allowed_transitions?: components["schemas"]["TaskStage"][];
         };
@@ -2583,6 +3193,70 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * VerificationManifestApprovalRequest
+         * @description Approve the manifest file at one exact, current repository revision.
+         */
+        VerificationManifestApprovalRequest: {
+            /**
+             * Source Path
+             * @default .harnessa/verification.json
+             */
+            source_path: string;
+            /** Source Revision */
+            source_revision: string;
+            /** Protected Fixtures */
+            protected_fixtures?: {
+                [key: string]: string;
+            };
+        };
+        /** VerificationManifestRevisionRead */
+        VerificationManifestRevisionRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Repository Id
+             * Format: uuid
+             */
+            repository_id: string;
+            /** Revision */
+            revision: number;
+            /** Source Path */
+            source_path: string;
+            /** Source Revision */
+            source_revision: string;
+            /** Source Digest */
+            source_digest: string;
+            /** Manifest Digest */
+            manifest_digest: string;
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /**
+             * Approved By
+             * Format: uuid
+             */
+            approved_by: string;
+            /**
+             * Approved At
+             * Format: date-time
+             */
+            approved_at: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** ArtifactMetadata */
         ArtifactMetadata: {
@@ -4756,6 +5430,605 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPToolInvokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    latest_verification_manifest_repositories__repository_id__verification_manifest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                repository_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationManifestRevisionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_verification_manifest_repositories__repository_id__verification_manifest_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                repository_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationManifestApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationManifestRevisionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_review_bundle_tasks__task_id__review_bundle_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_review_bundle_tasks__task_id__review_decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_manual_integration_tasks__task_id__integration_evidence_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualIntegrationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_post_integration_step_integration_evidence__integration_id__steps__kind__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                integration_id: string;
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PostIntegrationStepRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_github_app_github_apps_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubAppConfigurationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubAppConfigurationRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    github_status_github_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubConnectionStatusRead"];
+                };
+            };
+        };
+    };
+    register_github_installation_github_installations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubInstallationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubInstallationRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_github_installation_github_installations__installation_id__refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                installation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubInstallationRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opt_in_github_repository_projects__project_id__repositories__repository_id__github_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                repository_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubRepositoryOptIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubRepositoryLinkRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opt_out_github_repository_projects__project_id__repositories__repository_id__github_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                repository_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    map_github_actor_github_actors_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubActorMappingCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubActorMappingRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_github_delivery_github_deliveries__delivery_row_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                delivery_row_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubDeliveryRepairRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_github_review_publication_tasks__task_id__github_publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubEffectQueuedRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_github_issue_creation_tasks__task_id__github_issue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubEffectQueuedRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_github_commit_status_tasks__task_id__github_status_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubCommitStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubEffectQueuedRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receive_github_webhook_webhooks_github_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-GitHub-Hook-ID": string;
+                "X-GitHub-Delivery": string;
+                "X-GitHub-Event": string;
+                "X-Hub-Signature-256"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubWebhookReceipt"];
                 };
             };
             /** @description Validation Error */

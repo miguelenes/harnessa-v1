@@ -17,7 +17,7 @@ from harnessa.config import settings
 
 GITHUB_API_VERSION = "2022-11-28"
 APP_REQUIRED_PERMISSIONS: dict[str, str] = {
-    "checks": "write",
+    "checks": "read",
     "contents": "write",
     "issues": "write",
     "pull_requests": "write",
@@ -198,7 +198,7 @@ class GitHubAppClient:
         private_key_reference: str,
         installation_id: int,
         repository_ids: list[int],
-        permissions: Mapping[str, str] | None = None,
+        permissions: Mapping[str, str],
     ) -> tuple[str, dict[str, Any]]:
         if (
             not repository_ids
@@ -206,13 +206,13 @@ class GitHubAppClient:
             or any(value <= 0 for value in repository_ids)
         ):
             raise GitHubAppError("Installation tokens require 1 to 100 explicit repository IDs")
-        requested = dict(permissions or APP_REQUIRED_PERMISSIONS)
+        requested = dict(permissions)
         if any(
             permission not in APP_ALLOWED_TOKEN_PERMISSIONS
             or level not in {"read", "write"}
             or (permission == "metadata" and level != "read")
             for permission, level in requested.items()
-        ):
+        ) or not requested:
             raise GitHubAppError("Requested GitHub permission levels are invalid")
         response = await self._request(
             "POST",
@@ -247,7 +247,7 @@ class GitHubAppClient:
         path: str,
         body: dict[str, Any] | None = None,
         params: dict[str, str | int] | None = None,
-        permissions: Mapping[str, str] | None = None,
+        permissions: Mapping[str, str],
     ) -> dict[str, Any] | list[Any]:
         token, _ = await self.create_installation_token(
             app_id=app_id,

@@ -50,6 +50,7 @@ nav:
   - Compatibility: compatibility.md
   - Development MCPs: development/mcp-servers.md
   - Retrieval and MCP integration: integrations/retrieval-mcp.md
+  - GitHub App integration: integrations/github-app.md
   - Design system: design-system.md
   - Architecture decision:
       - Orchestration: adr/0004-run-orchestration.md
@@ -63,6 +64,7 @@ nav:
       - Milestone 7: milestones/07.md
       - Milestone 8: milestones/08.md
       - Milestone 9: milestones/09.md
+      - Milestone 10: milestones/10.md
       - Web foundation: milestones/parallel-web-foundation.md
   - Contributing: contributing.md
   - Security: security.md

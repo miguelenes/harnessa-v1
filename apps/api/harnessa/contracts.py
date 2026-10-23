@@ -848,6 +848,22 @@ class GitHubPublishRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=200)
 
 
+class GitHubIssueCreateRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class GitHubCommitStatusRequest(BaseModel):
+    state: Literal["pending", "success", "error", "failure"]
+    description: str = Field(min_length=1, max_length=140)
+    target_url: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_target_url(self) -> GitHubCommitStatusRequest:
+        if self.target_url is not None and not self.target_url.startswith("https://"):
+            raise ValueError("GitHub status target_url must use HTTPS")
+        return self
+
+
 class GitHubEffectQueuedRead(BaseModel):
     queued: bool
     stable_keys: list[str]

@@ -129,7 +129,9 @@ async def run() -> None:
                 now = asyncio.get_running_loop().time()
                 if now - last_github_reconcile >= 300:
                     try:
-                        await GitHubWebhookProcessor().reconcile_tracked_pull_requests(limit=25)
+                        github_processor = GitHubWebhookProcessor()
+                        await github_processor.reconcile_installation_access(limit=25)
+                        await github_processor.reconcile_tracked_pull_requests(limit=25)
                     except Exception:
                         logger.exception("GitHub pull request reconciliation failed")
                     last_github_reconcile = now

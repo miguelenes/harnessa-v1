@@ -11,7 +11,12 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
-from harnessa.adapters.github_app import GitHubAppClient
+from harnessa.adapters.github_app import (
+    APP_REQUIRED_PERMISSIONS,
+    GitHubAppClient,
+    GitHubAppError,
+    check_permissions,
+)
 from harnessa.config import settings
 from harnessa.db.github import (
     GitHubActorMapping,
@@ -183,6 +188,81 @@ class GitHubWebhookProcessor:
                             ),
                             "check_run",
                         )
+                    installation = await db.get(GitHubInstallation, scope.installation_id)
+                    app = await db.get(GitHubAppConfiguration, app_id)
+                    if installation is not None and app is not None:
+                        remote_reviews = await GitHubAppClient().request_installation(
+                            app_id=app.app_id,
+                            private_key_reference=app.private_key_secret_ref,
+                            installation_id=installation.installation_id,
+                            repository_id=repository_id,
+                            method="GET",
+                            path=f"/repos/{scope.owner}/{scope.name}/pulls/{number}/reviews",
+                            params={"per_page": 100},
+                            permissions={"pull_requests": "read"},
+                        )
+                        if isinstance(remote_reviews, list):
+                            actor_mappings = (
+                                await db.scalars(
+                                    select(GitHubActorMapping).where(
+                                        GitHubActorMapping.installation_id == installation.id,
+                                        GitHubActorMapping.active.is_(True),
+                                    )
+                                )
+                            ).all()
+                            actor_by_github_id = {
+                                mapping.github_user_id: mapping.user_id
+                                for mapping in actor_mappings
+                            }
+                            latest_reviews = _latest_review_state_by_actor(
+                                remote_reviews, actor_by_github_id, current_head or ""
+                            )
+                            pending_reviews: list[tuple[dict[str, Any], str]] = []
+                            for actor_id, review in latest_reviews.items():
+                                review_id = review.get("id")
+                                state = str(review.get("state", "")).casefold()
+                                if not isinstance(review_id, int) or state not in {
+                                    "approved",
+                                    "changes_requested",
+                                    "dismissed",
+                                }:
+                                    continue
+                                action = "dismissed" if state == "dismissed" else "submitted"
+                                key = f"github-review:{installation.installation_id}:{review_id}:{action}"
+                                prior = await db.scalar(
+                                    select(ReviewDecision.id).where(
+                                        ReviewDecision.actor_id == actor_id,
+                                        ReviewDecision.idempotency_key == key,
+                                    )
+                                )
+                                if prior is None:
+                                    pending_reviews.append((review, action))
+                            pending_reviews.sort(
+                                key=lambda item: str(
+                                    item[0].get("submitted_at")
+                                    or item[0].get("created_at")
+                                    or ""
+                                ),
+                                reverse=True,
+                            )
+                            for review, action in pending_reviews[:10]:
+                                review_payload = {
+                                    **payload,
+                                    "review": review,
+                                }
+                                await self._review_changed(
+                                    DeliveryEnvelope(
+                                        id=UUID(int=0),
+                                        organization_id=organization_id,
+                                        app_configuration_id=app.id,
+                                        event_name="pull_request_review",
+                                        action=action,
+                                        installation_number=installation_number,
+                                        github_repository_id=repository_id,
+                                        payload=review_payload,
+                                        delivery_id=f"reconcile-review-{repository_id}-{number}-{review['id']}-{action}",
+                                    )
+                                )
                 reconciled += 1
             except Exception:
                 # A failed remote read remains eligible for the next bounded pass.
@@ -192,6 +272,156 @@ class GitHubWebhookProcessor:
                     number,
                 )
                 continue
+        return reconciled
+
+    async def reconcile_installation_access(self, *, limit: int = 25) -> int:
+        """Refresh installation grants and explicitly opted-in repository access."""
+        if limit < 1 or limit > 100:
+            raise ValueError("GitHub installation reconciliation limit must be between 1 and 100")
+        async with self.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(GitHubInstallation, GitHubAppConfiguration)
+                    .join(
+                        GitHubAppConfiguration,
+                        GitHubAppConfiguration.id == GitHubInstallation.app_configuration_id,
+                    )
+                    .where(
+                        GitHubAppConfiguration.enabled.is_(True),
+                    )
+                    .order_by(GitHubInstallation.checked_at.asc().nulls_first())
+                    .limit(limit)
+                )
+            ).all()
+            snapshots = [
+                (installation.id, installation.installation_id, app.id, app.app_id,
+                 app.private_key_secret_ref, installation.organization_id)
+                for installation, app in rows
+            ]
+        reconciled = 0
+        for installation_uuid, installation_number, app_uuid, app_id, key_ref, organization_id in snapshots:
+            client = GitHubAppClient()
+            try:
+                remote = await client.get_installation(
+                    app_id=app_id,
+                    private_key_reference=key_ref,
+                    installation_id=installation_number,
+                )
+            except GitHubAppError as exc:
+                async with self.session_factory() as db:
+                    installation = await db.get(GitHubInstallation, installation_uuid)
+                    if exc.status_code == 404 and installation is not None:
+                        installation.active = False
+                        installation.checked_at = datetime.now(UTC)
+                        installation.last_error = "GitHub installation no longer exists"
+                        links = (
+                            await db.scalars(
+                                select(GitHubRepositoryLink).where(
+                                    GitHubRepositoryLink.installation_id == installation_uuid,
+                                    GitHubRepositoryLink.opted_in.is_(True),
+                                )
+                            )
+                        ).all()
+                        for link in links:
+                            link.opted_in = False
+                            link.setup_status = "revoked"
+                            link.last_error = installation.last_error
+                        await db.commit()
+                        reconciled += 1
+                if exc.status_code != 404:
+                    logger.warning(
+                        "GitHub installation reconciliation failed for installation %s",
+                        installation_number,
+                        exc_info=True,
+                    )
+                continue
+            permissions_raw = remote.get("permissions")
+            permissions = (
+                {str(key): str(value) for key, value in permissions_raw.items() if isinstance(key, str)}
+                if isinstance(permissions_raw, dict)
+                else {}
+            )
+            missing = check_permissions(permissions, APP_REQUIRED_PERMISSIONS)
+            unavailable = bool(remote.get("suspended_at")) or bool(missing)
+            issue = (
+                "GitHub installation is suspended"
+                if remote.get("suspended_at")
+                else ("Missing GitHub App permissions: " + ", ".join(missing) if missing else None)
+            )
+            async with self.session_factory() as db:
+                installation = await db.get(GitHubInstallation, installation_uuid)
+                app = await db.get(GitHubAppConfiguration, app_uuid)
+                if installation is None or app is None:
+                    continue
+                installation.granted_permissions = permissions
+                installation.active = not unavailable
+                installation.checked_at = datetime.now(UTC)
+                installation.last_error = issue
+                app.connection_status = "permission_missing" if missing else (
+                    "suspended" if unavailable else "ready"
+                )
+                app.checked_at = datetime.now(UTC)
+                app.last_error = issue
+                links = (
+                    await db.scalars(
+                        select(GitHubRepositoryLink).where(
+                            GitHubRepositoryLink.installation_id == installation_uuid,
+                            GitHubRepositoryLink.opted_in.is_(True),
+                        )
+                    )
+                ).all()
+                if unavailable:
+                    for link in links:
+                        link.setup_status = "stale"
+                        link.last_error = issue
+                    await db.commit()
+                    reconciled += 1
+                    continue
+                await db.commit()
+                link_snapshots = [(row.id, row.github_repository_id, row.owner, row.name) for row in links]
+            for link_uuid, repository_id, owner, name in link_snapshots:
+                try:
+                    remote_repository = await client.request_installation(
+                        app_id=app_id,
+                        private_key_reference=key_ref,
+                        installation_id=installation_number,
+                        repository_id=repository_id,
+                        method="GET",
+                        path=f"/repos/{owner}/{name}",
+                        permissions={"metadata": "read"},
+                    )
+                except GitHubAppError as exc:
+                    if exc.status_code not in {403, 404}:
+                        logger.warning(
+                            "GitHub repository access reconciliation failed for repository %s",
+                            repository_id,
+                            exc_info=True,
+                        )
+                        continue
+                    async with self.session_factory() as db:
+                        link_row = await db.get(GitHubRepositoryLink, link_uuid)
+                        if link_row is not None:
+                            link_row.setup_status = "revoked" if exc.status_code == 404 else "stale"
+                            if exc.status_code == 404:
+                                link_row.opted_in = False
+                            link_row.last_error = (
+                                "GitHub repository access was removed"
+                                if exc.status_code == 404
+                                else "GitHub repository access is forbidden; setup must be refreshed"
+                            )
+                            await db.commit()
+                    reconciled += 1
+                    continue
+                if not isinstance(remote_repository, dict) or remote_repository.get("id") != repository_id:
+                    continue
+                async with self.session_factory() as db:
+                    link_row = await db.get(GitHubRepositoryLink, link_uuid)
+                    if link_row is not None and link_row.opted_in:
+                        link_row.setup_status = "ready"
+                        link_row.last_error = None
+                        link_row.last_synced_at = datetime.now(UTC)
+                        await db.commit()
+                reconciled += 1
         return reconciled
 
     async def _scope(
@@ -579,6 +809,7 @@ class GitHubWebhookProcessor:
                 repository_id=link.github_repository_id,
                 method="GET",
                 path=f"/repos/{link.owner}/{link.name}/pulls/{number}",
+                permissions={"pull_requests": "read"},
             )
             if (
                 not isinstance(remote, dict)
@@ -596,15 +827,15 @@ class GitHubWebhookProcessor:
                 return DeliveryOutcome("ignored", {"reason": "remote_pull_request_sha_missing"})
             baseline = sync.field_baseline
             published_sha = baseline.get("published_branch_sha")
-            merged = remote.get("merged") is True
-            remote_state = str(remote.get("state") or "unknown")
             head_matches = isinstance(published_sha, str) and head_sha == published_sha
-            if merged:
-                state = "merged" if head_matches else "merged_head_drift"
-            elif remote_state == "closed":
-                state = "closed_unmerged"
-            else:
-                state = "open" if head_matches else "head_drift"
+            published_base_sha = baseline.get("published_base_sha")
+            base_matches = not isinstance(published_base_sha, str) or base_sha == published_base_sha
+            state = _pull_request_state(
+                merged=remote.get("merged") is True,
+                remote_state=str(remote.get("state") or "unknown"),
+                head_matches=head_matches,
+                base_matches=base_matches,
+            )
             if head_matches:
                 sync.sync_conflicts = {}
             else:
@@ -635,14 +866,18 @@ class GitHubWebhookProcessor:
                     **sync.sync_conflicts,
                     "merge_head_sha_mismatch": head_sha,
                 }
-            elif state in {"head_drift", "closed_unmerged"}:
+            elif state in {"head_drift", "base_drift", "closed_unmerged"}:
                 await self._recover_unmerged_review(
                     db,
                     sync=sync,
                     reason=(
                         "GitHub pull request was closed without merging"
                         if state == "closed_unmerged"
-                        else "GitHub pull request head changed after review publication"
+                        else (
+                            "GitHub pull request base changed after review publication"
+                            if state == "base_drift"
+                            else "GitHub pull request head changed after review publication"
+                        )
                     ),
                     reason_code=state,
                 )
@@ -788,31 +1023,66 @@ class GitHubWebhookProcessor:
             method="GET",
             path=f"/repos/{link.owner}/{link.name}/pulls/{pr_number}/reviews",
             params={"per_page": 100},
+            permissions={"pull_requests": "read"},
         )
         approval = None
         if isinstance(remote_reviews, list):
-            for remote_review in remote_reviews:
-                if (
-                    not isinstance(remote_review, dict)
-                    or str(remote_review.get("state", "")).casefold() != "approved"
-                    or remote_review.get("commit_id") != published_sha
-                    or not isinstance(remote_review.get("user"), dict)
-                    or not isinstance(remote_review["user"].get("id"), int)
-                ):
-                    continue
-                mapping = await db.scalar(
+            github_user_ids = {
+                review["user"]["id"]
+                for review in remote_reviews
+                if isinstance(review, dict)
+                and isinstance(review.get("user"), dict)
+                and isinstance(review["user"].get("id"), int)
+                and review.get("commit_id") == published_sha
+            }
+            mappings = (
+                await db.scalars(
                     select(GitHubActorMapping).where(
                         GitHubActorMapping.installation_id == installation.id,
-                        GitHubActorMapping.github_user_id == remote_review["user"]["id"],
+                        GitHubActorMapping.github_user_id.in_(github_user_ids),
                         GitHubActorMapping.active.is_(True),
                     )
                 )
-                if mapping is None:
+            ).all() if github_user_ids else []
+            actor_by_github_id = {
+                row.github_user_id: row.user_id for row in mappings
+            }
+            latest_by_actor = _latest_review_state_by_actor(
+                remote_reviews, actor_by_github_id, published_sha
+            )
+            for actor_id, remote_review in latest_by_actor.items():
+                user = await db.get(User, actor_id)
+                if user is None or not user.is_active:
+                    continue
+                org_membership = await db.scalar(
+                    select(Membership).where(
+                        Membership.organization_id == link.organization_id,
+                        Membership.user_id == user.id,
+                    )
+                )
+                project_membership = await db.scalar(
+                    select(ProjectMembership).where(
+                        ProjectMembership.project_id == link.project_id,
+                        ProjectMembership.user_id == user.id,
+                    )
+                )
+                if not (
+                    (org_membership is not None and org_membership.role == "administrator")
+                    or (project_membership is not None and project_membership.role == "reviewer")
+                ):
+                    continue
+            if any(
+                str(review.get("state", "")).casefold() == "changes_requested"
+                for review in latest_by_actor.values()
+            ):
+                return None
+            for actor_id, remote_review in latest_by_actor.items():
+                if str(remote_review.get("state", "")).casefold() != "approved":
                     continue
                 approval = await db.scalar(
                     select(ReviewDecision)
                     .where(
-                        ReviewDecision.actor_id == mapping.user_id,
+                        ReviewDecision.actor_id == actor_id,
                         ReviewDecision.bundle_id == bundle.id,
                         ReviewDecision.decision == "approve",
                         ReviewDecision.github_head_sha == published_sha,
@@ -958,6 +1228,7 @@ class GitHubWebhookProcessor:
                     repository_id=link.github_repository_id,
                     method="GET",
                     path=f"/repos/{link.owner}/{link.name}/pulls/{number}",
+                    permissions={"pull_requests": "read"},
                 )
                 if (
                     not isinstance(remote, dict)
@@ -1138,6 +1409,7 @@ class GitHubWebhookProcessor:
                 repository_id=link.github_repository_id,
                 method="GET",
                 path=f"/repos/{link.owner}/{link.name}/pulls/{number}",
+                permissions={"pull_requests": "read"},
             )
             remote_reviews = await client.request_installation(
                 app_id=app_config.app_id,
@@ -1147,6 +1419,7 @@ class GitHubWebhookProcessor:
                 method="GET",
                 path=f"/repos/{link.owner}/{link.name}/pulls/{number}/reviews",
                 params={"per_page": 100},
+                permissions={"pull_requests": "read"},
             )
             review_id = review_event["id"]
             current_review = (
@@ -1250,3 +1523,46 @@ class GitHubWebhookProcessor:
             return DeliveryOutcome(
                 "processed", {"decision": decision, "github_head_sha": published_sha}
             )
+
+
+def _latest_review_state_by_actor(
+    reviews: list[Any], actor_by_github_id: dict[int, UUID], expected_head_sha: str
+) -> dict[UUID, dict[str, Any]]:
+    """Return each mapped actor's latest review state for the exact PR head."""
+    ordered = sorted(
+        (
+            review
+            for review in reviews
+            if isinstance(review, dict)
+            and review.get("commit_id") == expected_head_sha
+            and isinstance(review.get("user"), dict)
+            and isinstance(review["user"].get("id"), int)
+            and review["user"]["id"] in actor_by_github_id
+        ),
+        key=lambda review: (
+            str(review.get("submitted_at") or review.get("created_at") or ""),
+            int(review.get("id", 0)) if isinstance(review.get("id"), int) else 0,
+        ),
+    )
+    latest: dict[UUID, dict[str, Any]] = {}
+    for review in ordered:
+        state = str(review.get("state", "")).casefold()
+        if state not in {"approved", "changes_requested", "dismissed"}:
+            continue
+        github_user_id = review["user"]["id"]
+        latest[actor_by_github_id[github_user_id]] = review
+    return latest
+
+
+def _pull_request_state(
+    *, merged: bool, remote_state: str, head_matches: bool, base_matches: bool
+) -> str:
+    if merged:
+        return "merged" if head_matches else "merged_head_drift"
+    if remote_state == "closed":
+        return "closed_unmerged"
+    if not head_matches:
+        return "head_drift"
+    if not base_matches:
+        return "base_drift"
+    return "open"

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from uuid import UUID
 
 from sqlalchemy import select
@@ -22,13 +23,15 @@ from harnessa.db.github import (
     GitHubRepositoryLink,
     GitHubSyncObject,
 )
-from harnessa.db.models import Repository
+from harnessa.db.models import Repository, Task
 from harnessa.db.review import ReviewBundle
 from harnessa.db.session import SessionLocal
 from harnessa.services.effects import EffectResult, ReconcileOutcome
 
 _PUBLISH_KIND = "github.review_bundle.publish"
 _MARKER_PREFIX = "Harnessa-Bundle:"
+_ISSUE_CREATE_KIND = "github.issue.create"
+_STATUS_KIND = "github.commit_status.publish"
 
 
 class GitHubEffectReconciler:
@@ -46,8 +49,12 @@ class GitHubEffectReconciler:
     async def reconcile(
         self, *, kind: str, stable_key: str, payload: Mapping[str, object]
     ) -> EffectResult | ReconcileOutcome:
+        if kind == _ISSUE_CREATE_KIND:
+            return await self._reconcile_issue_create(stable_key, payload)
         if kind == "github.issue.comment":
             return await self._reconcile_issue_comment(stable_key, payload)
+        if kind == _STATUS_KIND:
+            return await self._reconcile_commit_status(stable_key, payload)
         if kind != _PUBLISH_KIND:
             return "unknown"
         try:
@@ -118,6 +125,7 @@ class GitHubEffectReconciler:
             private_key_reference=private_key_ref,
             installation_id=installation_number,
             repository_ids=[github_repository_id],
+            permissions={"contents": "write", "pull_requests": "write"},
         )
 
         async def request(
@@ -285,6 +293,218 @@ class GitHubEffectReconciler:
         )
         return EffectResult("applied", result)
 
+    async def _reconcile_issue_create(
+        self, stable_key: str, payload: Mapping[str, object]
+    ) -> EffectResult | ReconcileOutcome:
+        try:
+            link_id = UUID(str(payload["repository_link_id"]))
+            task_id = UUID(str(payload["task_id"]))
+            title = str(payload["title"])
+            body = str(payload["body"])
+        except (KeyError, ValueError):
+            raise GitHubAppError("GitHub issue creation intent is invalid") from None
+        if not title.strip() or len(title) > 256 or len(body) > 60_000 or len(stable_key) > 180:
+            raise GitHubAppError("GitHub issue creation intent exceeds its limits")
+        async with self.session_factory() as db:
+            link = await db.get(GitHubRepositoryLink, link_id)
+            if link is None or not link.opted_in or link.setup_status != "ready":
+                return EffectResult("applied", {"state": "rejected", "reason": "repository_not_opted_in"})
+            installation = await db.get(GitHubInstallation, link.installation_id)
+            app_config = (
+                await db.get(GitHubAppConfiguration, installation.app_configuration_id)
+                if installation
+                else None
+            )
+            if installation is None or app_config is None or not installation.active or not app_config.enabled:
+                return EffectResult("applied", {"state": "rejected", "reason": "installation_unavailable"})
+            app_id = app_config.app_id
+            private_key_ref = app_config.private_key_secret_ref
+            installation_number = installation.installation_id
+            repository_id = link.github_repository_id
+            owner, name, topic_label = link.owner, link.name, link.topic_label
+            organization_id, project_id = link.organization_id, link.project_id
+        client = GitHubAppClient()
+        token, _ = await client.create_installation_token(
+            app_id=app_id,
+            private_key_reference=private_key_ref,
+            installation_id=installation_number,
+            repository_ids=[repository_id],
+            permissions={"issues": "write"},
+        )
+        repo_path = f"/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
+        marker = f"<!-- Harnessa-Issue: {stable_key} -->"
+        existing: dict[str, Any] | None = None
+        for page in range(1, 101):
+            rows = await client._request(
+                "GET", f"{repo_path}/issues", token=token,
+                params={"state": "all", "per_page": 100, "page": page},
+            )
+            if not isinstance(rows, list):
+                raise GitHubAppError("GitHub issues response is invalid")
+            existing = next(
+                (
+                    row for row in rows
+                    if isinstance(row, dict)
+                    and "pull_request" not in row
+                    and isinstance(row.get("body"), str)
+                    and marker in row["body"]
+                ),
+                None,
+            )
+            if existing is not None or len(rows) < 100:
+                break
+        else:
+            return EffectResult("unknown", {"state": "issue_search_limit", "stable_key": stable_key})
+        issue = existing
+        if issue is None:
+            created = await client._request(
+                "POST",
+                f"{repo_path}/issues",
+                token=token,
+                body={
+                    "title": title,
+                    "body": f"{body.rstrip()}\n\n{marker}",
+                    "labels": [topic_label],
+                },
+            )
+            issue = created if isinstance(created, dict) else None
+        if (
+            issue is None
+            or not isinstance(issue.get("id"), int)
+            or not isinstance(issue.get("number"), int)
+        ):
+            raise GitHubAppError("GitHub did not return a stable issue identity")
+        result = {
+            "state": str(issue.get("state") or "open"),
+            "issue_id": issue["id"],
+            "issue_number": issue["number"],
+            "issue_url": issue.get("html_url"),
+            "stable_key": stable_key,
+        }
+        async with self.session_factory() as db:
+            row = await db.scalar(
+                select(GitHubSyncObject)
+                .where(
+                    GitHubSyncObject.repository_link_id == link_id,
+                    GitHubSyncObject.object_kind == "issue",
+                    GitHubSyncObject.github_object_id == str(issue["id"]),
+                )
+                .with_for_update()
+            )
+            if row is None:
+                row = GitHubSyncObject(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    repository_link_id=link_id,
+                    task_id=task_id,
+                    object_kind="issue",
+                    github_object_id=str(issue["id"]),
+                    object_number=issue["number"],
+                    stable_key=f"github-issue:{link_id}:{issue['id']}",
+                    state=result["state"],
+                    url=result["issue_url"] if isinstance(result["issue_url"], str) else None,
+                    check_results={},
+                    field_baseline={"title": title, "issue_effect_key": stable_key},
+                    sync_conflicts={},
+                )
+                db.add(row)
+            await db.commit()
+        return EffectResult("applied", result)
+
+    async def _reconcile_commit_status(
+        self, stable_key: str, payload: Mapping[str, object]
+    ) -> EffectResult | ReconcileOutcome:
+        try:
+            link_id = UUID(str(payload["repository_link_id"]))
+            task_id = UUID(str(payload["task_id"]))
+            sha = str(payload["sha"])
+            state = str(payload["state"])
+            description = str(payload["description"])
+            context = str(payload["context"])
+            target_url = str(payload["target_url"]) if payload.get("target_url") else None
+        except (KeyError, ValueError):
+            raise GitHubAppError("GitHub commit status intent is invalid") from None
+        if (
+            not re.fullmatch(r"[0-9a-f]{40,64}", sha)
+            or state not in {"pending", "success", "error", "failure"}
+            or not context.startswith("harnessa/task/")
+            or len(context) > 100
+            or len(description) > 140
+            or (
+                target_url is not None
+                and (
+                    urlsplit(target_url).scheme != "https"
+                    or not urlsplit(target_url).hostname
+                    or urlsplit(target_url).username is not None
+                    or urlsplit(target_url).password is not None
+                )
+            )
+        ):
+            raise GitHubAppError("GitHub commit status intent contains invalid fields")
+        async with self.session_factory() as db:
+            link = await db.get(GitHubRepositoryLink, link_id)
+            task = await db.get(Task, task_id)
+            expected_version = payload.get("task_version")
+            if task is None or not isinstance(expected_version, int):
+                return EffectResult("applied", {"state": "rejected", "reason": "task_unavailable"})
+            if task.version != expected_version:
+                return EffectResult("applied", {"state": "stale", "reason": "task_version_changed"})
+            if link is None or not link.opted_in or link.setup_status != "ready":
+                return EffectResult("applied", {"state": "rejected", "reason": "repository_not_opted_in"})
+            installation = await db.get(GitHubInstallation, link.installation_id)
+            app_config = (
+                await db.get(GitHubAppConfiguration, installation.app_configuration_id)
+                if installation
+                else None
+            )
+            if installation is None or app_config is None or not installation.active or not app_config.enabled:
+                return EffectResult("applied", {"state": "rejected", "reason": "installation_unavailable"})
+            app_id, private_key_ref = app_config.app_id, app_config.private_key_secret_ref
+            installation_number, repository_id = installation.installation_id, link.github_repository_id
+            owner, name = link.owner, link.name
+        client = GitHubAppClient()
+        token, _ = await client.create_installation_token(
+            app_id=app_id,
+            private_key_reference=private_key_ref,
+            installation_id=installation_number,
+            repository_ids=[repository_id],
+            permissions={"statuses": "write"},
+        )
+        repo_path = f"/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
+        statuses = await client._request(
+            "GET", f"{repo_path}/commits/{sha}/statuses", token=token,
+            params={"per_page": 100},
+        )
+        if not isinstance(statuses, list):
+            raise GitHubAppError("GitHub commit statuses response is invalid")
+        latest = next(
+            (row for row in statuses if isinstance(row, dict) and row.get("context") == context),
+            None,
+        )
+        status: dict[str, Any] | None
+        if latest is not None and all(
+            latest.get(key) == value
+            for key, value in (("state", state), ("description", description), ("target_url", target_url))
+        ):
+            status = latest
+        else:
+            created = await client._request(
+                "POST", f"{repo_path}/statuses/{sha}", token=token,
+                body={
+                    "state": state,
+                    "description": description,
+                    "context": context,
+                    "target_url": target_url,
+                },
+            )
+            status = created if isinstance(created, dict) else None
+        if status is None or not isinstance(status.get("id"), int):
+            raise GitHubAppError("GitHub did not return a commit status identity")
+        return EffectResult(
+            "applied",
+            {"state": state, "status_id": status["id"], "context": context, "stable_key": stable_key},
+        )
+
     async def _reconcile_issue_comment(
         self, stable_key: str, payload: Mapping[str, object]
     ) -> EffectResult | ReconcileOutcome:
@@ -444,6 +664,7 @@ class GitHubEffectReconciler:
                 "bundle_id": str(bundle_id),
                 "bundle_digest": bundle_digest,
                 "expected_source_head_sha": result.get("verified_source_head_sha"),
+                "published_base_sha": result.get("expected_base_sha"),
                 "published_branch": branch,
                 "published_branch_sha": result.get("branch_sha"),
             }

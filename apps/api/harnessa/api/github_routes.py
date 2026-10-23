@@ -24,6 +24,7 @@ from harnessa.contracts import (
     GitHubActorMappingRead,
     GitHubAppConfigurationCreate,
     GitHubAppConfigurationRead,
+    GitHubCommitStatusRequest,
     GitHubConnectionStatusRead,
     GitHubDeliveryRepairRequest,
     GitHubEffectQueuedRead,
@@ -39,6 +40,7 @@ from harnessa.db.github import (
     GitHubAppConfiguration,
     GitHubInstallation,
     GitHubRepositoryLink,
+    GitHubSyncObject,
     GitHubWebhookDelivery,
     GitHubWebhookOutbox,
 )
@@ -701,6 +703,152 @@ async def queue_github_review_publication(
                 )
     else:
         await db.commit()
+    return GitHubEffectQueuedRead(queued=True, stable_keys=[stable_key])
+
+
+@router.post("/tasks/{task_id}/github-issue", response_model=GitHubEffectQueuedRead, status_code=202)
+async def queue_github_issue_creation(
+    task_id: UUID,
+    actor: User = Depends(current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> GitHubEffectQueuedRead:
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(404, "Task not found")
+    membership = await require_membership(db, actor, task.project_id)
+    if membership.role not in {"administrator", "operator"}:
+        raise HTTPException(403, "Project operator role required to create a GitHub issue")
+    links = (
+        await db.scalars(
+            select(GitHubRepositoryLink).where(
+                GitHubRepositoryLink.project_id == task.project_id,
+                GitHubRepositoryLink.opted_in.is_(True),
+                GitHubRepositoryLink.setup_status == "ready",
+            )
+        )
+    ).all()
+    if len(links) != 1:
+        raise HTTPException(
+            409,
+            "GitHub issue creation requires exactly one ready repository opt-in for the project",
+        )
+    link = links[0]
+    installation = await db.get(GitHubInstallation, link.installation_id)
+    if installation is None or not installation.active:
+        raise HTTPException(409, "GitHub installation is inactive")
+    stable_key = f"github-issue-create:{link.id}:{task.id}"
+    existing = await db.scalar(select(EffectIntent).where(EffectIntent.stable_key == stable_key))
+    if existing is None:
+        project = await db.get(Project, task.project_id)
+        if project is None:
+            raise HTTPException(404, "Task project not found")
+        db.add(
+            EffectIntent(
+                organization_id=project.organization_id,
+                project_id=project.id,
+                task_id=task.id,
+                kind="github.issue.create",
+                stable_key=stable_key,
+                payload={
+                    "repository_link_id": str(link.id),
+                    "task_id": str(task.id),
+                    "title": task.title,
+                    "body": task.description,
+                },
+            )
+        )
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            existing = await db.scalar(select(EffectIntent).where(EffectIntent.stable_key == stable_key))
+            if existing is None:
+                raise HTTPException(409, "GitHub issue intent conflicted and could not be recovered")
+    return GitHubEffectQueuedRead(queued=True, stable_keys=[stable_key])
+
+
+@router.post(
+    "/tasks/{task_id}/github-status",
+    response_model=GitHubEffectQueuedRead,
+    status_code=202,
+)
+async def queue_github_commit_status(
+    task_id: UUID,
+    body: GitHubCommitStatusRequest,
+    actor: User = Depends(current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> GitHubEffectQueuedRead:
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(404, "Task not found")
+    membership = await require_membership(db, actor, task.project_id)
+    if membership.role not in {"administrator", "operator"}:
+        raise HTTPException(403, "Project operator role required to publish GitHub status")
+    sync = await db.scalar(
+        select(GitHubSyncObject)
+        .join(
+            GitHubRepositoryLink,
+            GitHubRepositoryLink.id == GitHubSyncObject.repository_link_id,
+        )
+        .where(
+            GitHubSyncObject.task_id == task.id,
+            GitHubSyncObject.object_kind == "pull_request",
+            GitHubSyncObject.head_sha.is_not(None),
+            GitHubRepositoryLink.project_id == task.project_id,
+            GitHubRepositoryLink.opted_in.is_(True),
+            GitHubRepositoryLink.setup_status == "ready",
+        )
+        .order_by(GitHubSyncObject.created_at.desc())
+        .limit(1)
+    )
+    if sync is None or not isinstance(sync.head_sha, str):
+        raise HTTPException(409, "Task has no current tracked GitHub pull request head")
+    link = await db.get(GitHubRepositoryLink, sync.repository_link_id)
+    if link is None:
+        raise HTTPException(409, "Tracked GitHub repository is unavailable")
+    installation = await db.get(GitHubInstallation, link.installation_id)
+    if installation is None or not installation.active:
+        raise HTTPException(409, "GitHub installation is inactive")
+    context = f"harnessa/task/{task.id.hex[:24]}"
+    target_url = str(body.target_url) if body.target_url is not None else None
+    status_digest = hashlib.sha256(
+        json.dumps(
+            [sync.head_sha, body.state, body.description, target_url],
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()[:20]
+    stable_key = f"github-status:{link.github_repository_id}:{task.id}:{status_digest}"
+    existing = await db.scalar(select(EffectIntent).where(EffectIntent.stable_key == stable_key))
+    if existing is None:
+        project = await db.get(Project, task.project_id)
+        if project is None:
+            raise HTTPException(404, "Task project not found")
+        db.add(
+            EffectIntent(
+                organization_id=project.organization_id,
+                project_id=project.id,
+                task_id=task.id,
+                kind="github.commit_status.publish",
+                stable_key=stable_key,
+                payload={
+                    "repository_link_id": str(link.id),
+                    "task_id": str(task.id),
+                    "sha": sync.head_sha,
+                    "state": body.state,
+                    "description": body.description,
+                    "context": context,
+                    "target_url": target_url,
+                    "task_version": task.version,
+                },
+            )
+        )
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            existing = await db.scalar(select(EffectIntent).where(EffectIntent.stable_key == stable_key))
+            if existing is None:
+                raise HTTPException(409, "GitHub status intent conflicted and could not be recovered")
     return GitHubEffectQueuedRead(queued=True, stable_keys=[stable_key])
 
 

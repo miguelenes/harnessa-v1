@@ -26,7 +26,11 @@ from harnessa.db.github import (
     GitHubSyncObject,
 )
 from harnessa.db.models import Task
-from harnessa.services.github_processor import GitHubWebhookProcessor
+from harnessa.services.github_processor import (
+    GitHubWebhookProcessor,
+    _latest_review_state_by_actor,
+    _pull_request_state,
+)
 
 
 def test_secret_reference_and_raw_body_signature_are_narrow_and_exact() -> None:
@@ -102,6 +106,60 @@ async def test_closed_or_drifted_pull_request_queues_bounded_recovery() -> None:
     assert len(db.added) == 1
 
 
+def test_latest_review_state_overrides_a_historical_approval() -> None:
+    reviewer_id = uuid4()
+    latest = _latest_review_state_by_actor(
+        [
+            {
+                "id": 10,
+                "state": "APPROVED",
+                "commit_id": "a" * 40,
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "user": {"id": 123},
+            },
+            {
+                "id": 11,
+                "state": "CHANGES_REQUESTED",
+                "commit_id": "a" * 40,
+                "submitted_at": "2026-01-02T00:00:00Z",
+                "user": {"id": 123},
+            },
+            {
+                "id": 12,
+                "state": "APPROVED",
+                "commit_id": "b" * 40,
+                "submitted_at": "2026-01-03T00:00:00Z",
+                "user": {"id": 123},
+            },
+        ],
+        {123: reviewer_id},
+        "a" * 40,
+    )
+
+    assert latest[reviewer_id]["state"] == "CHANGES_REQUESTED"
+
+
+def test_pull_request_reconciliation_classifies_base_and_merged_head_drift() -> None:
+    assert (
+        _pull_request_state(
+            merged=False,
+            remote_state="open",
+            head_matches=True,
+            base_matches=False,
+        )
+        == "base_drift"
+    )
+    assert (
+        _pull_request_state(
+            merged=True,
+            remote_state="closed",
+            head_matches=False,
+            base_matches=False,
+        )
+        == "merged_head_drift"
+    )
+
+
 @pytest.mark.anyio
 async def test_installation_token_is_explicitly_repository_scoped_and_validated() -> None:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -138,6 +196,7 @@ async def test_installation_token_is_explicitly_repository_scoped_and_validated(
         private_key_reference="app-key",
         installation_id=123,
         repository_ids=[4321],
+        permissions=APP_REQUIRED_PERMISSIONS,
     )
     claims = jwt.decode(
         client.app_jwt(999, "app-key"),
@@ -167,6 +226,7 @@ async def test_installation_token_is_explicitly_repository_scoped_and_validated(
             private_key_reference="app-key",
             installation_id=123,
             repository_ids=[4321],
+            permissions=APP_REQUIRED_PERMISSIONS,
         )
 
 
@@ -324,3 +384,163 @@ async def test_comment_effect_finds_existing_marker_after_remote_success(
     assert result.outcome == "applied"
     assert result.result["comment_id"] == 88
     assert [method for method, _, _ in FakeClient.instance.calls] == ["GET"]
+
+
+@pytest.mark.anyio
+async def test_issue_creation_reconciles_ambiguous_success_by_stable_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    link_id, installation_id, task_id = uuid4(), uuid4(), uuid4()
+    link = type(
+        "Link",
+        (),
+        {
+            "id": link_id,
+            "installation_id": installation_id,
+            "organization_id": uuid4(),
+            "project_id": uuid4(),
+            "opted_in": True,
+            "setup_status": "ready",
+            "github_repository_id": 4321,
+            "owner": "fixture",
+            "name": "repo",
+            "topic_label": "harnessa",
+        },
+    )()
+    installation = type(
+        "Installation", (), {"installation_id": 123, "active": True, "app_configuration_id": uuid4()}
+    )()
+    app = type("App", (), {"app_id": 999, "private_key_secret_ref": "app-key", "enabled": True})()
+
+    class FakeDB:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def get(self, model: object, _: object) -> object:
+            if model is GitHubRepositoryLink:
+                return link
+            if model is GitHubInstallation:
+                return installation
+            if model is GitHubAppConfiguration:
+                return app
+            raise AssertionError(f"unexpected model: {model}")
+
+        async def scalar(self, _statement: object) -> None:
+            return None
+
+        def add(self, row: object) -> None:
+            self.added.append(row)
+
+        async def commit(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        async def create_installation_token(self, **kwargs: object) -> tuple[str, dict[str, object]]:
+            assert kwargs["permissions"] == {"issues": "write"}
+            return "fixture-token", {}
+
+        async def _request(self, method: str, path: str, **kwargs: object) -> dict[str, object] | list[object]:
+            body = kwargs.get("body")
+            self.calls.append((method, path, body if isinstance(body, dict) else None))
+            if method == "GET":
+                return [{"id": 77, "number": 12, "state": "open", "body": "task <!-- Harnessa-Issue: issue-key -->", "html_url": "https://github.test/issues/12"}]
+            raise AssertionError("reconciled issue marker should avoid a duplicate POST")
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(github_effects, "GitHubAppClient", lambda: fake_client)
+    reconciler = GitHubEffectReconciler(session_factory=lambda: FakeDB())  # type: ignore[arg-type]
+    result = await reconciler.reconcile(
+        kind="github.issue.create",
+        stable_key="issue-key",
+        payload={
+            "repository_link_id": str(link_id),
+            "task_id": str(task_id),
+            "title": "A task",
+            "body": "task",
+        },
+    )
+
+    assert isinstance(result, github_effects.EffectResult)
+    assert result.result["issue_id"] == 77
+    assert [method for method, _, _ in fake_client.calls] == ["GET"]
+
+
+@pytest.mark.anyio
+async def test_commit_status_reconciles_matching_remote_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    link_id, installation_id, task_id = uuid4(), uuid4(), uuid4()
+    link = type(
+        "Link",
+        (),
+        {
+            "id": link_id,
+            "installation_id": installation_id,
+            "opted_in": True,
+            "setup_status": "ready",
+            "github_repository_id": 4321,
+            "owner": "fixture",
+            "name": "repo",
+        },
+    )()
+    installation = type("Installation", (), {"installation_id": 123, "active": True, "app_configuration_id": uuid4()})()
+    app = type("App", (), {"app_id": 999, "private_key_secret_ref": "app-key", "enabled": True})()
+    task = type("Task", (), {"version": 3})()
+
+    class FakeDB:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def get(self, model: object, _: object) -> object:
+            return {
+                GitHubRepositoryLink: link,
+                GitHubInstallation: installation,
+                GitHubAppConfiguration: app,
+                Task: task,
+            }[model]
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def create_installation_token(self, **kwargs: object) -> tuple[str, dict[str, object]]:
+            assert kwargs["permissions"] == {"statuses": "write"}
+            return "fixture-token", {}
+
+        async def _request(self, method: str, path: str, **kwargs: object) -> dict[str, object] | list[object]:
+            self.calls.append(method)
+            return [{"id": 55, "context": "harnessa/task/test", "state": "success", "description": "passed", "target_url": None}]
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(github_effects, "GitHubAppClient", lambda: fake_client)
+    reconciler = GitHubEffectReconciler(session_factory=lambda: FakeDB())  # type: ignore[arg-type]
+    result = await reconciler.reconcile(
+        kind="github.commit_status.publish",
+        stable_key="status-key",
+        payload={
+            "repository_link_id": str(link_id),
+            "task_id": str(task_id),
+            "task_version": 3,
+            "sha": "a" * 40,
+            "state": "success",
+            "description": "passed",
+            "context": "harnessa/task/test",
+            "target_url": None,
+        },
+    )
+
+    assert isinstance(result, github_effects.EffectResult)
+    assert result.result["status_id"] == 55
+    assert fake_client.calls == ["GET"]
