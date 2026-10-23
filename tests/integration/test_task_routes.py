@@ -6,17 +6,113 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from ag_ui.core import EventType
 from fastapi import HTTPException, Response
+from harnessa.adapters.acp_execution import persist_acp_ui_event
+from harnessa.adapters.execution import RunInput, TaskInput
+from harnessa.adapters.ui_events import project_domain_event
 from harnessa.api import task_routes
 from harnessa.config import settings
 from harnessa.contracts import TaskCreate
 from harnessa.db.models import Membership, ProjectMembership
+from harnessa.db.orchestration import DomainEvent, OutboxMessage, Run, TaskLease
 from harnessa.db.session import SessionLocal
 from sqlalchemy import delete, func, select, update
 
 from tests.integration.test_model_gateway import gateway_fixture
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.anyio
+async def test_acp_ui_updates_are_durable_ordered_and_project_to_ag_ui() -> None:
+    data = await gateway_fixture()
+    async with SessionLocal() as db:
+        task = await db.get(task_routes.Task, data["task_id"])
+        run = await db.get(Run, data["run_id"])
+        assert task is not None and run is not None
+        db.add(
+            TaskLease(
+                task_id=task.id,
+                run_id=run.id,
+                owner_id="m8-integration-fixture",
+                fencing_token=run.fencing_token,
+                heartbeat_at=datetime.now(UTC),
+                expires_at=datetime.now(UTC) + timedelta(minutes=1),
+            )
+        )
+        await db.commit()
+        task_input = TaskInput(
+            id=task.id,
+            project_id=task.project_id,
+            title=task.title,
+            description=task.description,
+        )
+        run_input = RunInput(id=run.id, attempt=run.attempt, fencing_token=run.fencing_token)
+
+    normalized_updates = [
+        {"kind": "step_started"},
+        {"kind": "message_started", "message_id": "opaque-message"},
+        {
+            "kind": "message_content",
+            "message_id": "opaque-message",
+            "text": "The task is ready.",
+        },
+        {"kind": "message_ended", "message_id": "opaque-message"},
+        {"kind": "tool_started", "tool_call_id": "opaque-tool", "tool_name": "read"},
+        {"kind": "tool_args_redacted", "tool_call_id": "opaque-tool"},
+        {"kind": "tool_ended", "tool_call_id": "opaque-tool", "outcome": "completed"},
+        {"kind": "tool_result_redacted", "tool_call_id": "opaque-tool"},
+        {"kind": "step_finished", "outcome": "completed"},
+    ]
+    for update_event in normalized_updates:
+        await persist_acp_ui_event(
+            SessionLocal, task=task_input, run=run_input, event=update_event
+        )
+
+    async with SessionLocal() as db:
+        rows = list(
+            (
+                await db.scalars(
+                    select(DomainEvent)
+                    .where(DomainEvent.run_id == data["run_id"])
+                    .order_by(DomainEvent.project_sequence)
+                )
+            ).all()
+        )
+        outbox_count = await db.scalar(
+            select(func.count())
+            .select_from(OutboxMessage)
+            .where(OutboxMessage.event_id.in_([row.id for row in rows]))
+        )
+
+    assert [row.event_type for row in rows] == [
+        "run.step_started",
+        "run.message_started",
+        "run.message_content",
+        "run.message_ended",
+        "run.tool_started",
+        "run.tool_args_redacted",
+        "run.tool_ended",
+        "run.tool_result_redacted",
+        "run.step_finished",
+    ]
+    assert [row.type for row in map(project_domain_event, rows)] == [
+        EventType.STEP_STARTED,
+        EventType.TEXT_MESSAGE_START,
+        EventType.TEXT_MESSAGE_CONTENT,
+        EventType.TEXT_MESSAGE_END,
+        EventType.TOOL_CALL_START,
+        EventType.TOOL_CALL_ARGS,
+        EventType.TOOL_CALL_END,
+        EventType.TOOL_CALL_RESULT,
+        EventType.STEP_FINISHED,
+    ]
+    assert all(left.project_sequence < right.project_sequence for left, right in pairwise(rows))
+    assert outbox_count == len(rows)
+    assert rows[2].payload["text"] == "The task is ready."
+    assert rows[5].payload == {"tool_call_id": "opaque-tool"}
+    assert rows[7].payload == {"tool_call_id": "opaque-tool"}
 
 
 @pytest.mark.anyio
