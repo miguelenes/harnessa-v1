@@ -309,6 +309,7 @@ describe("workspace routes and task board", () => {
     });
 
     render(<Workspace section="evals" />);
+    await screen.findByRole("option", { name: "Prepare release" });
     fireEvent.change(await screen.findByRole("combobox", { name: "Evaluation task" }), { target: { value: probeTask.id } });
     expect(await screen.findByText(/The estimate assumes the full route context window and configured retry bound/)).toBeTruthy();
     await waitFor(() => expect((screen.getByRole("button", { name: "Estimate evaluation cost" }) as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 });
