@@ -126,7 +126,11 @@ class OperationalMetrics:
                 db, Run, Run.status == "QUEUED"
             )
             stale_leases = await self._count(
-                db, TaskLease, TaskLease.expires_at.is_not(None) & (TaskLease.expires_at <= now)
+                db,
+                TaskLease,
+                (TaskLease.owner_id.is_not(None))
+                & TaskLease.expires_at.is_not(None)
+                & (TaskLease.expires_at <= now),
             )
             dead_letters = await self._count(db, DeadLetter, DeadLetter.status == "open")
             outbox_count, outbox_oldest = await self._count_oldest(
@@ -164,6 +168,35 @@ class OperationalMetrics:
                 PostIntegrationStep,
                 (PostIntegrationStep.kind == "cleanup") & (PostIntegrationStep.status == "failed"),
             )
+            normal_probe_capacity = func.greatest(
+                0, ModelPool.max_concurrency - ModelPool.interactive_reserve
+            )
+            interactive_overflow = func.greatest(
+                0, ModelPool.active_probe - normal_probe_capacity
+            )
+            next_probe_overflow = func.greatest(
+                0, ModelPool.active_probe + 1 - normal_probe_capacity
+            )
+            deployment_has_capacity = (
+                ModelDeployment.active_interactive + ModelDeployment.active_probe
+                < ModelDeployment.max_concurrency
+            )
+            pool_has_capacity = or_(
+                (ModelPool.kind == "interactive")
+                & (
+                    ModelPool.active_interactive + ModelPool.active_probe
+                    < ModelPool.max_concurrency + interactive_overflow
+                ),
+                (ModelPool.kind == "probe")
+                & (
+                    ModelPool.active_probe
+                    < normal_probe_capacity + ModelPool.probe_overflow_limit
+                )
+                & (
+                    ModelPool.active_interactive + ModelPool.active_probe + 1
+                    <= ModelPool.max_concurrency + next_probe_overflow
+                ),
+            )
             available_routes = await db.execute(
                 select(func.count(func.distinct(ModelDeployment.id)))
                 .select_from(ModelDeployment)
@@ -177,12 +210,8 @@ class OperationalMetrics:
                     ProviderAccount.enabled.is_(True),
                     ModelAlias.enabled.is_(True),
                     or_(ModelDeployment.cooldown_until.is_(None), ModelDeployment.cooldown_until <= now),
-                    or_(
-                        (ModelPool.kind == "interactive")
-                        & (ModelDeployment.active_interactive < ModelDeployment.max_concurrency),
-                        (ModelPool.kind == "probe")
-                        & (ModelDeployment.active_probe < ModelDeployment.max_concurrency),
-                    ),
+                    deployment_has_capacity,
+                    pool_has_capacity,
                 )
             )
             available_route_count = int(available_routes.scalar_one())
