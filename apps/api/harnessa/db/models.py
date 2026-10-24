@@ -62,6 +62,7 @@ class Project(Scoped, Base):
     slug: Mapped[str] = mapped_column(String(80), nullable=False)
     event_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     max_concurrency: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    execution_adapter: Mapped[str] = mapped_column(String(32), default="deployment-default", nullable=False)
     last_dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

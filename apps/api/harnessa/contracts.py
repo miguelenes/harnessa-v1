@@ -280,9 +280,15 @@ class ModelBudgetPolicyWrite(BaseModel):
     project_limit_usd: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
     task_limit_usd: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
     run_limit_usd: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
+    probe_project_limit_usd: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
+    probe_task_limit_usd: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
+    probe_run_limit_usd: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
     project_token_limit: int = Field(gt=0, le=10**12)
     task_token_limit: int = Field(gt=0, le=10**12)
     run_token_limit: int = Field(gt=0, le=10**12)
+    probe_project_token_limit: int = Field(gt=0, le=10**12)
+    probe_task_token_limit: int = Field(gt=0, le=10**12)
+    probe_run_token_limit: int = Field(gt=0, le=10**12)
     max_steps: int = Field(gt=0, le=100_000)
     max_wall_seconds: int = Field(gt=0, le=604_800)
     max_output_tokens: int = Field(gt=0, le=1_000_000)
@@ -342,6 +348,10 @@ class ModelDoctorRead(BaseModel):
     configured_deployments: int
     configured_aliases: int
     pools: list[str]
+    execution_adapter: str | None = None
+    execution_adapter_configured: bool = False
+    execution_agent_image: str | None = None
+    execution_model_route_ready: bool = False
     provider_credentials_checked: bool = False
     live_request_sent: bool = False
     findings: list[str] = Field(default_factory=list)

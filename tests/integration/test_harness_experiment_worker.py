@@ -353,6 +353,18 @@ async def test_experiment_route_freezes_inputs_and_enforces_idempotency(
         assert created.specification_revision == 7
         assert created.result["route_alias"] == "probe-route"
 
+        row = await db.get(HarnessExperiment, created.id)
+        assert row is not None
+        row.status = "failed"
+        row.last_error = "provider unavailable"
+        await db.commit()
+        resumed = await harness_routes.resume_harness_experiment(
+            fixture["project_id"], created.id, actor, db
+        )
+        assert resumed.status == "queued"
+        assert resumed.result["resume_count"] == 1
+        assert resumed.base_sha == created.base_sha
+
         with pytest.raises(HTTPException) as conflict:
             await harness_routes.create_harness_experiment(
                 fixture["project_id"], task.id,

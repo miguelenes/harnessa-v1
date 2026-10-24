@@ -156,9 +156,15 @@ class ModelBudgetPolicy(Scoped, Base):
         CheckConstraint("project_limit_usd > 0", name="ck_budget_project_limit_positive"),
         CheckConstraint("task_limit_usd > 0", name="ck_budget_task_limit_positive"),
         CheckConstraint("run_limit_usd > 0", name="ck_budget_run_limit_positive"),
+        CheckConstraint("probe_project_limit_usd > 0", name="ck_budget_probe_project_limit_positive"),
+        CheckConstraint("probe_task_limit_usd > 0", name="ck_budget_probe_task_limit_positive"),
+        CheckConstraint("probe_run_limit_usd > 0", name="ck_budget_probe_run_limit_positive"),
         CheckConstraint("project_token_limit > 0", name="ck_budget_project_tokens_positive"),
         CheckConstraint("task_token_limit > 0", name="ck_budget_task_tokens_positive"),
         CheckConstraint("run_token_limit > 0", name="ck_budget_run_tokens_positive"),
+        CheckConstraint("probe_project_token_limit > 0", name="ck_budget_probe_project_tokens_positive"),
+        CheckConstraint("probe_task_token_limit > 0", name="ck_budget_probe_task_tokens_positive"),
+        CheckConstraint("probe_run_token_limit > 0", name="ck_budget_probe_run_tokens_positive"),
         CheckConstraint("max_steps > 0", name="ck_budget_max_steps_positive"),
         CheckConstraint("max_wall_seconds > 0", name="ck_budget_max_wall_positive"),
         CheckConstraint("max_output_tokens > 0", name="ck_budget_max_output_positive"),
@@ -174,9 +180,15 @@ class ModelBudgetPolicy(Scoped, Base):
     project_limit_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
     task_limit_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
     run_limit_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    probe_project_limit_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    probe_task_limit_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    probe_run_limit_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
     project_token_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
     task_token_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
     run_token_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    probe_project_token_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    probe_task_token_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    probe_run_token_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
     max_steps: Mapped[int] = mapped_column(Integer, nullable=False)
     max_wall_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -186,12 +198,14 @@ class ModelBudgetPolicy(Scoped, Base):
 class ModelBudgetCounter(Scoped, Base):
     __tablename__ = "model_budget_counters"
     __table_args__ = (
-        UniqueConstraint("project_id", "scope", "scope_id", name="uq_budget_counter_scope"),
-        CheckConstraint("scope IN ('project', 'task', 'run')", name="ck_budget_counter_scope"),
+        UniqueConstraint("project_id", "workload", "scope", "scope_id", name="uq_budget_counter_workload_scope"),
+        CheckConstraint("workload IN ('interactive', 'probe')", name="ck_budget_counter_workload"),
+        CheckConstraint("scope IN ('project', 'task', 'run', 'evaluation')", name="ck_budget_counter_scope"),
         CheckConstraint(
-            "(scope = 'project' AND scope_id = project_id AND task_id IS NULL AND run_id IS NULL) OR "
-            "(scope = 'task' AND task_id IS NOT NULL AND scope_id = task_id AND run_id IS NULL) OR "
-            "(scope = 'run' AND task_id IS NOT NULL AND run_id IS NOT NULL AND scope_id = run_id)",
+            "(scope = 'project' AND scope_id = project_id AND task_id IS NULL AND run_id IS NULL AND evaluation_run_id IS NULL) OR "
+            "(scope = 'task' AND task_id IS NOT NULL AND scope_id = task_id AND run_id IS NULL AND evaluation_run_id IS NULL) OR "
+            "(scope = 'run' AND task_id IS NOT NULL AND run_id IS NOT NULL AND evaluation_run_id IS NULL AND scope_id = run_id) OR "
+            "(scope = 'evaluation' AND task_id IS NOT NULL AND run_id IS NULL AND evaluation_run_id IS NOT NULL AND scope_id = evaluation_run_id)",
             name="ck_budget_counter_scope_identity",
         ),
         CheckConstraint("reserved_usd >= 0", name="ck_budget_reserved_usd_nonnegative"),
@@ -214,7 +228,11 @@ class ModelBudgetCounter(Scoped, Base):
     run_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("runs.id", ondelete="CASCADE"), index=True
     )
+    evaluation_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="CASCADE"), index=True
+    )
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    workload: Mapped[str] = mapped_column(String(16), nullable=False)
     scope_id: Mapped[UUID] = mapped_column()
     reserved_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=0, nullable=False)
     billed_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=0, nullable=False)
@@ -245,6 +263,9 @@ class ModelReservation(Scoped, Base):
     )
     run_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("runs.id", ondelete="CASCADE"), index=True
+    )
+    evaluation_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="CASCADE"), index=True
     )
     pool_id: Mapped[UUID] = mapped_column(ForeignKey("model_pools.id", ondelete="CASCADE"), index=True)
     deployment_id: Mapped[UUID] = mapped_column(

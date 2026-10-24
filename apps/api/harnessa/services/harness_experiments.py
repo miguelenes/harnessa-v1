@@ -709,6 +709,15 @@ class HarnessExperimentWorker:
                     outcome_detail=record["outcome"][:4_000],
                 ))
             if exp:
+                prior_result = exp.result if isinstance(exp.result, dict) else {}
+                prior_resume_count = prior_result.get("resume_count", 0)
+                result["resume_count"] = (
+                    prior_resume_count
+                    if isinstance(prior_resume_count, int)
+                    and not isinstance(prior_resume_count, bool)
+                    and prior_resume_count >= 0
+                    else 0
+                )
                 proposer_ledger = list(await db.scalars(select(ModelRequestLedger).where(
                     ModelRequestLedger.run_id == frozen.proposer_run_id,
                 ))) if frozen.proposer_run_id else []

@@ -17,17 +17,27 @@ one to the other.
 ## Start and inspect
 
 The normal repository setup supplies the non-provider application settings in
-`.env`. Copy only the provider keys from a trusted shell environment into that
-ignored file, restrict its permissions, and never commit or print it. Compose
-passes these two variables only to LiteLLM.
+`.env`. Keep provider credentials in the operator's secret source (here,
+`~/.zshrc`) rather than copying them into Harnessa configuration. Compose
+passes the declared provider variables only to LiteLLM; they are not sent to
+the API, worker, web, or agent containers.
 
-Start the gateway service after `.env` contains both variables. Compose's
-configured project name is `harnessa`, which is also used by the normal local
-stack, so the API and worker can resolve `litellm` on the internal network:
+The provider variables in `.env.example` are intentionally blank. Start the
+gateway from a login-interactive zsh session where the keys are exported by
+`~/.zshrc`; do not copy the key values into `.env`. Compose's configured project
+name is `harnessa`, which is also used by the normal local stack, so the API and
+worker can resolve `litellm` on the internal network:
 
 ```sh
-podman compose --env-file .env -f infra/compose.yaml up -d litellm
+zsh -lic 'export DEEPSEEK_API_KEY OPENROUTER_API_KEY; podman compose --env-file .env -f infra/compose.yaml up -d litellm'
 ```
+
+The login-interactive zsh loads `~/.zshrc`, and `export` makes the two
+configured keys available for Compose interpolation in that child process.
+This command does not print either value. Limit shell tracing and command
+logging when invoking it from another tool. Compose forwards these variables to
+LiteLLM only; the application API, worker, web, and agent containers receive no
+provider key.
 
 Inspect readiness and the configured aliases without invoking a model:
 
@@ -59,10 +69,11 @@ an alias and route it into the interactive or probe pool. Set
 the provider's real model identifier in `actual_model`; record the source and
 date in `price_revision`.
 
-Provider prices and routing policies can change. As of 2026-10-23, the
+Provider prices and routing policies can change. As of 2026-10-24, the
 [DeepSeek pricing table](https://api-docs.deepseek.com/quick_start/pricing/) lists
 peak rates of $0.30 per million cache-miss input tokens and $1.20 per million
-output tokens for `deepseek-flash`; off-peak rates are half those amounts. Use
+output tokens for `deepseek-flash`; off-peak rates are half those amounts. The
+model supports a 1M-token context and tool calls. Use
 the peak rates as conservative Harnessa reservation metadata if registering this
 route, and record a dated price revision. The OpenRouter route is pinned to its
 [DeepSeek provider](https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash-1017/endpoints),
@@ -70,11 +81,11 @@ but its catalog can still change; recheck both provider and OpenRouter pricing
 before enabling or revising it. Harnessa's finite project budget is required for
 every invocation, and reservations remain the enforcement boundary.
 
-No provider-backed request was made as part of this setup. The repository's
-`AGENTS.md` requires bounded authorization before real provider usage. Provide a
-finite per-experiment/project spend cap before running the M12 live acceptance
-experiment. M12 also needs the independently permissioned evaluator and holdout
-dataset described in [the milestone report](../milestones/12.md).
+Every Harnessa invocation still requires its own finite project, task, and run
+reservation. A missing reservation blocks the request even when the operator
+has no separate global spend ceiling. Provider-backed calls require explicit
+authorization; the model doctor and `/v1/models` checks do not make a provider
+request.
 
 ## Stop the gateway
 

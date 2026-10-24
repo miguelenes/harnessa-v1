@@ -88,6 +88,9 @@ class HarnessExperiment(Scoped, Base):
         ForeignKey("projects.id", ondelete="CASCADE"), index=True
     )
     task_id: Mapped[UUID] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    evaluation_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="CASCADE"), index=True
+    )
     created_by: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     stable_key: Mapped[str] = mapped_column(String(200), nullable=False)
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -109,6 +112,37 @@ class HarnessExperiment(Scoped, Base):
     cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     worker_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EvaluationRun(Scoped, Base):
+    """Immutable grouped evaluator manifest over existing durable Harness² experiments."""
+
+    __tablename__ = "evaluation_runs"
+    __table_args__ = (
+        UniqueConstraint("project_id", "stable_key", name="uq_evaluation_run_key"),
+        CheckConstraint(
+            "status IN ('queued','running','succeeded','failed','cancelled','blocked')",
+            name="ck_evaluation_run_status",
+        ),
+        CheckConstraint("max_cost_usd > 0", name="ck_evaluation_run_cost_positive"),
+        Index("ix_evaluation_run_project_created", "project_id", "created_at"),
+    )
+
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    created_by: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    stable_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    experiment_ids: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    max_cost_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

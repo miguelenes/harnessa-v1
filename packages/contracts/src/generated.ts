@@ -1121,6 +1121,218 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/harness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Harness Overview */
+        get: operations["harness_overview_projects__project_id__harness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/tasks/{task_id}/harness-experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Harness Experiment */
+        post: operations["create_harness_experiment_projects__project_id__tasks__task_id__harness_experiments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/harness-experiments/{experiment_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Harness Experiment */
+        post: operations["cancel_harness_experiment_projects__project_id__harness_experiments__experiment_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/harness-experiments/{experiment_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Harness Experiment
+         * @description Requeue the same frozen experiment after a recoverable terminal failure.
+         */
+        post: operations["resume_harness_experiment_projects__project_id__harness_experiments__experiment_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/harness-experiences/{experience_id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote Harness Experience */
+        post: operations["promote_harness_experience_projects__project_id__harness_experiences__experience_id__promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/harness-experiences/{experience_id}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rollback Harness Experience */
+        post: operations["rollback_harness_experience_projects__project_id__harness_experiences__experience_id__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evaluations/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Evaluation Catalog */
+        get: operations["evaluation_catalog_projects__project_id__evaluations_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evaluations/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Evaluation Dry Run */
+        post: operations["evaluation_dry_run_projects__project_id__evaluations_dry_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evaluations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Evaluation Runs */
+        get: operations["list_evaluation_runs_projects__project_id__evaluations_get"];
+        put?: never;
+        /** Create Evaluation Run */
+        post: operations["create_evaluation_run_projects__project_id__evaluations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evaluations/{evaluation_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Evaluation Run */
+        post: operations["cancel_evaluation_run_projects__project_id__evaluations__evaluation_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evaluations/{evaluation_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Evaluation Run
+         * @description Resume failed children only when every frozen input and policy still matches.
+         */
+        post: operations["resume_evaluation_run_projects__project_id__evaluations__evaluation_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/execution-adapter": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Execution Adapter */
+        get: operations["get_execution_adapter_projects__project_id__execution_adapter_get"];
+        /** Set Execution Adapter */
+        put: operations["set_execution_adapter_projects__project_id__execution_adapter_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{project_id}/evidence/gateway-usage/reconcile": {
         parameters: {
             query?: never;
@@ -1378,6 +1590,87 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** EvaluationDryRun */
+        EvaluationDryRun: {
+            /** Suite */
+            suite: string;
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Manifest Digest */
+            manifest_digest: string;
+            /** Task Count */
+            task_count: number;
+            /** Cost Estimate Usd */
+            cost_estimate_usd: string;
+            /** Estimate Kind */
+            estimate_kind: string;
+            /** Within Project Policy */
+            within_project_policy: boolean;
+        };
+        /** EvaluationRunCreate */
+        EvaluationRunCreate: {
+            /** Stable Key */
+            stable_key: string;
+            /** Suite */
+            suite: string;
+            /** Task Ids */
+            task_ids: string[];
+            /** Mode */
+            mode: string;
+            /** K */
+            k: number;
+            /** Route Alias */
+            route_alias: string;
+        };
+        /** EvaluationRunRead */
+        EvaluationRunRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Stable Key */
+            stable_key: string;
+            /** Status */
+            status: string;
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Manifest Digest */
+            manifest_digest: string;
+            /** Sample Size */
+            sample_size: number;
+            /** Completed Samples */
+            completed_samples: number;
+            /** Failed Samples */
+            failed_samples: number;
+            /** Cancelled Samples */
+            cancelled_samples: number;
+            /** Missing Samples */
+            missing_samples: number;
+            /** Delivery Samples */
+            delivery_samples: number;
+            /** Delivery Successes */
+            delivery_successes: number;
+            /** Delivery Wilson 95 */
+            delivery_wilson_95: number[] | null;
+            /** Cost Usd */
+            cost_usd: string | null;
+            /** P50 Latency Ms */
+            p50_latency_ms: number | null;
+            /** P95 Latency Ms */
+            p95_latency_ms: number | null;
+            /** Experiment Ids */
+            experiment_ids: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** EventEnvelope */
         EventEnvelope: {
             /**
@@ -1566,6 +1859,84 @@ export interface components {
          * @enum {string}
          */
         EvidenceValueStatus: "known" | "unknown" | "redacted";
+        /** ExecutionAdapterRead */
+        ExecutionAdapterRead: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Adapter
+             * @enum {string}
+             */
+            adapter: "deployment-default" | "acp-opencode" | "disabled";
+            /** Available Adapters */
+            available_adapters: ("deployment-default" | "acp-opencode" | "disabled")[];
+            /** Configured */
+            configured: boolean;
+            /** Detail */
+            detail: string;
+        };
+        /** ExecutionAdapterWrite */
+        ExecutionAdapterWrite: {
+            /**
+             * Adapter
+             * @enum {string}
+             */
+            adapter: "deployment-default" | "acp-opencode" | "disabled";
+        };
+        /** ExperimentCreate */
+        ExperimentCreate: {
+            /** Stable Key */
+            stable_key: string;
+            /** Mode */
+            mode: string;
+            /** K */
+            k: number;
+            /** Route Alias */
+            route_alias: string;
+        };
+        /** ExperimentRead */
+        ExperimentRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Status */
+            status: string;
+            /** Phase */
+            phase: string;
+            /** Mode */
+            mode: string;
+            /** K */
+            k: number;
+            /** Base Sha */
+            base_sha: string;
+            /** Specification Hash */
+            specification_hash: string;
+            /** Specification Revision */
+            specification_revision: number;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Upstream Revision */
+            upstream_revision: string;
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** GatewayUsageImportBatch */
         GatewayUsageImportBatch: {
             /** Observations */
@@ -1874,6 +2245,29 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HarnessOverview */
+        HarnessOverview: {
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Policy */
+            policy: {
+                [key: string]: unknown;
+            };
+            /** Experiments */
+            experiments: {
+                [key: string]: unknown;
+            }[];
+            /** Probes */
+            probes: {
+                [key: string]: unknown;
+            }[];
+            /** Experiences */
+            experiences: {
+                [key: string]: unknown;
+            }[];
+        };
         /** Identity */
         Identity: {
             /**
@@ -2047,12 +2441,24 @@ export interface components {
             task_limit_usd: number | string;
             /** Run Limit Usd */
             run_limit_usd: number | string;
+            /** Probe Project Limit Usd */
+            probe_project_limit_usd: number | string;
+            /** Probe Task Limit Usd */
+            probe_task_limit_usd: number | string;
+            /** Probe Run Limit Usd */
+            probe_run_limit_usd: number | string;
             /** Project Token Limit */
             project_token_limit: number;
             /** Task Token Limit */
             task_token_limit: number;
             /** Run Token Limit */
             run_token_limit: number;
+            /** Probe Project Token Limit */
+            probe_project_token_limit: number;
+            /** Probe Task Token Limit */
+            probe_task_token_limit: number;
+            /** Probe Run Token Limit */
+            probe_run_token_limit: number;
             /** Max Steps */
             max_steps: number;
             /** Max Wall Seconds */
@@ -2083,12 +2489,24 @@ export interface components {
             task_limit_usd: number | string;
             /** Run Limit Usd */
             run_limit_usd: number | string;
+            /** Probe Project Limit Usd */
+            probe_project_limit_usd: number | string;
+            /** Probe Task Limit Usd */
+            probe_task_limit_usd: number | string;
+            /** Probe Run Limit Usd */
+            probe_run_limit_usd: number | string;
             /** Project Token Limit */
             project_token_limit: number;
             /** Task Token Limit */
             task_token_limit: number;
             /** Run Token Limit */
             run_token_limit: number;
+            /** Probe Project Token Limit */
+            probe_project_token_limit: number;
+            /** Probe Task Token Limit */
+            probe_task_token_limit: number;
+            /** Probe Run Token Limit */
+            probe_run_token_limit: number;
             /** Max Steps */
             max_steps: number;
             /** Max Wall Seconds */
@@ -2213,6 +2631,26 @@ export interface components {
             configured_aliases: number;
             /** Pools */
             pools: string[];
+            /**
+             * Execution Adapter
+             * @default null
+             */
+            execution_adapter: string | null;
+            /**
+             * Execution Adapter Configured
+             * @default false
+             */
+            execution_adapter_configured: boolean;
+            /**
+             * Execution Agent Image
+             * @default null
+             */
+            execution_agent_image: string | null;
+            /**
+             * Execution Model Route Ready
+             * @default false
+             */
+            execution_model_route_ready: boolean;
             /**
              * Provider Credentials Checked
              * @default false
@@ -2661,6 +3099,15 @@ export interface components {
              * Format: uuid
              */
             id: string;
+        };
+        /** PromotionRequest */
+        PromotionRequest: {
+            /** Stable Key */
+            stable_key: string;
+            /** Candidate Digest */
+            candidate_digest: string;
+            /** Rationale */
+            rationale: string;
         };
         /** RecoveryRequest */
         RecoveryRequest: {
@@ -6351,6 +6798,479 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitHubWebhookReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    harness_overview_projects__project_id__harness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessOverview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_harness_experiment_projects__project_id__tasks__task_id__harness_experiments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExperimentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExperimentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_harness_experiment_projects__project_id__harness_experiments__experiment_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                experiment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExperimentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_harness_experiment_projects__project_id__harness_experiments__experiment_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                experiment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExperimentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_harness_experience_projects__project_id__harness_experiences__experience_id__promote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                experience_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromotionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_harness_experience_projects__project_id__harness_experiences__experience_id__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                experience_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromotionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluation_catalog_projects__project_id__evaluations_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluation_dry_run_projects__project_id__evaluations_dry_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvaluationRunCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationDryRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_evaluation_runs_projects__project_id__evaluations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_evaluation_run_projects__project_id__evaluations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvaluationRunCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationRunRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_evaluation_run_projects__project_id__evaluations__evaluation_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                evaluation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationRunRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_evaluation_run_projects__project_id__evaluations__evaluation_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                evaluation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationRunRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_execution_adapter_projects__project_id__execution_adapter_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionAdapterRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_execution_adapter_projects__project_id__execution_adapter_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutionAdapterWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionAdapterRead"];
                 };
             };
             /** @description Validation Error */

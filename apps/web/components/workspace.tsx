@@ -55,6 +55,22 @@ function eventSummary(event: AgUiEvent): string {
   }
 }
 
+function wilsonInterval(successes: number, sampleSize: number): [number, number] | null {
+  if (sampleSize <= 0) return null;
+  const z = 1.96;
+  const proportion = successes / sampleSize;
+  const denominator = 1 + (z * z) / sampleSize;
+  const center = (proportion + (z * z) / (2 * sampleSize)) / denominator;
+  const margin = (z * Math.sqrt((proportion * (1 - proportion) + (z * z) / (4 * sampleSize)) / sampleSize)) / denominator;
+  return [Math.max(0, center - margin), Math.min(1, center + margin)];
+}
+
+function percentile(values: number[], quantile: number): number | null {
+  if (!values.length) return null;
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.ceil(quantile * ordered.length) - 1] ?? ordered[ordered.length - 1] ?? null;
+}
+
 function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, isDragging } = useDraggable({ id: task.id, data: { task } });
   const dragDescription = [attributes["aria-describedby"], `task-title-${task.id}`].filter(Boolean).join(" ");
@@ -85,6 +101,10 @@ export function Workspace({ section: rawSection }: { section: string }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskSearch, setTaskSearch] = useState("");
+  const [taskStageFilter, setTaskStageFilter] = useState("all");
+  const [hasMoreTasks, setHasMoreTasks] = useState(false);
+  const [loadingMoreTasks, setLoadingMoreTasks] = useState(false);
   const [active, setActive] = useState<Task | null>(null);
   const [dragTask, setDragTask] = useState<Task | null>(null);
   const [error, setError] = useState("");
@@ -98,6 +118,10 @@ export function Workspace({ section: rawSection }: { section: string }) {
   useEffect(() => { activeTaskId.current = active?.id; }, [active?.id]);
   const closeInspector = useCallback(() => setActive(null), []);
   const project = projects.find((item) => item.id === projectId);
+  const visibleTasks = useMemo(() => tasks.filter((task) =>
+    (taskStageFilter === "all" || task.stage === taskStageFilter) &&
+    `${task.title} ${task.description} ${task.id}`.toLowerCase().includes(taskSearch.toLowerCase())
+  ), [taskSearch, taskStageFilter, tasks]);
 
   const loadProjects = useCallback(async () => {
     const response = await fetch(`${API}/projects`, { credentials: "include" });
@@ -111,11 +135,29 @@ export function Workspace({ section: rawSection }: { section: string }) {
   const loadTasks = useCallback(async (selected = projectId) => {
     if (!selected) { setTasks([]); setLoading(false); return; }
     setLoading(true);
-    const response = await fetch(`${API}/projects/${selected}/tasks?limit=500`, { credentials: "include", cache: "no-store" });
+    const response = await fetch(`${API}/projects/${selected}/tasks?limit=100`, { credentials: "include", cache: "no-store" });
     if (response.status === 401) { router.push("/login"); return; }
     if (!response.ok) throw new Error(response.status === 403 ? "Access to this project was denied." : "Task board could not be loaded.");
-    setTasks(await response.json()); setLoading(false);
+    const rows: Task[] = await response.json(); setTasks(rows); setHasMoreTasks(rows.length === 100); setLoading(false);
   }, [projectId, router]);
+
+  async function loadMoreTasks() {
+    const last = tasks.at(-1);
+    if (!projectId || !last || !hasMoreTasks || loadingMoreTasks) return;
+    setLoadingMoreTasks(true);
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/tasks?limit=100&before=${last.id}`, { credentials: "include", cache: "no-store" });
+      if (response.status === 401) { router.push("/login"); return; }
+      if (!response.ok) throw new Error("Older tasks could not be loaded.");
+      const rows: Task[] = await response.json();
+      setTasks((current) => [...current, ...rows]);
+      setHasMoreTasks(rows.length === 100);
+    } catch {
+      setError("Older tasks could not be loaded. Retry after checking the connection.");
+    } finally {
+      setLoadingMoreTasks(false);
+    }
+  }
 
   useEffect(() => { queueMicrotask(() => { loadProjects().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Project load failed")); }); }, [loadProjects]);
   useEffect(() => { if (!projectId) return; localStorage.setItem("harnessa.project", projectId); queueMicrotask(() => { loadTasks(projectId).catch((cause: unknown) => { setError(cause instanceof Error ? cause.message : "Task load failed"); setLoading(false); }); }); }, [projectId, loadTasks]);
@@ -256,18 +298,20 @@ export function Workspace({ section: rawSection }: { section: string }) {
         <select id="project-switch" className="mt-2 min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]" value={projectId} onChange={(event) => { setProjectId(event.target.value); setActive(null); }}>
           {projects.length === 0 && <option value="">No authorized projects</option>}{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
-        <nav aria-label="Workspace" className="mt-5 flex gap-1 overflow-x-auto lg:flex-col">{NAV.map(({ id, label, icon: Icon }) => <Link key={id} href={`/workspace/${id}`} aria-current={section === id ? "page" : undefined} className={`flex min-h-10 shrink-0 items-center gap-3 rounded-lg px-3 text-sm ${section === id ? "bg-[var(--primary)]/10 font-semibold text-[var(--primary)]" : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]"}`}><Icon size={17} aria-hidden="true" />{label}</Link>)}</nav>
+        <nav aria-label="Workspace" className="mt-5 flex flex-wrap gap-1 lg:flex-nowrap lg:overflow-x-auto lg:flex-col">{NAV.map(({ id, label, icon: Icon }) => <Link key={id} href={`/workspace/${id}`} aria-current={section === id ? "page" : undefined} className={`flex min-h-10 shrink-0 items-center gap-3 rounded-lg px-3 text-sm ${section === id ? "bg-[var(--primary)]/10 font-semibold text-[var(--primary)]" : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]"}`}><Icon size={17} aria-hidden="true" />{label}</Link>)}</nav>
         <div className="mt-auto hidden border-t border-[var(--border)] pt-4 lg:block"><p className="truncate text-xs text-[var(--muted-foreground)]">{project?.name ?? "Select a project"}</p><Button variant="ghost" className="mt-2 w-full justify-start" onClick={logout}>Sign out</Button></div>
       </aside>
       <section className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">
-        <header className="mb-6 flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-medium uppercase tracking-[.12em] text-[var(--muted-foreground)]">{project?.name ?? "Workspace"}</p><h1 className="mt-1 text-2xl font-semibold">{NAV.find((item) => item.id === section)?.label}</h1></div><div className="flex items-center gap-2"><Badge variant={live ? "default" : "outline"}>{live ? "Live events connected" : "Event stream idle"}</Badge><Button variant="outline" size="icon" aria-label={dark ? "Use light theme" : "Use dark theme"} onClick={toggleTheme}>{dark ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}</Button><Button variant="outline" onClick={() => loadTasks().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Refresh failed"))}>Refresh</Button><Button className="lg:hidden" variant="ghost" onClick={logout}>Sign out</Button></div></header>
+        <header className="mb-6 flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-medium uppercase tracking-[.12em] text-[var(--muted-foreground)]">{project?.name ?? "Workspace"}</p><h1 className="mt-1 text-2xl font-semibold">{NAV.find((item) => item.id === section)?.label}</h1></div><div className="flex flex-wrap items-center gap-2"><Badge variant={live ? "default" : "outline"}>{live ? "Live events connected" : "Event stream idle"}</Badge><Link className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]" href="/setup">Setup &amp; health</Link><Button variant="outline" size="icon" aria-label={dark ? "Use light theme" : "Use dark theme"} onClick={toggleTheme}>{dark ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}</Button><Button variant="outline" onClick={() => loadTasks().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Refresh failed"))}>Refresh</Button><Button className="lg:hidden" variant="ghost" onClick={logout}>Sign out</Button></div></header>
         {error && <Alert variant="destructive" className="mb-4"><AlertDescription>{error}</AlertDescription></Alert>}{notice && <Alert className="mb-4"><AlertDescription>{notice}</AlertDescription></Alert>}
         {!projectId ? <Card><CardHeader><CardTitle>No project selected</CardTitle><CardDescription>Sign in with a project membership or create a project from setup.</CardDescription></CardHeader></Card> : section === "board" ? <>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-[var(--muted-foreground)]">Task stage, run status, and specification readiness are shown separately. Move cards with drag and drop, or open details and use the authorized transition buttons.</p><Button onClick={async () => { const title = window.prompt("Task title"); if (!title?.trim()) return; const response = await fetch(`${API}/projects/${projectId}/tasks`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json", "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ title: title.trim(), description: "", priority: 0 }) }); if (!response.ok) { setError(response.status === 403 ? "Task creation is not authorized." : "Task creation failed."); return; } await loadTasks(); }}>Create task</Button></div>
-          {loading ? <div role="status" className="flex items-center gap-2 py-12 text-sm"><LoaderCircle className="animate-spin" size={18} />Loading tasks…</div> : tasks.length === 0 ? <Card><CardHeader><CardTitle>No tasks yet</CardTitle><CardDescription>Create a task to start a governed workflow.</CardDescription></CardHeader></Card> : <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragTask(null)}><div className="flex gap-3 overflow-x-auto pb-4" aria-label="Ten-column task board">{COLUMNS.map((stage) => <BoardColumn key={stage} stage={stage} tasks={tasks.filter((task) => task.stage === stage)} open={setActive} disabled={dragTask ? !(dragTask.allowed_transitions ?? []).includes(stage) : false} />)}</div></DndContext>}
-          {!loading && tasks.some((task) => ["REJECTED", "CANCELLED", "RETRY_EXHAUSTED"].includes(task.stage)) && <section aria-label="Terminal tasks" className="mt-5"><h2 className="mb-2 text-sm font-semibold">Terminal tasks</h2><ul className="space-y-2">{tasks.filter((task) => ["REJECTED", "CANCELLED", "RETRY_EXHAUSTED"].includes(task.stage)).map((task) => <li key={task.id}><button className="flex w-full flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]" onClick={() => setActive(task)}><span className="font-medium">{task.title}</span><span className="flex flex-wrap gap-1.5"><Badge variant="outline">{LABELS[task.stage]}</Badge><Badge variant={task.run_status === "FAILED" ? "destructive" : "secondary"}>{task.run_status}</Badge>{task.specification_readiness_state && <Badge variant="outline">Spec {task.specification_readiness_state} · r{task.specification_revision}</Badge>}</span></button></li>)}</ul></section>}
-          {active && <TaskInspector task={active} onClose={closeInspector} onMove={(target) => move(active, target)} onRefresh={() => refreshTask(active.id)} onError={setError} />}
-        </> : section === "events" ? <EventsView events={projectEvents} connected={live} /> : section === "openspec" ? <OpenSpecView projectId={projectId} /> : section === "harness" ? <HarnessStudioView projectId={projectId} tasks={tasks} /> : section === "evals" ? <EvaluationsView tasks={tasks} /> : section === "github" ? <GitHubView /> : <RoutingView projectId={projectId} />}
+          <div className="mb-3 flex flex-wrap items-end gap-3"><label className="grid gap-1 text-sm">Search tasks<input value={taskSearch} onChange={(event) => setTaskSearch(event.target.value)} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" /></label><label className="grid gap-1 text-sm">Stage<select value={taskStageFilter} onChange={(event) => setTaskStageFilter(event.target.value)} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="all">All stages</option>{COLUMNS.map((stage) => <option key={stage} value={stage}>{LABELS[stage]}</option>)}</select></label><span className="pb-2 text-xs text-[var(--muted-foreground)]">Showing {visibleTasks.length} matching tasks</span></div>
+          {loading ? <div role="status" className="flex items-center gap-2 py-12 text-sm"><LoaderCircle className="animate-spin" size={18} />Loading tasks…</div> : tasks.length === 0 ? <Card><CardHeader><CardTitle>No tasks yet</CardTitle><CardDescription>Create a task to start a governed workflow.</CardDescription></CardHeader></Card> : visibleTasks.length === 0 ? <p role="status">No tasks match these filters.</p> : <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragTask(null)}><div className="flex gap-3 overflow-x-auto pb-4" aria-label="Ten-column task board">{COLUMNS.filter((stage) => taskStageFilter === "all" || stage === taskStageFilter).map((stage) => <BoardColumn key={stage} stage={stage} tasks={visibleTasks.filter((task) => task.stage === stage)} open={setActive} disabled={dragTask ? !(dragTask.allowed_transitions ?? []).includes(stage) : false} />)}</div></DndContext>}
+          {!loading && hasMoreTasks && <Button variant="outline" disabled={loadingMoreTasks} onClick={() => void loadMoreTasks()}>{loadingMoreTasks ? "Loading older tasks…" : "Load older tasks"}</Button>}
+          {!loading && visibleTasks.some((task) => ["REJECTED", "CANCELLED", "RETRY_EXHAUSTED"].includes(task.stage)) && <section aria-label="Terminal tasks" className="mt-5"><h2 className="mb-2 text-sm font-semibold">Terminal tasks</h2><ul className="space-y-2">{visibleTasks.filter((task) => ["REJECTED", "CANCELLED", "RETRY_EXHAUSTED"].includes(task.stage)).map((task) => <li key={task.id}><button className="flex w-full flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]" onClick={() => setActive(task)}><span className="font-medium">{task.title}</span><span className="flex flex-wrap gap-1.5"><Badge variant="outline">{LABELS[task.stage]}</Badge><Badge variant={task.run_status === "FAILED" ? "destructive" : "secondary"}>{task.run_status}</Badge>{task.specification_readiness_state && <Badge variant="outline">Spec {task.specification_readiness_state} · r{task.specification_revision}</Badge>}</span></button></li>)}</ul></section>}
+        {active && <TaskInspector task={active} onClose={closeInspector} onMove={(target) => move(active, target)} onRefresh={() => refreshTask(active.id)} onError={setError} />}
+        </> : section === "events" ? <EventsView events={projectEvents} connected={live} /> : section === "openspec" ? <OpenSpecView projectId={projectId} /> : section === "harness" ? <HarnessStudioView projectId={projectId} tasks={tasks} /> : section === "evals" ? <EvaluationsView projectId={projectId} tasks={tasks} /> : section === "github" ? <GitHubView /> : <RoutingView projectId={projectId} />}
       </section>
     </div>
   </main>;
@@ -497,11 +541,30 @@ function TaskInspector({ task, onClose, onMove, onRefresh, onError }: { task: Ta
       {capabilities && (capabilities.allowed_transitions ?? []).length > 0 && <div className="mt-6 border-t border-[var(--border)] pt-4"><p className="mb-2 text-sm font-medium">Authorized stage transitions</p><div className="flex flex-wrap gap-2">{(capabilities.allowed_transitions ?? []).map((stage) => <Button key={stage} size="sm" variant="outline" aria-label={`Move to ${LABELS[stage]}`} onClick={() => void moveAndRefresh(stage)}>{LABELS[stage]}</Button>)}</div><p className="mt-2 text-xs text-[var(--muted-foreground)]">Keyboard users can tab to these actions and activate them with Enter or Space.</p></div>}</div></section></div>;
 }
 
+type OpenSpecEntry = components["schemas"]["SpecificationExplorerEntry"] & {
+  repositoryLabel: string;
+  sourceUrl: string | null;
+};
+
+function githubRevisionUrl(targetId: string, revision: string, path: string): string | null {
+  if (!/^[a-f0-9]{40}$/i.test(revision) || path.split("/").some((segment) => !segment || segment === "." || segment === "..")) return null;
+  const remote = targetId.trim().replace(/\.git$/i, "");
+  const match = remote.match(/^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)?([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)$/i);
+  if (!match) return null;
+  const [owner, repository] = match[1].split("/");
+  return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/blob/${revision}/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 function OpenSpecView({ projectId }: { projectId: string }) {
-  const [entries, setEntries] = useState<components["schemas"]["SpecificationExplorerEntry"][]>([]);
+  const [entries, setEntries] = useState<OpenSpecEntry[]>([]);
   const [error, setError] = useState("");
-  useEffect(() => { let mounted = true; void (async () => { const reposResponse = await fetch(`${API}/projects/${projectId}/repositories`, { credentials: "include" }); if (!reposResponse.ok) throw new Error(reposResponse.status === 403 ? "Repository access denied." : "Connected repositories are unavailable."); const repos = await reposResponse.json() as components["schemas"]["RepositoryRead"][]; const results = await Promise.all(repos.map(async (repo) => { const response = await fetch(`${API}/projects/${projectId}/repositories/${repo.id}/specification-explorer`, { credentials: "include" }); if (!response.ok) throw new Error(response.status === 403 ? "OpenSpec access denied." : "OpenSpec explorer is unavailable."); return await response.json() as components["schemas"]["SpecificationExplorerRead"]; })); if (mounted) setEntries(results.flatMap((result) => result.entries)); })().catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "OpenSpec data unavailable"); }); return () => { mounted = false; }; }, [projectId]);
-  return <div className="space-y-4"><p className="text-sm text-[var(--muted-foreground)]">Repository specifications are read from the authorized OpenSpec explorer.</p>{error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}{entries.length === 0 ? <Card><CardHeader><CardTitle>No specification changes</CardTitle><CardDescription>Connected repositories with OpenSpec changes will appear here.</CardDescription></CardHeader></Card> : entries.map((entry) => <Card key={`${entry.revision}:${entry.path}`}><CardHeader><CardTitle className="flex items-center gap-2"><FileCode2 size={17} />{entry.path}</CardTitle><CardDescription>{entry.section} · {entry.revision}{entry.archived ? " · archived" : ""}</CardDescription></CardHeader></Card>)}</div>;
+  const [query, setQuery] = useState("");
+  const [section, setSection] = useState("all");
+  const [limit, setLimit] = useState(25);
+  useEffect(() => { let mounted = true; void (async () => { const reposResponse = await fetch(`${API}/projects/${projectId}/repositories`, { credentials: "include" }); if (!reposResponse.ok) throw new Error(reposResponse.status === 403 ? "Repository access denied." : "Connected repositories are unavailable."); const repos = await reposResponse.json() as components["schemas"]["RepositoryRead"][]; const results = await Promise.all(repos.map(async (repo) => { const response = await fetch(`${API}/projects/${projectId}/repositories/${repo.id}/specification-explorer`, { credentials: "include" }); if (!response.ok) throw new Error(response.status === 403 ? "OpenSpec access denied." : "OpenSpec explorer is unavailable."); return { repo, data: await response.json() as components["schemas"]["SpecificationExplorerRead"] }; })); if (mounted) setEntries(results.flatMap(({ repo, data }) => data.entries.map((entry) => ({ ...entry, repositoryLabel: repo.display_name || repo.target_id, sourceUrl: githubRevisionUrl(repo.target_id, entry.revision, entry.path) })))); })().catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "OpenSpec data unavailable"); }); return () => { mounted = false; }; }, [projectId]);
+  const sections = [...new Set(entries.map((entry) => entry.section))].sort();
+  const filtered = entries.filter((entry) => (section === "all" || entry.section === section) && `${entry.path} ${entry.section} ${entry.revision}`.toLowerCase().includes(query.toLowerCase())).slice(0, limit);
+  return <div className="space-y-4"><p className="text-sm text-[var(--muted-foreground)]">Repository specifications are read from the authorized OpenSpec explorer. GitHub revision links appear only when the repository target and full source commit are known.</p><div className="flex flex-wrap gap-3"><label className="grid gap-1 text-sm">Search<input aria-label="Search OpenSpec entries" value={query} onChange={(event) => { setQuery(event.target.value); setLimit(25); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" /></label><label className="grid gap-1 text-sm">Change type<select aria-label="Filter OpenSpec section" value={section} onChange={(event) => { setSection(event.target.value); setLimit(25); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="all">All sections</option>{sections.map((value) => <option key={value}>{value}</option>)}</select></label></div>{error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}{entries.length === 0 ? <Card><CardHeader><CardTitle>No specification changes</CardTitle><CardDescription>Connected repositories with OpenSpec changes will appear here.</CardDescription></CardHeader></Card> : filtered.length === 0 ? <p role="status">No entries match these filters.</p> : filtered.map((entry) => <Card key={`${entry.repositoryLabel}:${entry.revision}:${entry.path}`}><CardHeader><CardTitle className="flex items-center gap-2"><FileCode2 size={17} />{entry.path}</CardTitle><CardDescription>{entry.repositoryLabel} · {entry.section} · revision {entry.revision}{entry.archived ? " · archived" : " · active"}{entry.sourceUrl && <> · <a href={entry.sourceUrl} target="_blank" rel="noreferrer" aria-label={`Open ${entry.path} at source revision ${entry.revision}`}>Open source revision</a></>}</CardDescription></CardHeader></Card>)}{filtered.length < entries.filter((entry) => (section === "all" || entry.section === section) && `${entry.path} ${entry.section} ${entry.revision}`.toLowerCase().includes(query.toLowerCase())).length && <Button variant="outline" onClick={() => setLimit((value) => value + 25)}>Load 25 more</Button>}</div>;
 }
 
 function useProjectRuns(projectId: string, tasks: Task[]) {
@@ -557,9 +620,258 @@ function HarnessStudioView({ projectId, tasks }: { projectId: string; tasks: Tas
   return <div className="space-y-4"><Card><CardHeader><CardTitle>Harness Studio</CardTitle><CardDescription>Project harness versions, immutable host policy, experiment history, component diffs, and authorized probe evidence.</CardDescription></CardHeader><CardContent>{harnessError ? <Alert variant="destructive"><AlertDescription>{harnessError}</AlertDescription></Alert> : !harness ? <p role="status">Loading project harness evidence…</p> : <div className="space-y-4"><p className="text-sm">Harness² {String(manifest?.upstream_revision ?? "unavailable")} · {String(manifest?.upstream_license ?? "unknown license")} · shared harness activation requires reviewed promotion.</p><ul className="grid gap-2 sm:grid-cols-2">{components.map((component, index) => <li key={String(component.category ?? index)} className="rounded-lg border border-[var(--border)] p-3"><strong>{String(component.category)}</strong><p className="text-xs text-[var(--muted-foreground)]">{Array.isArray(component.paths) ? component.paths.join(", ") : "No mapped paths"}</p></li>)}</ul><h3 className="font-semibold">Experiment history</h3>{experiments.length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No task-level experiments are recorded.</p> : experiments.map((experiment) => <div key={String(experiment.id)} className="rounded-lg border border-[var(--border)] p-3"><div className="flex flex-wrap items-center gap-2"><Badge>{String(experiment.status)}</Badge><span>{String(experiment.mode)} · k={String(experiment.k)} · task {String(experiment.task_id)}</span></div><p className="mt-1 text-xs text-[var(--muted-foreground)]">Base {String(experiment.base_sha)} · spec {String(experiment.specification_hash)} · {String(experiment.upstream_revision)}</p><pre className="mt-2 overflow-auto text-xs">{JSON.stringify(experiment.result, null, 2)}</pre></div>)}<h3 className="font-semibold">Probe comparisons</h3>{probes.length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No baseline, candidate, or composed probe evidence is recorded.</p> : probes.map((probe, index) => <div key={`${String(probe.label)}-${index}`} className="rounded-lg border border-[var(--border)] p-3"><div className="flex flex-wrap items-center gap-2"><strong>{String(probe.label)}</strong><Badge>{String(probe.phase)} · {String(probe.status)}</Badge>{typeof probe.delivered === "boolean" && <span>{probe.delivered ? "Delivered" : "Not delivered"}</span>}{typeof probe.wall_ms === "number" && <span>{probe.wall_ms} ms</span>}</div><pre className="mt-2 overflow-auto text-xs">{JSON.stringify(probe.component_diff, null, 2)}</pre><p className="text-xs text-[var(--muted-foreground)]">Trace {String(probe.trace_digest ?? "not captured")} · harness {String(probe.harness_digest ?? "unknown")}</p></div>)}<h3 className="font-semibold">Cross-task experience versions</h3>{experiences.length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No evidence-backed experience candidates are recorded.</p> : experiences.map((experience) => <div key={String(experience.id)} className="rounded-lg border border-[var(--border)] p-3"><div className="flex flex-wrap items-center gap-2"><strong>{String(experience.cue)}</strong><Badge>{String(experience.status)} · v{String(experience.version)}</Badge></div><p className="mt-2 text-sm">{String(experience.lesson)}</p><p className="text-xs text-[var(--muted-foreground)]">Scope {String(experience.repository_scope)} / {String(experience.domain_scope)} · conflict {String(experience.conflict_key)} · expires {new Date(String(experience.expiry_at)).toLocaleDateString()}</p><p className="text-xs text-[var(--muted-foreground)]">Evidence: {Array.isArray(experience.evidence_refs) ? experience.evidence_refs.map((ref) => typeof ref === "object" && ref !== null ? String((ref as Record<string, unknown>).digest ?? "unknown digest") : "invalid reference").join(", ") : "missing"} · SHA-256 {String(experience.candidate_digest)}</p>{experience.status === "candidate" && <Button size="sm" className="mt-2" onClick={() => void decideExperience(experience, "promote")}>Review and promote</Button>}{experience.status === "superseded" && <Button size="sm" variant="outline" className="mt-2" onClick={() => void decideExperience(experience, "rollback")}>Review and roll back to this version</Button>}</div>)}</div>}</CardContent></Card>{error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}{visibleTasks.map((task) => <Card key={task.id}><CardHeader><CardTitle>{task.title}</CardTitle><CardDescription>{LABELS[task.stage]} · task v{task.version}</CardDescription></CardHeader><CardContent>{(runs[task.id] ?? []).length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No run has been claimed by the scheduler.</p> : <ul className="space-y-2">{(runs[task.id] ?? []).map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] p-3"><span>Attempt {run.attempt}</span><Badge variant={run.status === "FAILED" ? "destructive" : "secondary"}>{run.status}</Badge><span className="text-xs text-[var(--muted-foreground)]">{run.started_at ? new Date(run.started_at).toLocaleString() : "Not started"}</span></li>)}</ul>}</CardContent></Card>)}</div>;
 }
 
-function EvaluationsView({ tasks }: { tasks: Task[] }) {
+function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[] }) {
   const visibleTasks = useMemo(() => tasks.slice(0, 50), [tasks]);
-  return <div className="space-y-4"><Card><CardHeader><CardTitle>Evaluation evidence</CardTitle><CardDescription>Specification readiness is shown separately from verifier outcomes. Task or run status is never treated as an evaluation result.</CardDescription></CardHeader></Card>{visibleTasks.length === 0 ? <Card><CardHeader><CardTitle>No task evidence</CardTitle><CardDescription>Create or select a task to see its specification readiness state.</CardDescription></CardHeader></Card> : visibleTasks.map((task) => <Card key={task.id}><CardHeader><CardTitle>{task.title}</CardTitle><CardDescription>{LABELS[task.stage]} · run {task.run_status}</CardDescription></CardHeader><CardContent>{task.specification_readiness_state ? <div className="flex flex-wrap items-center gap-2"><Badge variant={task.specification_readiness_state === "READY" ? "success" : "warning"}>Specification {task.specification_readiness_state}</Badge><span className="text-sm text-[var(--muted-foreground)]">Revision {task.specification_revision}</span></div> : <p className="text-sm text-[var(--muted-foreground)]">No specification readiness record is attached.</p>}<p className="mt-2 text-xs text-[var(--muted-foreground)]">Verifier evaluation records require a project-scoped evaluation API that is not present in the current backend.</p></CardContent></Card>)}</div>;
+  const [experiments, setExperiments] = useState<Record<string, unknown>[]>([]);
+  const [probeRows, setProbeRows] = useState<Record<string, unknown>[]>([]);
+  const [selectedTask, setSelectedTask] = useState("");
+  const [routeAlias, setRouteAlias] = useState("harnessa-deepseek-flash");
+  const [mode, setMode] = useState("both");
+  const [sampleSize, setSampleSize] = useState(1);
+  const [costEstimate, setCostEstimate] = useState<{ cost_estimate_usd: string; estimate_kind: string; manifest_digest: string } | null>(null);
+  const [costEstimateInputs, setCostEstimateInputs] = useState<string | null>(null);
+  const [evaluationRuns, setEvaluationRuns] = useState<Record<string, unknown>[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [budget, setBudget] = useState<components["schemas"]["ModelBudgetPolicyRead"] | null>(null);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const eligibleTasks = visibleTasks.filter((task) =>
+    task.stage === "HARNESS_PROBE" && task.specification_readiness_state === "READY",
+  );
+  const evaluationInputs = JSON.stringify([selectedTask, routeAlias.trim(), mode, sampleSize]);
+  useEffect(() => {
+    let mounted = true;
+    void fetch(`${API}/projects/${projectId}/harness`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(response.status === 403 ? "Evaluation evidence is not authorized for this project." : "Evaluation evidence is unavailable.");
+        const value = await response.json() as { experiments?: unknown; probes?: unknown };
+        if (mounted) {
+          setExperiments(Array.isArray(value.experiments) ? value.experiments.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+          setProbeRows(Array.isArray(value.probes) ? value.probes.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+        }
+      })
+      .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "Evaluation evidence is unavailable."); });
+    return () => { mounted = false; };
+  }, [projectId]);
+  useEffect(() => {
+    if (!evaluationRuns.some((run) => run.status === "queued" || run.status === "running")) return;
+    const timer = window.setInterval(() => {
+      void fetch(`${API}/projects/${projectId}/evaluations`, { credentials: "include", cache: "no-store" })
+        .then(async (response) => response.ok ? await response.json() as { runs?: unknown } : null)
+        .then((value) => {
+          if (value && Array.isArray(value.runs)) setEvaluationRuns(value.runs.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null));
+        });
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [evaluationRuns, projectId]);
+  useEffect(() => {
+    let mounted = true;
+    void fetch(`${API}/projects/${projectId}/evaluations`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Grouped evaluation runs are unavailable.");
+        return await response.json() as { runs?: unknown };
+      })
+      .then((value) => {
+        if (mounted) setEvaluationRuns(Array.isArray(value.runs) ? value.runs.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+      })
+      .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "Grouped evaluation runs are unavailable."); });
+    return () => { mounted = false; };
+  }, [projectId]);
+  useEffect(() => {
+    let mounted = true;
+    void fetch(`${API}/projects/${projectId}/models/budget`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error("Project budget limits are unavailable.");
+        return await response.json() as components["schemas"]["ModelBudgetPolicyRead"];
+      })
+      .then((value) => { if (mounted) setBudget(value); })
+      .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "Project budget limits are unavailable."); });
+    return () => { mounted = false; };
+  }, [projectId]);
+  async function refreshExperiments() {
+    const response = await fetch(`${API}/projects/${projectId}/harness`, { credentials: "include", cache: "no-store" });
+    if (!response.ok) throw new Error("Evaluation records could not be refreshed.");
+    const value = await response.json() as { experiments?: unknown; probes?: unknown };
+    setExperiments(Array.isArray(value.experiments) ? value.experiments.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+    setProbeRows(Array.isArray(value.probes) ? value.probes.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+    const runResponse = await fetch(`${API}/projects/${projectId}/evaluations`, { credentials: "include", cache: "no-store" });
+    if (runResponse.ok) {
+      const runValue = await runResponse.json() as { runs?: unknown };
+      setEvaluationRuns(Array.isArray(runValue.runs) ? runValue.runs.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+    }
+  }
+  async function previewEvaluationCost() {
+    if (!selectedTask || !routeAlias.trim()) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const inputsAtRequest = JSON.stringify([selectedTask, routeAlias.trim(), mode, sampleSize]);
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/evaluations/dry-run`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+        body: JSON.stringify({ stable_key: `preview-${crypto.randomUUID()}`, suite: "harness2-local", task_ids: [selectedTask], mode, k: sampleSize, route_alias: routeAlias.trim() }),
+      });
+      if (!response.ok) throw new Error(response.status === 409
+        ? "Configure the selected probe route and a finite project/run budget before estimating."
+        : `Evaluation estimate is unavailable (${response.status}).`);
+      const result = await response.json() as { cost_estimate_usd: string; estimate_kind: string; manifest_digest: string };
+      setCostEstimate(result);
+      setCostEstimateInputs(inputsAtRequest);
+      setNotice(`Conservative maximum estimate: $${result.cost_estimate_usd} (${result.estimate_kind}).`);
+    } catch (cause) {
+      setCostEstimate(null);
+      setCostEstimateInputs(null);
+      setError(cause instanceof Error ? cause.message : "Evaluation estimate is unavailable.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function startExperiment() {
+    if (!selectedTask || !routeAlias.trim() || !costEstimate) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/evaluations`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "",
+        },
+        body: JSON.stringify({
+          stable_key: crypto.randomUUID(),
+          suite: "harness2-local",
+          task_ids: [selectedTask],
+          mode,
+          k: sampleSize,
+          route_alias: routeAlias.trim(),
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(response.status === 409
+          ? "The task must have a frozen READY specification and be in Harness probe."
+          : response.status === 403
+            ? "Only a project operator can queue a Harness² evaluation."
+          : `The bounded evaluation could not be queued (${response.status}).`);
+      }
+      const run = await response.json() as Record<string, unknown>;
+      setNotice(`Immutable evaluation ${String(run.id)} queued · manifest ${String(run.manifest_digest)} · estimated ceiling $${String((run.manifest as Record<string, unknown>)?.estimate_usd ?? costEstimate.cost_estimate_usd)}.`);
+      setCostEstimate(null);
+      setCostEstimateInputs(null);
+      await refreshExperiments();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The bounded evaluation could not be queued.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function updateEvaluationRun(run: Record<string, unknown>, action: "cancel" | "resume") {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/evaluations/${String(run.id)}/${action}`, {
+        method: "POST", credentials: "include",
+        headers: { "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+      });
+      if (!response.ok) throw new Error(response.status === 409
+        ? "The evaluation state or frozen inputs no longer allow this operation."
+        : `Evaluation ${action} failed (${response.status}).`);
+      setNotice(action === "cancel" ? "Evaluation cancellation was recorded across queued and active children." : "Failed children were requeued against the same frozen manifest.");
+      await refreshExperiments();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : `Evaluation ${action} failed.`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function cancelExperiment(experiment: Record<string, unknown>) {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/harness-experiments/${String(experiment.id)}/cancel`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+      });
+      if (!response.ok) throw new Error(response.status === 403 ? "Only a project operator can cancel this evaluation." : "The evaluation could not be cancelled.");
+      setNotice("Cancellation was recorded; the worker will stop at its next safe checkpoint.");
+      await refreshExperiments();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The evaluation could not be cancelled.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function resumeExperiment(experiment: Record<string, unknown>) {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/harness-experiments/${String(experiment.id)}/resume`, {
+        method: "POST", credentials: "include",
+        headers: { "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+      });
+      if (!response.ok) throw new Error(response.status === 409
+        ? "Frozen inputs or policy changed, or the two-resume limit was reached. Queue a new evaluation manifest."
+        : response.status === 403 ? "Only a project operator can resume this evaluation." : "The evaluation could not be resumed.");
+      setNotice("The same frozen manifest was requeued. Model budgets are reserved again before provider dispatch.");
+      await refreshExperiments();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The evaluation could not be resumed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const adapters = [
+    { name: "Harnessa repository acceptance", state: "Available", detail: "Deterministic offline checks and revision-bound verification manifests. No benchmark score is inferred from task status." },
+    { name: "WorkBuddy-Bench", state: "Blocked: jurisdiction review", detail: "Tencent's published terms say the benchmark is not intended for use within the European Union. Dataset setup and execution are disabled pending a documented jurisdiction and license review." },
+    { name: "JobBench", state: "Unavailable: isolated adapter required", detail: "Official runner uses its own CLI/Harbor lifecycle and an external judge. Dataset setup, licenses, runner isolation, and budget-metered judge integration have not been provisioned here." },
+    { name: "Harvey LAB", state: "Unavailable: isolated adapter required", detail: "The MIT-licensed public harness and task set need a dedicated runner and judge adapter. It is not currently executed by Harnessa." },
+  ];
+  return <div className="space-y-4">
+    <Card><CardHeader><CardTitle>Evaluation center</CardTitle><CardDescription>Only immutable, source-backed evaluation manifests can produce results. Blocked adapters do not show fabricated scores.</CardDescription></CardHeader><CardContent><div className="grid gap-3 md:grid-cols-2">{adapters.map((adapter) => <section key={adapter.name} className="rounded-lg border border-[var(--border)] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">{adapter.name}</h3><Badge variant={adapter.state === "Available" ? "success" : "warning"}>{adapter.state}</Badge></div><p className="mt-2 text-sm text-[var(--muted-foreground)]">{adapter.detail}</p></section>)}</div></CardContent></Card>
+    <Card><CardHeader><CardTitle>Grouped evaluation manifests</CardTitle><CardDescription>Each run pins its suite, task revisions, route, policy revision, maximum subset size, and content digest. Cancellation and resume operate only on children of that unchanged manifest.</CardDescription></CardHeader>{evaluationRuns.length === 0 ? <CardContent><p className="text-sm text-[var(--muted-foreground)]">No grouped evaluation runs are recorded.</p></CardContent> : evaluationRuns.map((run) => {
+      const interval = Array.isArray(run.delivery_wilson_95) ? run.delivery_wilson_95 as number[] : null;
+      return <Card key={String(run.id)}><CardHeader><CardTitle className="flex flex-wrap items-center gap-2">Evaluation {String(run.id)}<Badge variant={run.status === "succeeded" ? "success" : "warning"}>{String(run.status)}</Badge></CardTitle><CardDescription>Manifest {String(run.manifest_digest)} · {String(run.completed_samples)}/{String(run.sample_size)} rollout records · {String(run.missing_samples)} missing · {String(run.failed_samples)} failed · {String(run.unknown_samples)} usage/outcome unknown · cost {run.cost_usd === null ? "unknown" : `$${String(run.cost_usd)}`}</CardDescription></CardHeader><CardContent className="space-y-2"><p className="text-xs">Delivery {String(run.delivery_successes)}/{String(run.delivery_samples)}{interval ? ` · 95% Wilson interval ${(interval[0] * 100).toFixed(1)}–${(interval[1] * 100).toFixed(1)}%` : " · uncertainty unavailable"} · latency p50/p95 {String(run.p50_latency_ms ?? "unknown")}/{String(run.p95_latency_ms ?? "unknown")} ms</p><div className="flex flex-wrap gap-2">{["queued", "running"].includes(String(run.status)) && <Button size="sm" variant="outline" disabled={busy} onClick={() => void updateEvaluationRun(run, "cancel")}>Cancel grouped evaluation</Button>}{["failed", "blocked"].includes(String(run.status)) && <Button size="sm" variant="outline" disabled={busy} onClick={() => void updateEvaluationRun(run, "resume")}>Resume failed children</Button>}</div></CardContent></Card>;
+    })}</Card>
+    <Card><CardHeader><CardTitle>Run a bounded Harness² comparison</CardTitle><CardDescription>Queues the existing task-level baseline, candidate probes, and composed evaluation. The server enforces the reviewed project harness policy and model budgets; no hidden benchmark data is exposed to the agent.</CardDescription></CardHeader><CardContent className="space-y-4">
+      <label className="grid gap-1 text-sm">Eligible task<select aria-label="Evaluation task" value={selectedTask} onChange={(event) => { setSelectedTask(event.target.value); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="">Select a READY task in Harness probe</option>{eligibleTasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
+      {eligibleTasks.length === 0 && <p className="text-sm text-[var(--muted-foreground)]">No task is currently READY in Harness probe. Move an eligible task into that stage after its specification is frozen.</p>}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="grid gap-1 text-sm">Comparison mode<select aria-label="Comparison mode" value={mode} onChange={(event) => { setMode(event.target.value); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="both">Parallel and sequential</option><option value="parallel">Parallel</option><option value="sequential">Sequential</option></select></label>
+        <label className="grid gap-1 text-sm">Candidate sample size<select aria-label="Candidate sample size" value={sampleSize} onChange={(event) => { setSampleSize(Number(event.target.value)); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3">{[1, 2, 3].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
+        <label className="grid gap-1 text-sm">Model route alias<input aria-label="Evaluation route alias" value={routeAlias} onChange={(event) => { setRouteAlias(event.target.value); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" autoComplete="off" /></label>
+      </div>
+      {budget ? <p className="text-xs text-[var(--muted-foreground)]">Each request is reserved against project/task/run cost and token ceilings. The estimate assumes the full route context window and configured retry bound; actual usage may be lower. Prior usage can reduce remaining availability.</p> : <p className="text-xs text-[var(--danger)]">No project model budget is configured. Evaluation remains blocked until finite project, task, and run limits are set in Model routing.</p>}
+      {costEstimate && costEstimateInputs === evaluationInputs && <p role="status" className="text-sm">Conservative evaluation estimate ${costEstimate.cost_estimate_usd} · {costEstimate.estimate_kind} · manifest {costEstimate.manifest_digest.slice(0, 12)}</p>}
+      <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={!selectedTask || !routeAlias.trim() || busy || eligibleTasks.length === 0 || !budget} onClick={() => void previewEvaluationCost()}>{busy ? "Estimating…" : "Estimate evaluation cost"}</Button><Button disabled={!selectedTask || !routeAlias.trim() || busy || eligibleTasks.length === 0 || !budget || !costEstimate || costEstimateInputs !== evaluationInputs} onClick={() => void startExperiment()}>{busy ? "Updating evaluation…" : "Queue immutable evaluation"}</Button></div>
+      {notice && <p role="status" className="text-sm">{notice}</p>}
+    </CardContent></Card>
+    <Card><CardHeader><CardTitle>Repository acceptance</CardTitle><CardDescription>Review task-linked verification and readiness evidence. Task or run status is not an evaluation score.</CardDescription></CardHeader>{visibleTasks.length === 0 ? <Card><CardHeader><CardTitle>No task evidence</CardTitle><CardDescription>Create or select a task to see its specification readiness state.</CardDescription></CardHeader></Card> : visibleTasks.map((task) => <Card key={task.id}><CardHeader><CardTitle>{task.title}</CardTitle><CardDescription>{LABELS[task.stage]} · run {task.run_status}</CardDescription></CardHeader><CardContent>{task.specification_readiness_state ? <div className="flex flex-wrap items-center gap-2"><Badge variant={task.specification_readiness_state === "READY" ? "success" : "warning"}>Specification {task.specification_readiness_state}</Badge><span className="text-sm text-[var(--muted-foreground)]">Revision {task.specification_revision}</span></div> : <p className="text-sm text-[var(--muted-foreground)]">No specification readiness record is attached.</p>}</CardContent></Card>)}</Card>
+    {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+    <Card><CardHeader><CardTitle>Harness experiment records</CardTitle><CardDescription>Project-scoped experiment records include the immutable task, source, specification, policy, and Harness² revisions. Evaluation summaries report rollout delivery and reliability, not a fabricated quality score.</CardDescription></CardHeader>{experiments.length === 0 ? <CardContent><p className="text-sm text-[var(--muted-foreground)]" role="status">No Harness² evaluation records are available for this project.</p></CardContent> : experiments.map((experiment) => {
+      const rows = probeRows.filter((row) => row.experiment_id === experiment.id);
+      const delivered = rows.filter((row) => row.delivered === true).length;
+      const interval = wilsonInterval(delivered, rows.length);
+      const durations = rows.map((row) => row.wall_ms).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+      const knownCosts = rows.map((row) => row.cost_usd).filter((value): value is string => typeof value === "string" && Number.isFinite(Number(value)));
+      const usage = experiment.result && typeof experiment.result === "object" ? (experiment.result as Record<string, unknown>).adaptation_usage : null;
+      const usageRecord = usage && typeof usage === "object" ? usage as Record<string, unknown> : null;
+      const totalCost = rows.length > 0 && knownCosts.length === rows.length && usageRecord?.usage_known === true && typeof usageRecord.cost_usd === "string"
+        ? knownCosts.reduce((sum, value) => sum + Number(value), Number(usageRecord.cost_usd))
+        : null;
+      return <Card key={String(experiment.id)}><CardHeader><CardTitle className="flex items-center gap-2">Experiment {String(experiment.id)}<Badge variant={experiment.status === "succeeded" ? "success" : "warning"}>{String(experiment.status ?? "unknown")}</Badge></CardTitle><CardDescription>Task {String(experiment.task_id)} · {String(experiment.mode)} · k={String(experiment.k)} · {String(experiment.created_at)}</CardDescription></CardHeader><CardContent>
+        <dl className="grid gap-2 text-xs sm:grid-cols-2"><div><dt className="text-[var(--muted-foreground)]">Common code base</dt><dd className="break-all font-mono">{String(experiment.base_sha ?? "unavailable")}</dd></div><div><dt className="text-[var(--muted-foreground)]">Specification hash</dt><dd className="break-all font-mono">{String(experiment.specification_hash ?? "unavailable")}</dd></div><div><dt className="text-[var(--muted-foreground)]">Policy revision</dt><dd>{String(experiment.policy_revision ?? "unavailable")}</dd></div><div><dt className="text-[var(--muted-foreground)]">Harness² revision</dt><dd className="break-all font-mono">{String(experiment.upstream_revision ?? "unavailable")}</dd></div></dl>
+        <section aria-label={`Evaluation summary ${String(experiment.id)}`} className="mt-3 rounded-lg border border-[var(--border)] p-3"><h3 className="text-sm font-medium">Rollout summary</h3><p className="mt-1 text-xs">Sample size {rows.length} · failed rollouts {rows.filter((row) => row.status === "failed").length} · delivery {rows.length ? `${delivered}/${rows.length}` : "unavailable"}{interval ? ` · 95% Wilson interval ${(interval[0] * 100).toFixed(1)}–${(interval[1] * 100).toFixed(1)}%` : ""}</p><p className="mt-1 text-xs">Latency p50/p95 {percentile(durations, 0.5) ?? "unknown"}/{percentile(durations, 0.95) ?? "unknown"} ms · all-in recorded cost {totalCost === null ? "unknown" : `$${totalCost.toFixed(8)}`}</p><p className="mt-1 text-xs">Matched comparison {String((experiment.result as Record<string, unknown> | undefined)?.comparison_integrity && ((experiment.result as Record<string, unknown>).comparison_integrity as Record<string, unknown>).status || "unavailable")} · holdout {String((experiment.result as Record<string, unknown> | undefined)?.holdout_evaluation && (((experiment.result as Record<string, unknown>).holdout_evaluation as Record<string, unknown>).status) || "unavailable")}</p></section>
+        {["queued", "running"].includes(String(experiment.status)) && <Button size="sm" variant="outline" className="mt-3" disabled={busy} onClick={() => void cancelExperiment(experiment)}>Cancel evaluation</Button>}{["failed", "blocked"].includes(String(experiment.status)) && <Button size="sm" variant="outline" className="mt-3" disabled={busy} onClick={() => void resumeExperiment(experiment)}>Resume same manifest</Button>}<p className="mt-3 text-xs text-[var(--muted-foreground)]">Detailed evaluator artifacts remain attached to the source experiment. Delivery rate is not an agent quality score.</p>
+      </CardContent></Card>;
+    })}</Card>
+  </div>;
 }
 
 function RoutingView({ projectId }: { projectId: string }) {
@@ -583,5 +895,19 @@ function RoutingView({ projectId }: { projectId: string }) {
 }
 
 function EventsView({ events, connected }: { events: ProjectEvent[]; connected: boolean }) {
-  return <div className="space-y-4"><Card><CardHeader><CardTitle>Durable project events</CardTitle><CardDescription>{connected ? "Connected. Replaying durable events and following new updates." : "Connecting or reconnecting to durable event replay…"}</CardDescription></CardHeader><CardContent><p className="text-xs text-[var(--muted-foreground)]">Reconnect resumes persisted events; it does not start or cancel a run.</p></CardContent></Card>{events.length === 0 ? <Card><CardContent className="pt-5 text-sm text-[var(--muted-foreground)]">No retained events have arrived for this project.</CardContent></Card> : events.map(({ cursor: sequence, event }) => <Card key={sequence}><CardContent className="flex items-start gap-3 pt-4"><Activity size={17} className="mt-0.5 shrink-0 text-[var(--primary)]" aria-hidden="true" /><div className="min-w-0"><p className="text-sm font-medium">{eventSummary(event)}</p></div></CardContent></Card>)}</div>;
+  const [query, setQuery] = useState("");
+  const [eventType, setEventType] = useState("all");
+  const [limit, setLimit] = useState(25);
+  const eventTypes = [...new Set(events.map(({ event }) => String(event.type)))].sort();
+  const matching = events.filter(({ event }) =>
+    (eventType === "all" || String(event.type) === eventType) &&
+    `${eventSummary(event)} ${event.type}`.toLowerCase().includes(query.toLowerCase()),
+  );
+  const visible = matching.slice(0, limit);
+  return <div className="space-y-4">
+    <Card><CardHeader><CardTitle>Durable project events</CardTitle><CardDescription>{connected ? "Connected. Replaying durable events and following new updates." : "Connecting or reconnecting to durable event replay…"}</CardDescription></CardHeader><CardContent><p className="text-xs text-[var(--muted-foreground)]">Reconnect resumes persisted events; it does not start or cancel a run.</p></CardContent></Card>
+    <div className="flex flex-wrap items-end gap-3"><label className="grid gap-1 text-sm">Search events<input aria-label="Search events" value={query} onChange={(event) => { setQuery(event.target.value); setLimit(25); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" /></label><label className="grid gap-1 text-sm">Event type<select aria-label="Filter event type" value={eventType} onChange={(event) => { setEventType(event.target.value); setLimit(25); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="all">All events</option>{eventTypes.map((type) => <option key={type}>{type}</option>)}</select></label><span className="pb-2 text-xs text-[var(--muted-foreground)]">Showing {visible.length} of {matching.length} events</span></div>
+    {events.length === 0 ? <Card><CardContent className="pt-5 text-sm text-[var(--muted-foreground)]">No retained events have arrived for this project.</CardContent></Card> : visible.length === 0 ? <p role="status">No events match these filters.</p> : visible.map(({ cursor: sequence, event }) => <Card key={sequence}><CardContent className="flex items-start gap-3 pt-4"><Activity size={17} className="mt-0.5 shrink-0 text-[var(--primary)]" aria-hidden="true" /><div className="min-w-0"><p className="text-sm font-medium">{eventSummary(event)}</p><p className="mt-1 text-xs text-[var(--muted-foreground)]">{String(event.type)} · cursor {sequence}</p></div></CardContent></Card>)}
+    {visible.length < matching.length && <Button variant="outline" onClick={() => setLimit((value) => value + 25)}>Load 25 more events</Button>}
+  </div>;
 }

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     secret_key: str = ""
     bootstrap_token: str = ""
+    metrics_token: SecretStr | None = None
     allowed_origins: str = "http://localhost:3000"
     cookie_secure: bool = False
     repository_targets: str = ""

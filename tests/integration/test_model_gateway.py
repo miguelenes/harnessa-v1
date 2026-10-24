@@ -46,6 +46,9 @@ async def gateway_fixture(
     project_limit: Decimal = Decimal(10),
     task_limit: Decimal = Decimal(10),
     run_limit: Decimal = Decimal(10),
+    probe_project_limit: Decimal | None = None,
+    probe_task_limit: Decimal | None = None,
+    probe_run_limit: Decimal | None = None,
     overflow: int = 0,
 ):
     suffix = uuid4().hex[:10]
@@ -161,9 +164,15 @@ async def gateway_fixture(
                 project_limit_usd=project_limit,
                 task_limit_usd=task_limit,
                 run_limit_usd=run_limit,
+                probe_project_limit_usd=probe_project_limit or project_limit,
+                probe_task_limit_usd=probe_task_limit or task_limit,
+                probe_run_limit_usd=probe_run_limit or run_limit,
                 project_token_limit=1_000_000,
                 task_token_limit=1_000_000,
                 run_token_limit=1_000_000,
+                probe_project_token_limit=1_000_000,
+                probe_task_token_limit=1_000_000,
+                probe_run_token_limit=1_000_000,
                 max_steps=100,
                 max_wall_seconds=3600,
                 max_output_tokens=10_000,
@@ -319,10 +328,14 @@ async def test_concurrent_reservations_cannot_exceed_project_task_or_run_limits(
     )
     entered = asyncio.Event()
     release = asyncio.Event()
+    provider_calls = 0
 
     async def provider(request: httpx.Request) -> httpx.Response:
-        entered.set()
-        await release.wait()
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            entered.set()
+            await release.wait()
         return success_response("gateway-primary")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(provider), base_url="http://litellm")
@@ -339,7 +352,10 @@ async def test_concurrent_reservations_cannot_exceed_project_task_or_run_limits(
         async with SessionLocal() as db:
             counters = (
                 await db.execute(
-                    select(ModelBudgetCounter).where(ModelBudgetCounter.project_id == data["project_id"])
+                    select(ModelBudgetCounter).where(
+                        ModelBudgetCounter.project_id == data["project_id"],
+                        ModelBudgetCounter.workload == "interactive",
+                    )
                 )
             ).scalars().all()
             assert {counter.scope for counter in counters} == {"project", "task", "run"}
@@ -349,6 +365,50 @@ async def test_concurrent_reservations_cannot_exceed_project_task_or_run_limits(
         release.set()
         if not first.done():
             await first
+        await client.aclose()
+
+
+@pytest.mark.anyio
+async def test_probe_ceilings_are_independent_from_interactive_ceilings():
+    reserve_amount = Decimal("0.00009")
+    data = await gateway_fixture(probe_project_limit=reserve_amount, probe_task_limit=reserve_amount, probe_run_limit=reserve_amount)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    provider_calls = 0
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            entered.set()
+            await release.wait()
+        return success_response("gateway-primary")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(provider), base_url="http://litellm")
+    router = LiteLLMModelRouter(client=client)
+    probe = asyncio.create_task(_complete_request(router, data, "bounded-probe", ModelPoolKind.PROBE))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        with pytest.raises(ModelGatewayError) as raised:
+            await _complete_request(router, data, "over-probe-ceiling", ModelPoolKind.PROBE)
+        assert raised.value.code == "model_budget_exceeded"
+        primary_result = await _complete(router, data, "independent-interactive")
+        assert primary_result["actual_model"] == "provider/primary-model"
+        release.set()
+        await probe
+        async with SessionLocal() as db:
+            counters = list(await db.scalars(select(ModelBudgetCounter).where(
+                ModelBudgetCounter.project_id == data["project_id"]
+            )))
+            assert {row.workload for row in counters} == {"interactive", "probe"}
+            probe_project = next(row for row in counters if row.workload == "probe" and row.scope == "project")
+            interactive_project = next(row for row in counters if row.workload == "interactive" and row.scope == "project")
+            assert probe_project.used_steps == 1
+            assert interactive_project.used_steps == 1
+    finally:
+        release.set()
+        if not probe.done():
+            await probe
         await client.aclose()
 
 
@@ -509,7 +569,10 @@ async def test_stale_reservation_reconciliation_releases_capacity_and_charges_es
         reservation = await db.get(ModelReservation, context.reservation.id)
         pool = await db.get(ModelPool, data["interactive_pool_id"])
         counters = (
-            await db.execute(select(ModelBudgetCounter).where(ModelBudgetCounter.project_id == data["project_id"]))
+            await db.execute(select(ModelBudgetCounter).where(
+                ModelBudgetCounter.project_id == data["project_id"],
+                ModelBudgetCounter.workload == "interactive",
+            ))
         ).scalars().all()
         assert reservation.status == "unknown"
         assert pool.active_interactive == 0 and pool.active_probe == 0

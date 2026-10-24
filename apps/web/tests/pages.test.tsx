@@ -4,6 +4,7 @@ import Home from "../app/page";
 import Login from "../app/login/page";
 import RootLayout from "../app/layout";
 import Projects from "../app/projects/page";
+import SetupPage from "../app/setup/page";
 import { Button } from "../components/ui/button";
 
 const { push, router } = vi.hoisted(() => {
@@ -44,6 +45,118 @@ describe("web application pages", () => {
     const button = screen.getByRole("button", { name: "Save" });
     expect(button.className).toContain("border-stone-300");
     expect(button.className).toContain("px-8");
+  });
+
+  it("checks setup prerequisites without sending a model request", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) return response({ id: "user-1", email: "admin@example.test", organization_id: "org-1", role: "administrator" }) as Response;
+      if (url.endsWith("/projects")) return response([{ id: "project-1", name: "Alpha", slug: "alpha" }]) as Response;
+      if (url.endsWith("/ops/models/doctor")) return response({ status: "ready", gateway_ready: true, configured_accounts: 1, configured_deployments: 1, configured_aliases: 1, pools: ["primary", "probe"], findings: [] }) as Response;
+      if (url.endsWith("/github/status")) return response({ configured_apps: [], installations: [], repository_links: [], actor_mappings: [], webhook_health: {}, recent_deliveries: [] }) as Response;
+      if (url.endsWith("/health/ready")) return response({ status: "ready" }) as Response;
+      if (url.endsWith("/projects/project-1/repositories")) return response([{ id: "repo-1" }]) as Response;
+      if (url.endsWith("/projects/project-1/execution-adapter")) return response({ project_id: "project-1", adapter: "deployment-default", available_adapters: ["deployment-default", "disabled"], configured: false, detail: "Deployment runner unavailable." }) as Response;
+      return response({}, 404) as Response;
+    });
+    render(<SetupPage />);
+    expect(await screen.findByText("admin@example.test · administrator")).toBeTruthy();
+    expect(await screen.findByText("1 repository grant configured for the selected project.")).toBeTruthy();
+    expect(await screen.findByText(/Provider credentials still require an authorized live probe/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Run one-token route check" }).hasAttribute("disabled")).toBe(true);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/models/live-check"))).toBe(false);
+  });
+
+  it("lets an authorized operator configure finite project, task, and run budgets", async () => {
+    const budget = {
+      id: "budget-1", project_id: "project-1",
+      project_limit_usd: "1.00", task_limit_usd: "0.25", run_limit_usd: "0.10",
+      probe_project_limit_usd: "0.50", probe_task_limit_usd: "0.20", probe_run_limit_usd: "0.08",
+      project_token_limit: 100000, task_token_limit: 25000, run_token_limit: 10000,
+      probe_project_token_limit: 50000, probe_task_token_limit: 15000, probe_run_token_limit: 7000,
+      max_steps: 8, max_wall_seconds: 600, max_output_tokens: 4096, max_attempts: 2,
+    };
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) return response({ id: "user-1", email: "admin@example.test", organization_id: "org-1", role: "administrator" }) as Response;
+      if (url.endsWith("/projects")) return response([{ id: "project-1", name: "Alpha", slug: "alpha" }]) as Response;
+      if (url.endsWith("/ops/models/doctor")) return response({ status: "setup_required", gateway_ready: false, configured_accounts: 0, configured_deployments: 0, configured_aliases: 0, pools: [], findings: [] }) as Response;
+      if (url.endsWith("/github/status")) return response({ configured_apps: [], installations: [], repository_links: [], actor_mappings: [], webhook_health: {}, recent_deliveries: [] }) as Response;
+      if (url.endsWith("/health/ready")) return response({ status: "ready" }) as Response;
+      if (url.endsWith("/projects/project-1/repositories")) return response([]) as Response;
+      if (url.endsWith("/projects/project-1/execution-adapter")) return response({ project_id: "project-1", adapter: "deployment-default", available_adapters: ["deployment-default", "disabled"], configured: false, detail: "Deployment runner unavailable." }) as Response;
+      if (url.endsWith("/projects/project-1/models/budget") && init?.method === "PUT") return response(budget) as Response;
+      if (url.endsWith("/projects/project-1/models/budget")) return response({}, 404) as Response;
+      return response({}, 404) as Response;
+    });
+
+    render(<SetupPage />);
+    await screen.findByRole("button", { name: "Set budget policy" });
+    for (const [name, value] of Object.entries({
+      "project limit usd": "1.00", "task limit usd": "0.25", "run limit usd": "0.10",
+      "probe project limit usd": "0.50", "probe task limit usd": "0.20", "probe run limit usd": "0.08",
+      "project token limit": "100000", "task token limit": "25000", "run token limit": "10000",
+      "probe project token limit": "50000", "probe task token limit": "15000", "probe run token limit": "7000",
+      "max steps": "8", "max wall seconds": "600", "max output tokens": "4096", "max attempts": "2",
+    })) {
+      fireEvent.change(screen.getByRole("spinbutton", { name }), { target: { value } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Set budget policy" }));
+    expect(await screen.findByText(/Separate interactive and probe project, task, and run ceilings saved/)).toBeTruthy();
+    const save = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith("/models/budget") && init?.method === "PUT");
+    expect(save?.[1]?.body).toContain('"project_limit_usd":"1.00"');
+    expect(save?.[1]?.body).toContain('"max_steps":8');
+    expect(save?.[1]?.headers).toHaveProperty("X-CSRF-Token");
+  });
+
+  it("sends only an explicitly authorized one-token route check", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) return response({ id: "user-1", email: "admin@example.test", organization_id: "org-1", role: "administrator" }) as Response;
+      if (url.endsWith("/projects")) return response([{ id: "project-1", name: "Alpha", slug: "alpha" }]) as Response;
+      if (url.endsWith("/ops/models/doctor")) return response({ status: "ready", gateway_ready: true, configured_accounts: 1, configured_deployments: 1, configured_aliases: 1, pools: ["primary", "probe"], findings: [] }) as Response;
+      if (url.endsWith("/github/status")) return response({ configured_apps: [], installations: [], repository_links: [], actor_mappings: [], webhook_health: {}, recent_deliveries: [] }) as Response;
+      if (url.endsWith("/health/ready")) return response({ status: "ready" }) as Response;
+      if (url.endsWith("/projects/project-1/repositories")) return response([{ id: "repo-1" }]) as Response;
+      if (url.endsWith("/models/live-check") && init?.method === "POST") return response({ outcome: "passed", request_id: "request-1", deployment: "deepseek", provider_account: "provider-1", actual_model: "deepseek-flash", usage_known: true, billed_usd: "0.00001", estimated_usd: "0.00001" }) as Response;
+      return response({}, 404) as Response;
+    });
+    render(<SetupPage />);
+    const check = screen.getByRole("button", { name: "Run one-token route check" });
+    await screen.findByText("admin@example.test · administrator");
+    expect(check.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: /I authorize one paid route check/ }));
+    fireEvent.click(check);
+    expect(await screen.findByText("Passed · deepseek · billed 0.00001 · usage known")).toBeTruthy();
+    const call = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/models/live-check"));
+    expect(call?.[1]?.method).toBe("POST");
+    expect(call?.[1]?.body).toContain('"authorize_paid_request":true');
+    expect(call?.[1]?.body).toContain('"alias":"harnessa-deepseek-flash"');
+  });
+
+  it("fails closed when setup identity, route, and runtime checks are unavailable", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) return response({}, 401) as Response;
+      if (url.endsWith("/projects")) return response([]) as Response;
+      if (url.endsWith("/ops/models/doctor")) return response({ status: "setup_required", gateway_ready: false, configured_accounts: 0, configured_deployments: 0, configured_aliases: 0, pools: [], findings: ["No compatible route is registered."] }) as Response;
+      if (url.endsWith("/github/status")) return response({ configured_apps: [{ connection_status: "ready" }], installations: [], repository_links: [], actor_mappings: [], webhook_health: {}, recent_deliveries: [] }) as Response;
+      if (url.endsWith("/health/ready")) return response({}, 503) as Response;
+      return response({}, 404) as Response;
+    });
+
+    render(<SetupPage />);
+    expect(await screen.findByText("No compatible route is registered.")).toBeTruthy();
+    expect(await screen.findByText("GitHub App and active installation are not fully configured. Repository mutations remain unavailable.")).toBeTruthy();
+    expect(await screen.findByText("API dependency readiness could not be verified.")).toBeTruthy();
+    expect(await screen.findByText("Some administrator-only setup checks are unavailable. Confirm your role and refresh the page.")).toBeTruthy();
+    expect(push).toHaveBeenCalledWith("/login");
+    expect(screen.getByRole("button", { name: "Run one-token route check" }).hasAttribute("disabled")).toBe(true);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/models/live-check"))).toBe(false);
   });
 
   it("redirects unauthorized project loads and reports server and network failures", async () => {

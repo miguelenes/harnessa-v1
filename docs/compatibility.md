@@ -1,5 +1,15 @@
 # Compatibility and dependency record
 
+## Milestone 13 self-hosted release additions
+
+- The release Compose configuration retains digest-pinned PostgreSQL, Redis, LiteLLM, API and web images. API and worker share the named `artifacts` volume. Existing deployments with artifacts in a container writable layer must export them before recreating that container; see [operator guide](operator-guide.md).
+- `scripts/harnessa-doctor.sh` requires Podman Compose, curl, and a running deployment. Its LiteLLM readiness result is process readiness only, not provider authentication or capability evidence.
+- The API exposes process-local HTTP counters and latency histograms at `/internal/metrics` only when a non-empty `METRICS_TOKEN` is configured; route labels use FastAPI templates. Structured access records use validated request/trace IDs and omit query strings and bodies. Queue, provider, effect, artifact and distributed trace exporters are not yet provided.
+- `scripts/harnessa-backup.sh` produces PostgreSQL custom-format dump, artifact tarball, config references and optional Git roots. `scripts/harnessa-restore.sh` requires a fresh empty target database/volume and refuses non-empty data. Neither script backs up secret values; restore them separately from a secret manager.
+- M13 adds grouped immutable local Harness² evaluation runs and independent primary/probe budget ceilings without adding a runtime package. Evaluation adapters for WorkBuddy-Bench, JobBench and Harvey LAB remain uninstalled/unconfigured; the UI reports their missing or blocked state and emits no fabricated scores.
+- Project execution adapter selection is persisted as `deployment-default`, `acp-opencode`, or `disabled`. Dispatch is blocked when execution is disabled or the deployment has no configured ACP/OpenCode runner.
+- The Next.js app icon follows the pinned Next.js 16 `app/icon.svg` convention; details are in `apps/web/node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/01-metadata/app-icons.md`.
+
 Dependency versions are exact in `uv.lock` and `pnpm-lock.yaml`. Container references are pinned by immutable manifest-list digest in `infra/`. Maintained manifests, lockfiles, active Dockerfiles, Compose services, and the existing GitHub Actions references were reviewed on 2026-10-22.
 
 ## Current supported baseline

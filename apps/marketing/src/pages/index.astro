@@ -46,43 +46,10 @@ const flow = [
         <div class="hero-note"><span class="note-line"></span><span>Building the foundations for reviewable agent work.</span></div>
       </div>
 
-      <div class="preview-frame" aria-label="Illustrative Harnessa workflow preview">
-        <div class="preview-topbar">
-          <div class="preview-crumb"><span class="mini-mark">h</span><span>agent-workspace</span><span class="crumb-slash">/</span><span>review flow</span></div>
-          <span class="design-tag"><span class="tag-dot"></span> DESIGN PREVIEW</span>
-        </div>
-        <div class="preview-content">
-          <div class="flow-rail" aria-label="Illustrative workflow: intent, run, verify, review">
-            <div class="flow-step is-done"><span class="step-icon">✓</span><div><small>01 · INTENT</small><strong>Scope defined</strong></div></div>
-            <span class="flow-connector done" aria-hidden="true"></span>
-            <div class="flow-step is-active"><span class="step-icon active-mark">02</span><div><small>02 · RUN</small><strong>Work in progress</strong></div></div>
-            <span class="flow-connector" aria-hidden="true"></span>
-            <div class="flow-step"><span class="step-icon">03</span><div><small>03 · VERIFY</small><strong>Checks to come</strong></div></div>
-            <span class="flow-connector" aria-hidden="true"></span>
-            <div class="flow-step"><span class="step-icon">04</span><div><small>04 · REVIEW</small><strong>Human decision</strong></div></div>
-          </div>
-          <div class="artifact-row">
-            <div class="artifact-card">
-              <div class="artifact-heading"><span class="file-icon" aria-hidden="true">⌘</span><div><strong>change-summary.md</strong><small>Review artifact · draft</small></div><span class="artifact-menu" aria-hidden="true">•••</span></div>
-              <div class="code-lines" aria-hidden="true">
-                <div><i>01</i><span class="code-purple">##</span> Add explicit task boundaries</div>
-                <div><i>02</i><span class="code-green">+</span> Scope is recorded before execution</div>
-                <div><i>03</i><span class="code-green">+</span> Verification remains attached</div>
-                <div><i>04</i><span class="code-muted">↳</span> Human review required before shipping</div>
-              </div>
-              <div class="artifact-foot"><span><b class="status-dot"></b> Awaiting verification</span><code>REVISION · DRAFT</code></div>
-            </div>
-            <div class="event-card">
-              <div class="event-title"><span>Run timeline</span><span class="event-live"><b></b> PREVIEW</span></div>
-              <div class="event-item"><span class="event-mark done">✓</span><div><strong>Scope recorded</strong><small>Intent and limits attached</small></div></div>
-              <div class="event-item"><span class="event-mark active">·</span><div><strong>Implementation</strong><small>Evidence is being collected</small></div></div>
-              <div class="event-item future"><span class="event-mark">3</span><div><strong>Verification</strong><small>Next in the flow</small></div></div>
-              <div class="event-item future"><span class="event-mark">4</span><div><strong>Review</strong><small>Decision stays with you</small></div></div>
-            </div>
-          </div>
-        </div>
-        <div class="preview-caption"><span>Conceptual product view</span><span>No live workspace data</span></div>
-      </div>
+      <figure class="hero-art">
+        <img src="/images/governed-workflow.jpg" width="1536" height="1024" alt="Illustration of governed agent workspaces connected by a central workflow with verification and review gates" fetchpriority="high" />
+        <figcaption>Illustrative workflow · product in development</figcaption>
+      </figure>
     </section>
 
     <section class="status-band" aria-label="Product availability">
@@ -168,6 +135,9 @@ const flow = [
   .header-cta:hover { border-color: var(--primary); color: var(--primary); }
   .hero { display: grid; min-height: 648px; grid-template-columns: .88fr 1.12fr; align-items: center; gap: 60px; padding-block: 83px 88px; }
   .hero-copy { padding-block: 10px 0; }
+  .hero-art { margin: 0; overflow: hidden; border: 1px solid #dce1e2; border-radius: 15px; background: #f7f5ef; box-shadow: 0 26px 60px rgb(20 30 39 / 8%), 0 4px 14px rgb(20 30 39 / 4%); }
+  .hero-art img { display: block; width: 100%; height: auto; aspect-ratio: 3 / 2; object-fit: cover; }
+  .hero-art figcaption { padding: 10px 14px; border-top: 1px solid #e7e4dc; color: #69737c; font-size: 11px; }
   .eyebrow,.section-kicker { display: flex; align-items: center; gap: 9px; color: #56616b; font-size: 11px; font-weight: 680; letter-spacing: .105em; text-transform: uppercase; }
   .eyebrow-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px #dcefeb; }
   h1,h2,h3,p { margin-top: 0; }
