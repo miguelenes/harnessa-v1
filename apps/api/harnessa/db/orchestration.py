@@ -72,6 +72,7 @@ class Run(Scoped, Base):
     retry_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    traceparent: Mapped[str | None] = mapped_column(String(55), nullable=True)
     fencing_token: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     cancel_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

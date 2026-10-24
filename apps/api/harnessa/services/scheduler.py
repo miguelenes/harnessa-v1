@@ -47,6 +47,8 @@ from harnessa.db.specification import (
 from harnessa.services.lifecycle import _record_event, record_system_transition
 from harnessa.services.model_gateway import budget_policy_digest
 from harnessa.services.specifications import specification_workspace_manager
+from harnessa.tracing import start_redacted_span, trace_context_from_parent, tracer_for
+from opentelemetry.trace import Status, StatusCode
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -61,6 +63,7 @@ class ClaimedRun:
     attempt: int
     max_attempts: int
     max_wall_seconds: int
+    traceparent: str | None
     task: TaskInput
     checkpoint: Mapping[str, Any] | None = None
 
@@ -525,6 +528,7 @@ class Scheduler:
                     heartbeat_at=now,
                     deadline_at=now + timedelta(seconds=wall_limit),
                     adapter_name=adapter_name,
+                    traceparent=task.traceparent,
                     checkpoint_id=row.id if checkpoint and row else None,
                     resume_from_run_id=previous.id if checkpoint and previous else None,
                     base_sha=interview.base_sha,
@@ -567,6 +571,7 @@ class Scheduler:
                     attempt=attempt,
                     max_attempts=attempt_limit,
                     max_wall_seconds=wall_limit,
+                    traceparent=run.traceparent,
                     task=TaskInput(
                         task.id,
                         project.id,
@@ -1294,6 +1299,27 @@ class Scheduler:
         job = await self.claim(owner_id, adapter.name)
         if job is None:
             return False
+        parent_context = trace_context_from_parent(job.traceparent)
+        with start_redacted_span(
+            tracer_for(__name__),
+            "harnessa.run.execute",
+            context=parent_context,
+            attributes={
+                "harnessa.task.id": str(job.task_id),
+                "harnessa.run.id": str(job.run_id),
+                "harnessa.run.attempt": job.attempt,
+                "harnessa.execution.adapter": adapter.name,
+            },
+        ) as span:
+            try:
+                await self._execute_claimed_run(job, adapter)
+            except Exception as exc:
+                span.set_status(Status(StatusCode.ERROR))
+                span.set_attribute("error.type", type(exc).__name__)
+                raise
+        return True
+
+    async def _execute_claimed_run(self, job: ClaimedRun, adapter: ExecutionAdapter) -> None:
         heartbeat_task = asyncio.create_task(self._heartbeat_loop(job, adapter))
 
         async def save_checkpoint(state: Mapping[str, Any]) -> None:
@@ -1328,7 +1354,7 @@ class Scheduler:
             await self.fail(job, failure)
         except StaleLease:
             # The new lease owner is authoritative; stale worker output is discarded.
-            return True
+            return
         except Exception as exc:  # noqa: BLE001 - adapters are isolated behind this failure boundary.
             await self.fail(
                 job,
@@ -1340,7 +1366,6 @@ class Scheduler:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
-        return True
 
     async def _heartbeat_loop(self, job: ClaimedRun, adapter: ExecutionAdapter) -> None:
         while True:

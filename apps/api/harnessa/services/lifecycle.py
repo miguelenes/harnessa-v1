@@ -20,6 +20,7 @@ from harnessa.domain.lifecycle import (
     assert_transition,
 )
 from harnessa.services.authorization import require_membership
+from harnessa.tracing import current_trace_id, current_traceparent
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -69,6 +70,10 @@ async def _record_event(
         raise HTTPException(404, "Project not found")
     project.event_sequence += 1
     task.event_sequence += 1
+    traceparent = current_traceparent()
+    if traceparent is not None:
+        task.traceparent = traceparent
+    trace_id = current_trace_id()
     event = DomainEvent(
         id=uuid4(),
         event_type=event_type,
@@ -81,6 +86,7 @@ async def _record_event(
         aggregate_sequence=task.event_sequence,
         project_sequence=project.event_sequence,
         actor_id=actor_id,
+        correlation_id=UUID(hex=trace_id) if trace_id else None,
         payload=payload,
         retention_until=datetime.now(UTC) + timedelta(days=settings.event_retention_days),
     )
@@ -122,6 +128,9 @@ async def record_system_transition(
     run_status: RunStatus | None = None,
 ) -> None:
     """Apply an internal transition within the caller's transaction."""
+    traceparent = current_traceparent()
+    if traceparent is not None:
+        task.traceparent = traceparent
     current = TaskStage(task.stage)
     assert_transition(
         current,
@@ -348,6 +357,9 @@ async def transition_task(
         elif current in {TaskStage.CLARIFYING, TaskStage.HARNESS_PROBE}:
             task.return_stage = None
         from_run_status = task.run_status
+        traceparent = current_traceparent()
+        if traceparent is not None:
+            task.traceparent = traceparent
         task.stage = target.value
         if run_status is not None:
             task.run_status = run_status.value

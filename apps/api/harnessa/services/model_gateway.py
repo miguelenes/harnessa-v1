@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -32,6 +32,8 @@ from harnessa.db.model_gateway import (
 from harnessa.db.models import Project, Task
 from harnessa.db.orchestration import Run
 from harnessa.db.session import SessionLocal
+from harnessa.tracing import traced_async
+from opentelemetry.trace import SpanKind
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -39,6 +41,20 @@ logger = logging.getLogger("harnessa.model_gateway")
 _ZERO = Decimal(0)
 _MILLION = Decimal(1000000)
 _MIN_RESERVATION = Decimal("0.00000001")
+
+
+def _model_trace_attributes(values: Mapping[str, Any]) -> dict[str, str]:
+    request = values.get("request")
+    if not isinstance(request, ModelRouteRequest):
+        return {}
+    attributes = {"harnessa.model.pool": request.pool.value}
+    if request.model_alias is not None:
+        attributes["harnessa.model.alias"] = request.model_alias
+    if request.task_id is not None:
+        attributes["harnessa.task.id"] = str(request.task_id)
+    if request.run_id is not None:
+        attributes["harnessa.run.id"] = str(request.run_id)
+    return attributes
 
 
 def _reservation_lease_seconds() -> int:
@@ -1111,6 +1127,11 @@ class LiteLLMModelRouter:
             )
         return httpx.AsyncClient(timeout=settings.model_http_timeout_seconds), True
 
+    @traced_async(
+        "harnessa.model.complete",
+        kind=SpanKind.CLIENT,
+        attributes=lambda values: _model_trace_attributes(values),
+    )
     async def complete(
         self,
         db: AsyncSession,
@@ -1437,6 +1458,11 @@ class LiteLLMModelRouter:
             if close_client:
                 await client.aclose()
 
+    @traced_async(
+        "harnessa.model.stream",
+        kind=SpanKind.CLIENT,
+        attributes=lambda values: _model_trace_attributes(values),
+    )
     async def stream(
         self,
         db: AsyncSession,

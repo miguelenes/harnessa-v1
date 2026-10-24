@@ -52,6 +52,13 @@ def test_metrics_endpoint_requires_configured_bearer_token_and_request_ids_are_c
         assert response.headers["X-Request-ID"] == request_id
         assert response.headers["X-Trace-ID"] == trace_id
 
+        w3c_trace_id = "fedcba9876543210fedcba9876543210"
+        traced_response = client.get(
+            "/health/live",
+            headers={"traceparent": f"00-{w3c_trace_id}-0123456789abcdef-01"},
+        )
+        assert traced_response.headers["X-Trace-ID"] == w3c_trace_id
+
         assert client.get("/internal/metrics").status_code == 404
         metrics_response = client.get(
             "/internal/metrics",
