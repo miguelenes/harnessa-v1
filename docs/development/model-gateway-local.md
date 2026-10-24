@@ -28,9 +28,21 @@ gateway from a login-interactive zsh session where the keys are exported by
 name is `harnessa`, which is also used by the normal local stack, so the API and
 worker can resolve `litellm` on the internal network:
 
+Set `LITELLM_POSTGRES_PASSWORD` in `.env` to a URL-safe random value (for
+example, `openssl rand -hex 32`). LiteLLM stores spend data in its own
+`litellm` database and role, created by the `litellm-db-init` service. Its role
+does not receive access to Harnessa's application database. The proxy has a
+$20 global budget over its trailing 30 days. LiteLLM v1.83.14 needs PostgreSQL
+for that check; the cap is a backstop and does not replace Harnessa's task
+ledger, which tracks the authorized lifetime €20 ceiling across milestones.
+The pinned proxy does not reserve concurrent global spend estimates.
+
 ```sh
 zsh -lic 'export DEEPSEEK_API_KEY OPENROUTER_API_KEY; podman compose --env-file .env -f infra/compose.yaml up -d litellm'
 ```
+
+Compose waits for PostgreSQL, then creates the isolated LiteLLM database and
+role before starting the proxy. The command does not print provider keys.
 
 The login-interactive zsh loads `~/.zshrc`, and `export` makes the two
 configured keys available for Compose interpolation in that child process.

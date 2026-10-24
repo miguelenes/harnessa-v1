@@ -21,6 +21,31 @@ services:
       retries: 20
     volumes:
       - pgdata:/var/lib/postgresql/data
+  litellm-db-init:
+    image: postgres:16.13-bookworm@sha256:472efd9a66f2b2f1a5aeb18b28de74332e6ef88c2b93a1a5d812fb6db67a5f60
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-harnessa}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-harnessa}
+      PGDATABASE: ${POSTGRES_DB:-harnessa}
+      LITELLM_POSTGRES_PASSWORD: ${LITELLM_POSTGRES_PASSWORD:?Set LITELLM_POSTGRES_PASSWORD; generate a URL-safe value with openssl rand -hex 32}
+    networks: [app_internal]
+    restart: "no"
+    entrypoint: ["sh", "-ec"]
+    command:
+      - |
+        psql -v ON_ERROR_STOP=1 -v litellm_password="$$LITELLM_POSTGRES_PASSWORD" <<'SQL'
+        SELECT format('CREATE ROLE litellm LOGIN PASSWORD %L', :'litellm_password')
+        WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'litellm') \gexec
+        SELECT format('ALTER ROLE litellm WITH LOGIN PASSWORD %L', :'litellm_password') \gexec
+        SELECT format('CREATE DATABASE litellm OWNER litellm')
+        WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'litellm') \gexec
+        SELECT format('ALTER DATABASE litellm OWNER TO litellm') \gexec
+        SQL
   redis:
     image: redis:8.10.2-alpine@sha256:615b4cedaff0c1437a1548acae4222572df8c021eeb7382d64cb8b5e3a13ac7a
     restart: unless-stopped
@@ -184,6 +209,7 @@ services:
     image: ghcr.io/berriai/litellm:v1.83.14-stable.patch.3@sha256:f12d528d4a05add56cb09e54c5126088f2edc6bdf3a2f943bcd3a32b08769da2
     command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
     environment:
+      LITELLM_DATABASE_URL: postgresql://litellm:${LITELLM_POSTGRES_PASSWORD:?Set LITELLM_POSTGRES_PASSWORD; generate a URL-safe value with openssl rand -hex 32}@db:5432/litellm
       # Keep this allowlist aligned with infra/litellm/config.yaml. Do not pass
       # credentials for providers with no configured deployment.
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
@@ -196,6 +222,9 @@ services:
       timeout: 3s
       retries: 30
     networks: [app_internal, provider_egress]
+    depends_on:
+      litellm-db-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     stop_grace_period: 45s
     mem_limit: 2g
