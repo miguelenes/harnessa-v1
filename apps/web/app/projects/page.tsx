@@ -111,11 +111,11 @@ export default function Projects() {
       const response = await fetch(`${API}/projects/${project.id}/repositories`, {
         credentials: "include",
       });
+      if (requestId !== repositorySelectionRequest.current) return;
       if (response.status === 401) {
         router.push("/login");
         return;
       }
-      if (requestId !== repositorySelectionRequest.current) return;
       if (!response.ok) {
         setError(errorFor(response, "load repository grants"));
         return;

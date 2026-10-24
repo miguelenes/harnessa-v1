@@ -318,14 +318,10 @@ describe("web application pages", () => {
     }]) as Response);
     expect(await screen.findByText("Beta repository")).toBeTruthy();
 
-    resolveAlpha(response([{
-      id: "repository-alpha",
-      target_id: "team/alpha",
-      display_name: "Alpha repository",
-      default_branch: "main",
-    }]) as Response);
+    resolveAlpha(response({}, 401) as Response);
     await waitFor(() => expect(screen.queryByText("Alpha repository")).toBeNull());
     expect(screen.getByRole("heading", { name: "Beta" })).toBeTruthy();
     expect(screen.getByText("Beta repository")).toBeTruthy();
+    expect(push).not.toHaveBeenCalled();
   });
 });
