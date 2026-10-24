@@ -17,7 +17,7 @@
 | Data durability | API and worker now share the named Compose `artifacts` volume. | Compose migration for an existing writable-layer installation must first export and restore old artifacts; no destructive conversion is attempted automatically. |
 | Design assets | Native SVG browser icons added for Next.js and Astro. New generated workflow illustration has a recorded prompt and conversion record; the prior README image remains unused because its provenance is unknown. | Icon integration implemented; Next.js production build includes `/icon.svg`. Astro marketing build verified the new hero image reference. |
 | Marketing illustration | A new generated workflow illustration has recorded prompt/conversion provenance and is integrated into the marketing hero and README. | Astro production build and static artifact checks passed. The legacy unprovenanced illustration remains unused. |
-| Combined coverage | The standard first-party 85% line and statement threshold includes API, web, shared UI, cloud portal, and the static marketing artifact check. | Latest local run on 2026-10-24: API 85.12%, web 91.74% lines / 85.07% statements, React UI 100%, cloud portal 96.00% lines / 98.86% statements, Svelte UI 100%; aggregate 85.53% lines / 85.28% statements. |
+| Combined coverage | The standard first-party 85% line and statement threshold includes API, web, shared UI, cloud portal, and the static marketing artifact check. | Latest local run on 2026-10-24: API 85.09%, web 91.74% lines / 85.07% statements, React UI 100%, cloud portal 96.00% lines / 98.86% statements, Svelte UI 100%; aggregate 85.50% lines / 85.26% statements. |
 
 ## External evaluation decision
 
@@ -38,6 +38,10 @@ M13's implemented local evaluator is the Harnessa-owned Harness² suite: it crea
 No benchmark package or dataset has been downloaded into this repository. The two model-backed calls above were configuration checks only; no benchmark run was started.
 
 ## Live acceptance still required
+
+### M13 tracing follow-up PR #47
+
+Tracing follow-up PR [#47](https://github.com/miguelenes/harnessa-v1/pull/47) was reviewed at final head `b274cd611bfe73b24a69806d60f7b37640d64ad1`; the independent reviewer found no actionable issues in comment `6386134959`, and no formal approval was submitted. The P1 exception-redaction issue was fixed at `9b4e53359c3662b06614f4ba6f4d77041f2e2965`; two P2 findings on shared span coverage and stale operator guidance were fixed at the final head. No inline review threads remained. Current-head checks passed: Local CI push run `40107927199`, Local CI pull-request run `40107930343`, CodeQL run `40107930271` plus aggregate `CodeQL` check `120913543158`, and Documentation build `40107930300` (deploy skipped because this was not a main-branch deployment). The repository ruleset allowed merge with zero required approvals, retained thread resolution and required status checks, and had no bypass actors. PR #47 merged to `main` at `1386f3fdb1cf86198b412052eccb581968d22d6d` on 2026-10-24. This evidence update does not close the live release blockers or archive M13.
 
 ### Fresh local acceptance on 2026-10-24
 
