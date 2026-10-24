@@ -236,6 +236,68 @@ describe("web application pages", () => {
     expect(sessionStorage.getItem("csrf_token")).toBe("approved-token");
   });
 
+  it("reports sign-in service failures before submitting credentials", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(response({}, 503) as Response);
+    render(<Login />);
+    fireEvent.submit(screen.getByRole("button", { name: "Sign in" }).closest("form")!);
+    expect((await screen.findByRole("alert")).textContent).toContain("unavailable (503)");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports project, repository, and sign-out service failures", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const project = { id: "project-1", name: "Alpha", slug: "alpha" };
+    let createRequests = 0;
+    let repositoryRequests = 0;
+    let signOutRequests = 0;
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/projects") && init?.method === "POST") {
+        createRequests += 1;
+        return createRequests === 1
+          ? Promise.resolve(response({}, 409) as Response)
+          : Promise.reject("offline fixture");
+      }
+      if (url.endsWith("/projects")) return Promise.resolve(response([project]) as Response);
+      if (url.endsWith("/project-1/repositories")) {
+        repositoryRequests += 1;
+        return repositoryRequests === 1
+          ? Promise.resolve(response({}, 403) as Response)
+          : Promise.reject("offline fixture");
+      }
+      if (url.endsWith("/auth/logout")) {
+        signOutRequests += 1;
+        return signOutRequests === 1
+          ? Promise.resolve(response({}, 403) as Response)
+          : Promise.reject("offline fixture");
+      }
+      return Promise.resolve(response({}, 404) as Response);
+    });
+
+    render(<Projects />);
+    await screen.findByRole("button", { name: /Alpha/ });
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Alpha" } });
+    fireEvent.change(screen.getByLabelText("Project slug"), { target: { value: "alpha" } });
+    const projectForm = screen.getByRole("heading", { name: "Create project" }).closest("form")!;
+
+    fireEvent.submit(projectForm);
+    expect(await screen.findByText(/project state changed/)).toBeTruthy();
+    fireEvent.submit(projectForm);
+    expect(await screen.findByText(/Project creation was not confirmed/)).toBeTruthy();
+
+    const projectButton = screen.getByRole("button", { name: /Alpha/ });
+    fireEvent.click(projectButton);
+    expect(await screen.findByText(/permission to load repository grants/)).toBeTruthy();
+    fireEvent.click(projectButton);
+    expect(await screen.findByText(/Repository grants could not be loaded/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(await screen.findByText(/permission to sign out/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(await screen.findByText(/Sign out was not confirmed/)).toBeTruthy();
+  });
+
   it("loads, creates, selects, registers, and signs out of project workspaces", async () => {
     const fetchMock = vi.mocked(fetch);
     const project = { id: "project-1", name: "Alpha", slug: "alpha" };
