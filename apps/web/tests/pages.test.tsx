@@ -286,4 +286,46 @@ describe("web application pages", () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith("/login"));
     expect(fetchMock).toHaveBeenCalledTimes(7);
   });
+
+  it("keeps repository grants aligned with the most recently selected project", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const projects = [
+      { id: "project-alpha", name: "Alpha", slug: "alpha" },
+      { id: "project-beta", name: "Beta", slug: "beta" },
+    ];
+    let resolveAlpha!: (value: Response) => void;
+    let resolveBeta!: (value: Response) => void;
+    const alphaResponse = new Promise<Response>((resolve) => { resolveAlpha = resolve; });
+    const betaResponse = new Promise<Response>((resolve) => { resolveBeta = resolve; });
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/projects")) return Promise.resolve(response(projects) as Response);
+      if (url.endsWith("/project-alpha/repositories")) return alphaResponse;
+      if (url.endsWith("/project-beta/repositories")) return betaResponse;
+      return Promise.resolve(response({}, 404) as Response);
+    });
+
+    render(<Projects />);
+    fireEvent.click(await screen.findByRole("button", { name: /Alpha/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+    resolveBeta(response([{
+      id: "repository-beta",
+      target_id: "team/beta",
+      display_name: "Beta repository",
+      default_branch: "main",
+    }]) as Response);
+    expect(await screen.findByText("Beta repository")).toBeTruthy();
+
+    resolveAlpha(response([{
+      id: "repository-alpha",
+      target_id: "team/alpha",
+      display_name: "Alpha repository",
+      default_branch: "main",
+    }]) as Response);
+    await waitFor(() => expect(screen.queryByText("Alpha repository")).toBeNull());
+    expect(screen.getByRole("heading", { name: "Beta" })).toBeTruthy();
+    expect(screen.getByText("Beta repository")).toBeTruthy();
+  });
 });

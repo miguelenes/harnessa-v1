@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { components } from "@harnessa/contracts";
 import {
@@ -37,6 +37,7 @@ export default function Projects() {
   const [loadingRepositories, setLoadingRepositories] = useState(false);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<PendingAction>(null);
+  const repositorySelectionRequest = useRef(0);
 
   const load = useCallback(async () => {
     setError("");
@@ -101,6 +102,7 @@ export default function Projects() {
   }
 
   async function select(project: Project) {
+    const requestId = ++repositorySelectionRequest.current;
     setActive(project);
     setRepos([]);
     setLoadingRepositories(true);
@@ -113,15 +115,19 @@ export default function Projects() {
         router.push("/login");
         return;
       }
+      if (requestId !== repositorySelectionRequest.current) return;
       if (!response.ok) {
         setError(errorFor(response, "load repository grants"));
         return;
       }
-      setRepos((await response.json()) as Repository[]);
+      const repositories = (await response.json()) as Repository[];
+      if (requestId === repositorySelectionRequest.current) setRepos(repositories);
     } catch {
-      setError("Could not reach the Harnessa API. Repository grants could not be loaded.");
+      if (requestId === repositorySelectionRequest.current) {
+        setError("Could not reach the Harnessa API. Repository grants could not be loaded.");
+      }
     } finally {
-      setLoadingRepositories(false);
+      if (requestId === repositorySelectionRequest.current) setLoadingRepositories(false);
     }
   }
 
