@@ -17,6 +17,19 @@ def test_request_metrics_use_bounded_route_labels_and_cumulative_buckets() -> No
     assert 'harnessa_http_request_duration_seconds_bucket{method="GET",route="/projects/{project_id}",status="200",le="+Inf"} 2' in rendered
 
 
+def test_request_metrics_collapse_unknown_methods_to_bounded_label() -> None:
+    metrics = RequestMetrics()
+
+    metrics.observe("HARNESSES-UNIQUE-EXTENSION", "/health", 200, 0.001)
+    metrics.observe("ANOTHER-UNIQUE-EXTENSION", "/health", 200, 0.002)
+
+    rendered = metrics.render()
+    assert 'method="OTHER",route="/health",status="200"' in rendered
+    assert "HARNESSES-UNIQUE-EXTENSION" not in rendered
+    assert "ANOTHER-UNIQUE-EXTENSION" not in rendered
+    assert rendered.count('method="OTHER"') == 15
+
+
 def test_metrics_endpoint_requires_configured_bearer_token_and_request_ids_are_correlated(
     monkeypatch,
 ) -> None:

@@ -6,6 +6,7 @@ from collections import defaultdict
 from threading import Lock
 
 _BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+_KNOWN_METHODS = frozenset({"CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"})
 
 
 def _escape_label(value: str) -> str:
@@ -22,6 +23,9 @@ class RequestMetrics:
         self._buckets: dict[tuple[str, str, int], list[int]] = {}
 
     def observe(self, method: str, route: str, status: int, duration_seconds: float) -> None:
+        # ASGI accepts arbitrary method tokens. Collapse extensions to a stable label
+        # so an unauthenticated caller cannot grow the process-local metric maps.
+        method = method if method in _KNOWN_METHODS else "OTHER"
         key = (method, route, status)
         with self._lock:
             self._counts[key] += 1
