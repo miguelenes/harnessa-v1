@@ -33,10 +33,14 @@ example, `openssl rand -hex 32`). LiteLLM stores spend data in its own
 `litellm` database and role, created by the `litellm-db-init` service. Its role
 does not receive access to Harnessa's application database. LiteLLM stores
 provider spend records there. Harnessa's PostgreSQL scheduler and reservation
-ledger enforce configured project, task, run, and grouped-evaluation ceilings;
-the acceptance report tracks the user's lifetime €20 ceiling across remaining
-milestones. Keep LiteLLM's own budget checks disabled so there is one budget
-authority for application requests.
+ledger enforce a shared lifetime model-spend ceiling across all projects and
+interactive, probe, and grouped-evaluation requests. The database starts with a
+$20 ceiling and includes the two already billed M13 route checks. Set
+`MODEL_GLOBAL_BUDGET_USD` lower in `.env` when externally billed evaluator or
+judge costs need to share the €20 milestone ceiling; do not raise it above
+$20. The app uses the lower of the database ceiling and this configured value.
+Keep LiteLLM's own budget checks disabled so there is one budget authority for
+application requests.
 
 ```sh
 zsh -lic 'export DEEPSEEK_API_KEY OPENROUTER_API_KEY; podman compose --env-file .env -f infra/compose.yaml up -d litellm'

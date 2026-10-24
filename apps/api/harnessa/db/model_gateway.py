@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -240,6 +241,37 @@ class ModelBudgetCounter(Scoped, Base):
     reserved_tokens: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     used_tokens: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     used_steps: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+
+
+class ModelGlobalSpendBudget(Base):
+    """Lifetime model-spend budget shared by all projects and workloads."""
+
+    __tablename__ = "model_global_spend_budgets"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_model_global_spend_budget_singleton"),
+        CheckConstraint("max_usd > 0", name="ck_model_global_spend_budget_max_positive"),
+        CheckConstraint("reserved_usd >= 0", name="ck_model_global_spend_budget_reserved_nonnegative"),
+        CheckConstraint("billed_usd >= 0", name="ck_model_global_spend_budget_billed_nonnegative"),
+        CheckConstraint("estimated_usd >= 0", name="ck_model_global_spend_budget_estimated_nonnegative"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    max_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    reserved_usd: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8), default=0, server_default=text("0"), nullable=False
+    )
+    billed_usd: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8),
+        default=Decimal("0.0000228"),
+        server_default=text("0.0000228"),
+        nullable=False,
+    )
+    estimated_usd: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8), default=0, server_default=text("0"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class ModelReservation(Scoped, Base):

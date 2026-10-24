@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -40,6 +42,7 @@ class Settings(BaseSettings):
     model_interactive_concurrency: int = 4
     model_interactive_reserve: int = 2
     model_probe_overflow_limit: int = 0
+    model_global_budget_usd: Decimal = Field(default=Decimal("20.00"), gt=0)
     artifact_root: str = "/var/lib/harnessa/artifacts"
     acp_execution_enabled: bool = False
     acp_repository_sources_json: str = "{}"

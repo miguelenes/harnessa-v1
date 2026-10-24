@@ -23,6 +23,7 @@ from harnessa.db.model_gateway import (
     ModelBudgetCounter,
     ModelBudgetPolicy,
     ModelDeployment,
+    ModelGlobalSpendBudget,
     ModelPool,
     ModelRequestLedger,
     ModelReservation,
@@ -585,6 +586,32 @@ async def _reserve(
                 "model_step_limit_exceeded", 409, f"{counter.scope.title()} step limit is exhausted"
             )
 
+    global_budget = await db.scalar(
+        select(ModelGlobalSpendBudget)
+        .where(ModelGlobalSpendBudget.id == 1)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if global_budget is None:
+        raise ModelGatewayError(
+            "model_global_budget_unavailable",
+            503,
+            "The shared model spend budget is not initialized",
+        )
+    global_limit = min(global_budget.max_usd, settings.model_global_budget_usd)
+    if (
+        global_budget.billed_usd
+        + global_budget.estimated_usd
+        + global_budget.reserved_usd
+        + reserved_usd
+        > global_limit
+    ):
+        raise ModelGatewayError(
+            "model_global_budget_exceeded",
+            409,
+            "The shared lifetime model spend ceiling would be exceeded",
+        )
+
     capacity = (
         (
             await db.execute(
@@ -672,6 +699,7 @@ async def _reserve(
         counter.reserved_usd += reserved_usd
         counter.reserved_tokens += reserved_tokens
         counter.used_steps += 1
+    global_budget.reserved_usd += reserved_usd
 
     request_id = uuid4()
     reservation = ModelReservation(
@@ -1050,6 +1078,24 @@ async def _settle(
         counter.billed_usd += billed_usd
         counter.estimated_usd += estimated_usd
         counter.used_tokens += used_tokens
+
+    global_budget = await db.scalar(
+        select(ModelGlobalSpendBudget)
+        .where(ModelGlobalSpendBudget.id == 1)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if global_budget is None:
+        raise ModelGatewayError(
+            "model_global_budget_unavailable",
+            503,
+            "The shared model spend budget is not initialized",
+        )
+    global_budget.reserved_usd = max(
+        _ZERO, global_budget.reserved_usd - reservation.reserved_usd
+    )
+    global_budget.billed_usd += billed_usd
+    global_budget.estimated_usd += estimated_usd
 
     pool = (
         (
@@ -1913,6 +1959,18 @@ async def reconcile_stale_model_reservations(
                     )
                     counter.estimated_usd += reservation.reserved_usd
                     counter.used_tokens += reservation.reserved_tokens
+            global_budget = await db.scalar(
+                select(ModelGlobalSpendBudget)
+                .where(ModelGlobalSpendBudget.id == 1)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if global_budget is None:
+                raise RuntimeError("Shared model spend budget is not initialized")
+            global_budget.reserved_usd = max(
+                _ZERO, global_budget.reserved_usd - reservation.reserved_usd
+            )
+            global_budget.estimated_usd += reservation.reserved_usd
             capacity = (
                 (
                     await db.execute(
