@@ -39,8 +39,13 @@ $20 ceiling and includes the two already billed M13 route checks. Set
 `MODEL_GLOBAL_BUDGET_USD` lower in `.env` when externally billed evaluator or
 judge costs need to share the €20 milestone ceiling; do not raise it above
 $20. The app uses the lower of the database ceiling and this configured value.
-Keep LiteLLM's own budget checks disabled so there is one budget authority for
-application requests.
+When configuring the independent holdout evaluator, also set a positive
+`HARNESS_HOLDOUT_EVALUATOR_MAX_COST_USD`. Harnessa books that maximum against
+the same lifetime ledger before dispatch and retains it after timeouts or
+failures, when billing may be unknown. Keep other separately billed judge
+services unavailable unless their maximum cost is also booked against the
+shared ledger. LiteLLM only records spend; Harnessa's scheduler owns budget
+enforcement.
 
 ```sh
 zsh -lic 'export DEEPSEEK_API_KEY OPENROUTER_API_KEY; podman compose --env-file .env -f infra/compose.yaml up -d litellm'

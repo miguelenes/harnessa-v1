@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     harness2_holdout_timeout_seconds: int = Field(default=300, ge=1, le=3600)
     harness_holdout_evaluator_url: str = ""
     harness_holdout_evaluator_token: SecretStr | None = None
+    harness_holdout_evaluator_max_cost_usd: Decimal = Field(default=Decimal(0), ge=0)
 
 
 settings = Settings()

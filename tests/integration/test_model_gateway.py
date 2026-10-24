@@ -36,6 +36,7 @@ from harnessa.services.model_gateway import (
     ModelGatewayError,
     reconcile_stale_model_reservations,
 )
+from harnessa.services.spend_budget import GlobalSpendBudgetError, record_external_spend_estimate
 from pwdlib import PasswordHash
 from sqlalchemy import select, text
 
@@ -463,6 +464,34 @@ async def test_global_budget_serializes_spend_across_projects_and_workloads():
         release.set()
         await asyncio.gather(first, return_exceptions=True)
         await client.aclose()
+        async with SessionLocal() as db:
+            budget = await db.get(ModelGlobalSpendBudget, 1)
+            assert budget is not None
+            budget.max_usd, budget.reserved_usd, budget.billed_usd, budget.estimated_usd = original_budget
+            await db.commit()
+
+
+@pytest.mark.anyio
+async def test_external_evaluator_estimate_is_debited_before_dispatch():
+    async with SessionLocal() as db:
+        budget = await db.get(ModelGlobalSpendBudget, 1)
+        assert budget is not None
+        original_budget = (budget.max_usd, budget.reserved_usd, budget.billed_usd, budget.estimated_usd)
+        budget.max_usd = Decimal("0.01")
+        budget.reserved_usd = Decimal(0)
+        budget.billed_usd = Decimal(0)
+        budget.estimated_usd = Decimal(0)
+        await db.commit()
+
+    try:
+        await record_external_spend_estimate(Decimal("0.006"))
+        with pytest.raises(GlobalSpendBudgetError):
+            await record_external_spend_estimate(Decimal("0.005"))
+        async with SessionLocal() as db:
+            budget = await db.get(ModelGlobalSpendBudget, 1)
+            assert budget is not None
+            assert budget.estimated_usd == Decimal("0.00600000")
+    finally:
         async with SessionLocal() as db:
             budget = await db.get(ModelGlobalSpendBudget, 1)
             assert budget is not None
