@@ -71,7 +71,10 @@ export default function Projects() {
     queueMicrotask(() => {
       if (!controller.signal.aborted) void load(controller.signal);
     });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      repositorySelectionRequest.current += 1;
+    };
   }, [load]);
 
   async function create(event: FormEvent<HTMLFormElement>) {

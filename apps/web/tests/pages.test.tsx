@@ -192,6 +192,25 @@ describe("web application pages", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it("ignores repository responses after the page unmounts", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const project = { id: "project-1", name: "Alpha", slug: "alpha" };
+    let resolveResponse!: (value: Response) => void;
+    const pendingResponse = new Promise<Response>((resolve) => { resolveResponse = resolve; });
+    fetchMock.mockImplementation((input) => String(input).endsWith("/projects")
+      ? Promise.resolve(response([project]) as Response)
+      : pendingResponse);
+
+    const { unmount } = render(<Projects />);
+    fireEvent.click(await screen.findByRole("button", { name: /Alpha/ }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    unmount();
+    resolveResponse(response({}, 401) as Response);
+    await pendingResponse;
+    await Promise.resolve();
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it("reports failed project creation and repository registration", async () => {
     const fetchMock = vi.mocked(fetch);
     const project = { id: "project-1", name: "Alpha", slug: "alpha" };
