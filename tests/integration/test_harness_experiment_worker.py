@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -13,15 +13,23 @@ from harness2.substrate.opencode import OpencodeSubstrate
 from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.api import harness_routes
 from harnessa.contracts import TaskStage
-from harnessa.db.harness import HarnessExperience, HarnessExperiment, HarnessPolicy, HarnessProbeRun
-from harnessa.db.models import Repository, Task
+from harnessa.db.harness import (
+    EvaluationRun,
+    HarnessExperience,
+    HarnessExperiment,
+    HarnessPolicy,
+    HarnessProbeRun,
+)
+from harnessa.db.models import Project, Repository, Task
 from harnessa.db.orchestration import Run
 from harnessa.db.review import VerificationManifestRevision  # noqa: F401
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
+from harnessa.domain.skill_evolution import compatibility_snapshot, validate_skill_artifact
 from harnessa.services import harness_experiments as worker_module
 from harnessa.services.harness_experiments import HarnessExperimentWorker
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import DBAPIError
 
 from tests.integration.test_model_gateway import gateway_fixture
 
@@ -132,6 +140,15 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
     fixture = await gateway_fixture()
     base_sha = "a" * 40
     spec_hash = "b" * 64
+    monkeypatch.setattr(worker_module.settings, "artifact_root", str(tmp_path))
+    skill_content = (
+        "---\nname: active-guide\ndescription: Active skill fixture.\nlicense: MIT\n"
+        "metadata:\n  dependencies: []\nallowed-tools: []\n---\n\nRead only guidance.\n"
+    )
+    skill = validate_skill_artifact("skills/active-guide/SKILL.md", skill_content)
+    stored_skill = LocalArtifactStore(tmp_path).put_bytes(
+        skill_content.encode(), media_type="text/markdown"
+    )
     async with SessionLocal() as db:
         task = await db.get(Task, fixture["task_id"])
         assert task is not None
@@ -183,7 +200,53 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
             revision=2,
             max_probe_concurrency=2,
         )
-        db.add_all([interview, experiment, policy])
+        experience = HarnessExperience(
+            organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+            source_task_id=task.id, experience_key="active-guide", version=1, status="active",
+            repository_scope=repository.target_id, domain_scope="repository",
+            cue="active-guide", lesson="Use read-only guidance", evidence_refs=[{"sha256": "f" * 64}],
+            candidate_digest="e" * 64, conflict_key="active-guide", source_kind="operator_authored",
+            author="fixture operator", producer="integration test", scope_type="repository",
+            scope_id=repository.target_id, license_id="MIT", artifact_path=skill.path,
+            artifact_digest=stored_skill.digest, artifact_storage_key=stored_skill.storage_key,
+            artifact_size_bytes=stored_skill.size_bytes,
+            confidence_rationale="A deterministic integration fixture.",
+            compatibility_snapshot=compatibility_snapshot(
+                harness2_revision=experiment.harness2_revision,
+                tool_revision=worker_module.settings.acp_harness_revision,
+                policy_revision=policy.revision, model_capability_revision=None,
+                route_alias="probe-route", executor_image=worker_module.settings.acp_agent_image,
+                repository=repository.target_id, task=None, organization=None,
+            ),
+            expiry_at=datetime.now(UTC) + timedelta(days=1), policy_revision=policy.revision,
+        )
+        selected_experience = HarnessExperience(
+            id=uuid4(), organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+            source_task_id=task.id, experience_key="selected-guide", version=2, status="candidate",
+            repository_scope=repository.target_id, domain_scope="repository",
+            cue="selected-guide", lesson="Use the selected frozen guidance",
+            evidence_refs=[{"sha256": "d" * 64}], candidate_digest="c" * 64,
+            conflict_key="selected-guide", source_kind="operator_authored",
+            author="fixture operator", producer="integration test", scope_type="repository",
+            scope_id=repository.target_id, license_id="MIT", artifact_path=skill.path,
+            artifact_digest=stored_skill.digest, artifact_storage_key=stored_skill.storage_key,
+            artifact_size_bytes=stored_skill.size_bytes,
+            confidence_rationale="A deterministic selected-skill fixture.",
+            compatibility_snapshot={}, expiry_at=datetime.now(UTC) + timedelta(days=1),
+            policy_revision=policy.revision,
+        )
+        experiment.result = {
+            "route_alias": "probe-route",
+            "skill_versions": [{
+                "id": str(selected_experience.id), "version": selected_experience.version,
+                "candidate_digest": selected_experience.candidate_digest,
+                "artifact_digest": selected_experience.artifact_digest,
+                "artifact_storage_key": selected_experience.artifact_storage_key,
+                "artifact_path": selected_experience.artifact_path,
+                "artifact_size_bytes": selected_experience.artifact_size_bytes,
+            }],
+        }
+        db.add_all([interview, experiment, policy, experience, selected_experience])
         await db.commit()
         experiment_id = experiment.id
 
@@ -192,7 +255,6 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
             return b"# Visible base harness\n"
 
     monkeypatch.setattr(worker_module, "specification_workspace_manager", lambda: SpecificationManager())
-    monkeypatch.setattr(worker_module.settings, "artifact_root", str(tmp_path))
     class Evaluator:
         async def evaluate(self, candidate: dict[str, object]) -> dict[str, str]:
             artifacts = candidate["artifacts"]
@@ -219,7 +281,9 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
     assert organization_id == fixture["organization_id"]
     assert scope == "repo/harness-fixture"
     assert (base_harness / "systemprompt.md").read_text(encoding="utf-8") == "# Visible base harness\n"
-    assert experiences == []
+    assert frozen.skill_artifacts[0]["path"] == skill.path
+    assert frozen.skill_artifacts[0]["digest"] == skill.digest
+    assert [item.id for item in experiences] == [experience.id]
     assert concurrency == 2
 
     class FakeExecution:
@@ -520,6 +584,268 @@ async def test_harness_overview_returns_policy_experiments_probes_and_experience
     assert overview.probes[0]["trace_digest"] == "e" * 64
     assert overview.experiences[0]["revalidated_at"] is None
     assert overview.manifest["immutable_policy"]["revision"] == "fixed-v1"
+
+
+@pytest.mark.anyio
+async def test_skill_import_scopes_are_validated_and_organization_skills_are_shared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = await gateway_fixture()
+    monkeypatch.setattr(harness_routes.settings, "artifact_root", str(tmp_path))
+    content = (
+        "---\nname: scoped-skill\ndescription: A scoped integration fixture.\n"
+        "license: MIT\nmetadata:\n  dependencies: []\nallowed-tools: []\n---\n\n"
+        "Use this only as bounded guidance.\n"
+    )
+    async with SessionLocal() as db:
+        actor = await db.get(harness_routes.User, fixture["user_id"])
+        assert actor is not None
+        project = await db.get(Project, fixture["project_id"])
+        assert project is not None
+        task = await db.get(Task, fixture["task_id"])
+        assert task is not None
+        task_candidate = await harness_routes.create_skill_candidate(
+            project.id,
+            harness_routes.SkillImportRequest(
+                source_kind="operator_authored",
+                scope_type="task",
+                scope_id=str(task.id),
+                skill_path="skills/scoped-skill/SKILL.md",
+                content=content,
+            ),
+            actor,
+            db,
+        )
+        task_row = await db.get(HarnessExperience, UUID(task_candidate["id"]))
+        assert task_row is not None
+        assert (task_row.scope_type, task_row.scope_id) == ("task", str(task.id))
+        assert task_row.status == "candidate"
+        task_replay = await harness_routes.create_skill_candidate(
+            project.id,
+            harness_routes.SkillImportRequest(
+                source_kind="operator_authored", scope_type="task", scope_id=str(task.id),
+                skill_path="skills/scoped-skill/SKILL.md", content=content,
+            ),
+            actor,
+            db,
+        )
+        assert task_replay["id"] == task_candidate["id"]
+        assert task_replay["idempotent_replay"] is True
+        artifact_response = await harness_routes.read_skill_artifact(
+            project.id, task_row.id, actor, db
+        )
+        assert artifact_response.body.decode("utf-8") == content
+        conflicting_content = content.replace(
+            "bounded guidance", "different bounded guidance"
+        )
+        conflict_candidate = await harness_routes.create_skill_candidate(
+            project.id,
+            harness_routes.SkillImportRequest(
+                source_kind="operator_authored", scope_type="task", scope_id=str(task.id),
+                skill_path="skills/scoped-skill/SKILL.md", content=conflicting_content,
+            ),
+            actor,
+            db,
+        )
+        assert conflict_candidate["conflict_state"] == "conflict"
+
+        organization_content = content.replace("scoped-skill", "shared-skill")
+        organization_candidate = await harness_routes.create_skill_candidate(
+            project.id,
+            harness_routes.SkillImportRequest(
+                source_kind="operator_authored",
+                scope_type="organization",
+                scope_id=str(project.organization_id),
+                skill_path="skills/shared-skill/SKILL.md",
+                content=organization_content,
+            ),
+            actor,
+            db,
+        )
+        organization_row = await db.get(HarnessExperience, UUID(organization_candidate["id"]))
+        assert organization_row is not None
+        assert (organization_row.scope_type, organization_row.scope_id) == (
+            "organization",
+            str(project.organization_id),
+        )
+        task_promotion = harness_routes.PromotionRequest(
+            stable_key="task-skill-cannot-promote", candidate_digest=task_candidate["candidate_digest"],
+            rationale="Task scope remains local.",
+        )
+        with pytest.raises(HTTPException) as task_blocked:
+            await harness_routes.promote_harness_experience(
+                project.id, task_row.id, task_promotion, actor, db
+            )
+        assert task_blocked.value.status_code == 409
+        assert "Task-scoped skills cannot be activated" in task_blocked.value.detail
+        organization_promotion = harness_routes.PromotionRequest(
+            stable_key="org-skill-needs-eval", candidate_digest=organization_candidate["candidate_digest"],
+            rationale="Organization promotion needs a matching evaluation.",
+        )
+        with pytest.raises(HTTPException) as org_blocked:
+            await harness_routes.promote_harness_experience(
+                project.id, organization_row.id, organization_promotion, actor, db
+            )
+        assert org_blocked.value.status_code == 409
+        assert "matching, passing multi-task evaluation" in org_blocked.value.detail
+        other_project = Project(
+            organization_id=project.organization_id,
+            name="Shared skill project",
+            slug=f"shared-{uuid4().hex[:10]}",
+        )
+        db.add(other_project)
+        await db.commit()
+        overview = await harness_routes.harness_overview(other_project.id, actor, db)
+
+        assert any(
+            item["id"] == organization_candidate["id"]
+            for item in overview.experiences
+        )
+
+
+@pytest.mark.anyio
+async def test_postgres_skill_trigger_blocks_direct_content_mutation_but_allows_stale_status() -> None:
+    fixture = await gateway_fixture()
+    async with SessionLocal() as db:
+        row = HarnessExperience(
+            organization_id=fixture["organization_id"],
+            project_id=fixture["project_id"],
+            source_task_id=None,
+            source_experiment_id=None,
+            source_run_id=None,
+            source_evaluation_run_id=None,
+            experience_key="immutable-skill-trigger",
+            version=1,
+            status="candidate",
+            repository_scope="repo/immutable",
+            domain_scope="skill",
+            cue="immutable-skill",
+            lesson="Original immutable content.",
+            evidence_refs=[],
+            candidate_digest="a" * 64,
+            conflict_key="immutable-skill",
+            source_kind="operator_authored",
+            author="test operator",
+            producer="harnessa-integration-test",
+            scope_type="repository",
+            scope_id="repo/immutable",
+            license_id="MIT",
+            dependencies=[],
+            allowed_tools=[],
+            trust_level="untrusted",
+            artifact_path="skills/immutable-skill/SKILL.md",
+            artifact_digest="b" * 64,
+            artifact_storage_key="sha256/bb/" + "b" * 64,
+            artifact_size_bytes=10,
+            confidence_rationale="An integration check for immutable provenance.",
+            compatibility_snapshot={},
+            expiry_at=datetime.now(UTC) + timedelta(days=1),
+            policy_revision=1,
+        )
+        db.add(row)
+        await db.commit()
+        row_id = row.id
+        with pytest.raises(DBAPIError, match="immutable"):
+            await db.execute(
+                update(HarnessExperience)
+                .where(HarnessExperience.id == row_id)
+                .values(lesson="Tampered content.")
+            )
+        await db.rollback()
+        row = await db.get(HarnessExperience, row_id)
+        assert row is not None and row.lesson == "Original immutable content."
+        row.status = "stale"
+        row.stale_reason = {"compatibility": {"recorded": "old", "current": "new"}}
+        await db.commit()
+
+
+@pytest.mark.anyio
+async def test_skill_promotion_gate_requires_a_matched_multi_task_holdout_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = await gateway_fixture()
+    monkeypatch.setattr(harness_routes.settings, "artifact_root", str(tmp_path))
+    content = (
+        "---\nname: evaluated-skill\ndescription: Evaluated fixture.\nlicense: MIT\n"
+        "metadata:\n  dependencies: []\nallowed-tools: []\n---\n\nUse matched evidence.\n"
+    )
+    artifact = validate_skill_artifact("skills/evaluated-skill/SKILL.md", content)
+    stored = LocalArtifactStore(tmp_path).put_bytes(content.encode(), media_type="text/markdown")
+    async with SessionLocal() as db:
+        second_task = Task(
+            project_id=fixture["project_id"], title="Second heldout task",
+            description="Bounded fixture", stage=TaskStage.HARNESS_PROBE.value,
+        )
+        candidate = HarnessExperience(
+            organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+            source_task_id=fixture["task_id"], experience_key="evaluated-skill", version=1,
+            status="candidate", repository_scope="*", domain_scope="project",
+            cue="evaluated-skill", lesson="Use matched evidence", evidence_refs=[{"digest": "a" * 64}],
+            candidate_digest="b" * 64, conflict_key="evaluated-skill", source_kind="operator_authored",
+            author="fixture operator", producer="integration test", scope_type="project",
+            scope_id=str(fixture["project_id"]), license_id="MIT", artifact_path=artifact.path,
+            artifact_digest=stored.digest, artifact_storage_key=stored.storage_key,
+            artifact_size_bytes=stored.size_bytes, confidence_rationale="Bounded fixture evidence.",
+            compatibility_snapshot={}, expiry_at=datetime.now(UTC) + timedelta(days=1), policy_revision=1,
+        )
+        db.add_all([second_task, candidate])
+        await db.flush()
+        task_ids = [str(fixture["task_id"]), str(second_task.id)]
+        evaluation = EvaluationRun(
+            organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+            created_by=fixture["user_id"], stable_key="skill-gate-evaluation", status="succeeded",
+            manifest={
+                "skill_versions": [{"id": str(candidate.id), "version": candidate.version,
+                                    "candidate_digest": candidate.candidate_digest,
+                                    "artifact_digest": candidate.artifact_digest}],
+                "task_inputs": [{"task_id": task_id} for task_id in task_ids],
+            }, manifest_digest="c" * 64, experiment_ids=[], max_cost_usd="1.00000000",
+        )
+        db.add(evaluation)
+        await db.flush()
+        children: list[HarnessExperiment] = []
+        for index, task_id in enumerate([fixture["task_id"], second_task.id]):
+            child = HarnessExperiment(
+                organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+                task_id=task_id, evaluation_run_id=evaluation.id, created_by=fixture["user_id"],
+                stable_key=f"skill-gate-child-{index}", mode="parallel", k=1,
+                status="succeeded", phase="complete", attempts=1, base_sha="d" * 40,
+                specification_hash="e" * 64, specification_revision=1, policy_revision=1,
+                harness2_revision="f" * 40, result_digest="1" * 64,
+                result={
+                    "comparison_successful": True, "composed_successful": True,
+                    "holdout_manifest": {
+                        "digest": "2" * 64,
+                        "skill_versions": [{"experience_id": str(candidate.id),
+                                            "version": candidate.version,
+                                            "digest": candidate.artifact_digest}],
+                    },
+                    "holdout_evaluation": {
+                        "status": "passed", "manifest_digest": "2" * 64,
+                        "result_digest": "3" * 64,
+                    },
+                },
+            )
+            db.add(child)
+            children.append(child)
+        await db.flush()
+        evaluation.experiment_ids = [str(item.id) for item in children]
+        db.add_all([
+            HarnessProbeRun(
+                organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+                task_id=child.task_id, experiment_id=child.id, label=f"gate-probe-{index}",
+                phase="baseline", status="succeeded", delivered=True, wall_ms=100,
+                cost_usd="0.0001",
+            )
+            for index, child in enumerate(children)
+        ])
+        await db.flush()
+        gate = await harness_routes._skill_evaluation_gate(db, fixture["project_id"], candidate)
+
+    assert gate is not None
+    assert gate["sample_size"] == 2
+    assert gate["missing_tasks"] == gate["failed_tasks"] == gate["unknown_cost_or_outcome"] == 0
+    assert gate["candidate_digest"] == "b" * 64
 
 
 @pytest.mark.anyio

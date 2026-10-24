@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.specification_workspace import (
     SpecificationWorkspaceError,
     SpecificationWorkspaceManager,
 )
+from harnessa.config import settings
 from harnessa.db.harness import HarnessExperience, HarnessExperiment
 from harnessa.db.models import Repository, Task
-from harnessa.db.orchestration import TaskTransition
+from harnessa.db.orchestration import Run, TaskTransition
 from harnessa.db.review import (
     IntegrationEvidence,
     PostIntegrationStep,
@@ -23,7 +27,7 @@ from harnessa.db.review import (
 )
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
-from harnessa.services.harness_experience import experience_candidate_digest
+from harnessa.domain.skill_evolution import validate_skill_artifact
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -156,8 +160,14 @@ async def _execute_step(
                 }
             try:
                 experiment_id = UUID(str(hook["experiment_id"]))
+                source_run_id = UUID(str(hook["source_run_id"]))
                 cue = str(hook["cue"]).strip()
                 lesson = str(hook["lesson"]).strip()
+                artifact_path = str(hook["path"])
+                artifact_digest = str(hook["artifact_digest"])
+                artifact_storage_key = str(hook["artifact_storage_key"])
+                artifact_size_bytes = int(hook["artifact_size_bytes"])
+                candidate_digest = str(hook["candidate_digest"])
                 evidence_refs = hook["evidence_refs"]
             except (KeyError, ValueError, TypeError) as exc:
                 raise SpecificationWorkspaceError(
@@ -180,6 +190,16 @@ async def _execute_step(
                 raise SpecificationWorkspaceError(
                     "Harness learning evidence references are invalid"
                 )
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}", artifact_digest)
+                or not re.fullmatch(r"[0-9a-f]{64}", candidate_digest)
+                or artifact_size_bytes < 1
+                or not any(
+                    isinstance(ref, dict) and ref.get("run_id") == str(source_run_id)
+                    for ref in evidence_refs
+                )
+            ):
+                raise SpecificationWorkspaceError("Skill artifact provenance is invalid")
             experiment = await db.scalar(
                 select(HarnessExperiment).where(
                     HarnessExperiment.id == experiment_id,
@@ -193,48 +213,103 @@ async def _execute_step(
                 raise SpecificationWorkspaceError(
                     "Successful experiment or repository scope is unavailable"
                 )
-            key = hashlib.sha256(f"{experiment.id}:{cue}".encode()).hexdigest()[:32]
-            existing = await db.scalar(
+            source_run = await db.scalar(
+                select(Run).where(
+                    Run.id == source_run_id,
+                    Run.task_id == integration.task_id,
+                    Run.project_id == integration.project_id,
+                )
+            )
+            if source_run is None:
+                raise SpecificationWorkspaceError("Skill source run is outside the integrated task")
+            stored_state = LocalArtifactStore(Path(settings.artifact_root)).verify_reference(
+                artifact_storage_key,
+                expected_digest=artifact_digest,
+                expected_size=artifact_size_bytes,
+                max_bytes=64_000,
+            )
+            if stored_state != "verified":
+                raise SpecificationWorkspaceError("Skill artifact CAS reference is not verified")
+            artifact_content = (
+                LocalArtifactStore(Path(settings.artifact_root)).root / artifact_storage_key
+            ).read_text(encoding="utf-8")
+            try:
+                artifact = validate_skill_artifact(artifact_path, artifact_content)
+            except ValueError as exc:
+                raise SpecificationWorkspaceError("Skill artifact schema is invalid") from exc
+            if artifact.digest != artifact_digest or artifact.slug != cue:
+                raise SpecificationWorkspaceError("Skill artifact changed after evaluation")
+            expected_identity = {
+                "artifact_digest": artifact_digest,
+                "experiment_id": str(experiment.id),
+                "path": artifact_path,
+                "policy_revision": experiment.policy_revision,
+                "scope": repository.target_id,
+            }
+            expected_candidate_digest = hashlib.sha256(
+                json.dumps(expected_identity, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            if candidate_digest != expected_candidate_digest:
+                raise SpecificationWorkspaceError("Skill candidate digest does not match its evidence")
+            key = hashlib.sha256(
+                f"repository:{repository.target_id}:{artifact.slug}".encode()
+            ).hexdigest()[:32]
+            versions = list(await db.scalars(
                 select(HarnessExperience).where(
                     HarnessExperience.project_id == integration.project_id,
                     HarnessExperience.experience_key == key,
-                    HarnessExperience.version == 1,
-                )
-            )
-            if existing:
+                    HarnessExperience.repository_scope == repository.target_id,
+                ).order_by(HarnessExperience.version.desc()).with_for_update()
+            ))
+            duplicate = next((row for row in versions if row.artifact_digest == artifact_digest), None)
+            if duplicate:
                 return {
                     "outcome": "succeeded",
-                    "experience_id": str(existing.id),
-                    "status": existing.status,
+                    "experience_id": str(duplicate.id),
+                    "status": duplicate.status,
                     "idempotent_replay": True,
                 }
-            domain_scope = str(hook.get("domain_scope", "repository"))
-            candidate_digest = experience_candidate_digest(
-                cue=cue,
-                lesson=lesson,
-                evidence_refs=evidence_refs,
-                repository_scope=repository.target_id,
-                domain_scope=domain_scope,
+            conflict = any(
+                row.conflict_key == artifact.slug and row.artifact_digest != artifact_digest
+                for row in versions
             )
-            if hook.get("candidate_digest") != candidate_digest:
-                raise SpecificationWorkspaceError(
-                    "Harness learning candidate digest does not match its evidence"
-                )
             candidate = HarnessExperience(
                 organization_id=integration.organization_id,
                 project_id=integration.project_id,
                 source_task_id=integration.task_id,
                 source_experiment_id=experiment.id,
+                source_run_id=source_run_id,
+                source_evaluation_run_id=experiment.evaluation_run_id,
                 experience_key=key,
-                version=1,
+                version=(versions[0].version + 1) if versions else 1,
                 status="candidate",
                 repository_scope=repository.target_id,
-                domain_scope=str(hook.get("domain_scope", "repository"))[:120],
+                domain_scope="repository",
                 cue=cue,
                 lesson=lesson,
                 evidence_refs=evidence_refs,
                 candidate_digest=candidate_digest,
-                conflict_key=str(hook.get("conflict_key", key))[:120],
+                conflict_key=artifact.slug,
+                conflict_state="conflict" if conflict else "clear",
+                source_kind="generated",
+                author="Harness² composed artifact",
+                producer=f"Harness²@{experiment.harness2_revision}",
+                source_author_id=None,
+                scope_type="repository",
+                scope_id=repository.target_id,
+                license_id=artifact.license_id,
+                dependencies=list(artifact.dependencies),
+                allowed_tools=list(artifact.declared_tools),
+                trust_level="untrusted",
+                artifact_path=artifact.path,
+                artifact_digest=artifact.digest,
+                artifact_storage_key=artifact_storage_key,
+                artifact_size_bytes=artifact.size_bytes,
+                confidence_rationale=str(hook.get("confidence_rationale", ""))[:2000],
+                compatibility_snapshot=(
+                    hook["compatibility_snapshot"]
+                    if isinstance(hook.get("compatibility_snapshot"), dict) else {}
+                ),
                 expiry_at=datetime.now(UTC) + timedelta(days=180),
                 policy_revision=experiment.policy_revision,
             )
@@ -245,6 +320,7 @@ async def _execute_step(
                 "outcome": "succeeded",
                 "experience_id": str(candidate.id),
                 "status": "candidate",
+                "conflict_state": candidate.conflict_state,
                 "automatically_activated": False,
             }
         elif kind == "cleanup":

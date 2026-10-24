@@ -18,6 +18,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
+    inspect,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -200,7 +202,7 @@ class HarnessProbeRun(Scoped, Base):
 
 
 class HarnessExperience(Scoped, Base):
-    """Cross-task lesson candidates. Only reviewed promotion makes an active version."""
+    """Immutable skill/lesson artifact versions with mutable review lifecycle state."""
 
     __tablename__ = "harness_experiences"
     __table_args__ = (
@@ -209,8 +211,24 @@ class HarnessExperience(Scoped, Base):
         ),
         CheckConstraint("version > 0", name="ck_harness_experience_version"),
         CheckConstraint(
-            "status IN ('candidate','active','rejected','superseded')",
+            "status IN ('candidate','active','rejected','superseded','stale')",
             name="ck_harness_experience_status",
+        ),
+        CheckConstraint(
+            "source_kind IN ('generated','imported','operator_authored')",
+            name="ck_harness_experience_source_kind",
+        ),
+        CheckConstraint(
+            "scope_type IN ('task','repository','project','organization')",
+            name="ck_harness_experience_scope_type",
+        ),
+        CheckConstraint(
+            "trust_level IN ('untrusted','reviewed')",
+            name="ck_harness_experience_trust_level",
+        ),
+        CheckConstraint(
+            "conflict_state IN ('clear','conflict')",
+            name="ck_harness_experience_conflict_state",
         ),
         Index("ix_harness_experience_scope", "project_id", "repository_scope", "status"),
     )
@@ -221,11 +239,17 @@ class HarnessExperience(Scoped, Base):
     project_id: Mapped[UUID] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True
     )
-    source_task_id: Mapped[UUID] = mapped_column(
-        ForeignKey("tasks.id", ondelete="RESTRICT"), index=True
+    source_task_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="RESTRICT"), index=True, nullable=True
     )
-    source_experiment_id: Mapped[UUID] = mapped_column(
-        ForeignKey("harness_experiments.id", ondelete="RESTRICT"), index=True
+    source_experiment_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("harness_experiments.id", ondelete="RESTRICT"), index=True, nullable=True
+    )
+    source_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("runs.id", ondelete="RESTRICT"), index=True, nullable=True
+    )
+    source_evaluation_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="RESTRICT"), index=True, nullable=True
     )
     experience_key: Mapped[str] = mapped_column(String(120), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -237,9 +261,83 @@ class HarnessExperience(Scoped, Base):
     evidence_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, nullable=False)
     candidate_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     conflict_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    conflict_state: Mapped[str] = mapped_column(String(16), default="clear", nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(24), default="generated", nullable=False)
+    author: Mapped[str] = mapped_column(String(200), default="unknown", nullable=False)
+    producer: Mapped[str] = mapped_column(String(200), default="harnessa", nullable=False)
+    source_author_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    scope_type: Mapped[str] = mapped_column(String(16), default="repository", nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    license_id: Mapped[str] = mapped_column(String(120), default="UNKNOWN", nullable=False)
+    dependencies: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False, default=list)
+    allowed_tools: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False, default=list)
+    trust_level: Mapped[str] = mapped_column(String(16), default="untrusted", nullable=False)
+    artifact_path: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    artifact_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_storage_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    artifact_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence_rationale: Mapped[str] = mapped_column(
+        Text, default="Legacy experience; confidence is not established.", nullable=False
+    )
+    compatibility_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, nullable=False, default=dict
+    )
+    stale_reason: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    stale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expiry_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+_IMMUTABLE_EXPERIENCE_FIELDS = (
+    "organization_id",
+    "project_id",
+    "source_task_id",
+    "source_experiment_id",
+    "source_run_id",
+    "source_evaluation_run_id",
+    "experience_key",
+    "version",
+    "repository_scope",
+    "domain_scope",
+    "cue",
+    "lesson",
+    "evidence_refs",
+    "candidate_digest",
+    "conflict_key",
+    "conflict_state",
+    "source_kind",
+    "author",
+    "producer",
+    "source_author_id",
+    "scope_type",
+    "scope_id",
+    "license_id",
+    "dependencies",
+    "allowed_tools",
+    "trust_level",
+    "artifact_path",
+    "artifact_digest",
+    "artifact_storage_key",
+    "artifact_size_bytes",
+    "confidence_rationale",
+    "compatibility_snapshot",
+    "expiry_at",
+    "policy_revision",
+)
+
+
+@event.listens_for(HarnessExperience, "before_update")
+def _reject_harness_experience_content_update(_mapper: Any, _connection: Any, target: HarnessExperience) -> None:
+    state = inspect(target)
+    changed = [
+        name for name in _IMMUTABLE_EXPERIENCE_FIELDS
+        if state.attrs[name].history.has_changes()
+    ]
+    if changed:
+        raise ValueError("Harness experience content and provenance are immutable")
 
 
 class HarnessPromotion(Scoped, Base):

@@ -1138,6 +1138,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Skill Candidate
+         * @description Import an untrusted immutable skill version for explicit review.
+         */
+        post: operations["create_skill_candidate_projects__project_id__skills_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/harness-experiences/{experience_id}/artifact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Skill Artifact */
+        get: operations["read_skill_artifact_projects__project_id__harness_experiences__experience_id__artifact_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{project_id}/tasks/{task_id}/harness-experiments": {
         parameters: {
             query?: never;
@@ -1623,6 +1660,11 @@ export interface components {
             k: number;
             /** Route Alias */
             route_alias: string;
+            /**
+             * Skill Experience Id
+             * @default null
+             */
+            skill_experience_id: string | null;
         };
         /** EvaluationRunRead */
         EvaluationRunRead: {
@@ -1649,6 +1691,8 @@ export interface components {
             failed_samples: number;
             /** Cancelled Samples */
             cancelled_samples: number;
+            /** Unknown Samples */
+            unknown_samples: number;
             /** Missing Samples */
             missing_samples: number;
             /** Delivery Samples */
@@ -3496,6 +3540,25 @@ export interface components {
          * @enum {string}
          */
         RunStatus: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "FAILED" | "CANCELLED" | "SUCCEEDED";
+        /** SkillImportRequest */
+        SkillImportRequest: {
+            /**
+             * Source Kind
+             * @enum {string}
+             */
+            source_kind: "imported" | "operator_authored";
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "task" | "repository" | "project" | "organization";
+            /** Scope Id */
+            scope_id: string;
+            /** Skill Path */
+            skill_path: string;
+            /** Content */
+            content: string;
+        };
         /** SpecificationAnswerCreate */
         SpecificationAnswerCreate: {
             /** Expected Revision */
@@ -6829,6 +6892,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HarnessOverview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_skill_candidate_projects__project_id__skills_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_skill_artifact_projects__project_id__harness_experiences__experience_id__artifact_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                experience_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

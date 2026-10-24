@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -36,10 +37,6 @@ from harnessa.db.review import (
 )
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
-from harnessa.services.harness_experience import (
-    canonical_experience_evidence_refs,
-    experience_candidate_digest,
-)
 from harnessa.services.lifecycle import _record_event
 from harnessa.services.specifications import specification_workspace_manager
 from sqlalchemy import func, select
@@ -77,11 +74,30 @@ def _harness_learning_hook(
             "experiment_id": str(experiment.id),
             "reason": "matched_probe_set_incomplete",
         }
-    candidate = experiment.result.get("experience_candidate")
+    holdout = experiment.result.get("holdout_evaluation")
+    manifest = experiment.result.get("holdout_manifest")
+    if (
+        not isinstance(holdout, dict)
+        or holdout.get("status") != "passed"
+        or not isinstance(manifest, dict)
+        or holdout.get("manifest_digest") != manifest.get("digest")
+    ):
+        return {
+            **empty,
+            "experiment_id": str(experiment.id),
+            "reason": "verified_holdout_receipt_missing",
+        }
+    candidates = experiment.result.get("skill_candidates")
+    candidate = candidates[0] if isinstance(candidates, list) and len(candidates) == 1 else None
     if (
         not isinstance(candidate, dict)
+        or not isinstance(candidate.get("path"), str)
         or not isinstance(candidate.get("cue"), str)
         or not isinstance(candidate.get("lesson"), str)
+        or not isinstance(candidate.get("artifact_digest"), str)
+        or not isinstance(candidate.get("artifact_storage_key"), str)
+        or not isinstance(candidate.get("candidate_digest"), str)
+        or not isinstance(candidate.get("source_run_id"), str)
         or len(candidate["cue"]) > 1000
         or len(candidate["lesson"]) > 2000
     ):
@@ -90,39 +106,44 @@ def _harness_learning_hook(
             "experiment_id": str(experiment.id),
             "reason": "no_evidence_backed_experience_candidate",
         }
-    evidence_refs = canonical_experience_evidence_refs([
-        {"digest": probe.trace_digest, "kind": probe.phase, "label": probe.label}
-        for probe in probes
-        if probe.status == "succeeded" and probe.trace_digest
-    ])
-    if not evidence_refs:
+    evidence_refs = candidate.get("evidence_refs")
+    if (
+        not isinstance(evidence_refs, list)
+        or not evidence_refs
+        or any(
+            not isinstance(ref, dict)
+            or not isinstance(ref.get("digest"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", ref["digest"])
+            or not isinstance(ref.get("run_id"), str)
+            for ref in evidence_refs
+        )
+    ):
         return {**empty, "experiment_id": str(experiment.id), "reason": "probe_traces_unavailable"}
-    repository_scope = str(candidate.get("repository_scope", ""))
-    domain_scope = str(candidate.get("domain_scope", "repository"))[:120]
-    candidate_digest = experience_candidate_digest(
-        cue=candidate["cue"],
-        lesson=candidate["lesson"],
-        evidence_refs=evidence_refs,
-        repository_scope=repository_scope,
-        domain_scope=domain_scope,
-    )
-    if candidate.get("candidate_digest") != candidate_digest:
-        return {
-            **empty,
-            "experiment_id": str(experiment.id),
-            "reason": "experience_candidate_digest_mismatch",
-        }
+    if not any(
+        ref.get("run_id") == candidate["source_run_id"] and ref.get("kind") == "composed"
+        for ref in evidence_refs
+        if isinstance(ref, dict)
+    ):
+        return {**empty, "experiment_id": str(experiment.id), "reason": "composed_source_run_missing"}
     return {
-        "reserved_for": "M12",
+        "reserved_for": "M14",
         "triggered": True,
         "experiment_id": str(experiment.id),
+        "source_run_id": candidate["source_run_id"],
+        "path": candidate["path"],
         "cue": candidate["cue"],
         "lesson": candidate["lesson"],
-        "domain_scope": domain_scope,
-        "conflict_key": str(candidate.get("conflict_key", experiment.id))[:120],
+        "license_id": str(candidate.get("license_id", "UNKNOWN"))[:120],
+        "dependencies": candidate.get("dependencies", []),
+        "allowed_tools": candidate.get("allowed_tools", []),
+        "artifact_digest": candidate["artifact_digest"],
+        "artifact_storage_key": candidate["artifact_storage_key"],
+        "artifact_size_bytes": candidate.get("artifact_size_bytes"),
+        "candidate_digest": candidate["candidate_digest"],
+        "confidence_rationale": str(candidate.get("confidence_rationale", ""))[:2000],
+        "compatibility_snapshot": candidate.get("compatibility_snapshot", {}),
         "evidence_refs": evidence_refs,
-        "candidate_digest": candidate_digest,
-        "probe_outcome": "baseline_candidate_composed_succeeded",
+        "probe_outcome": "matched_probe_and_holdout_succeeded",
     }
 
 

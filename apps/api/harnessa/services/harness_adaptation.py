@@ -74,6 +74,7 @@ class FrozenExperiment:
     root: Path
     claim_attempt: int = 0
     proposer_run_id: UUID | None = None
+    skill_artifacts: tuple[dict[str, Any], ...] = ()
 
 
 def _is_holdout_path(path: Path) -> bool:

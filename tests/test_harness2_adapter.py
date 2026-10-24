@@ -32,7 +32,6 @@ from harnessa.services.harness_adaptation import (
     apply_candidate_edits,
     run_upstream_task,
 )
-from harnessa.services.harness_experience import experience_candidate_digest
 from harnessa.services.verification_workflow import _harness_learning_hook
 
 
@@ -314,27 +313,31 @@ def test_promotion_requires_exact_candidate_and_all_fixed_gates() -> None:
 
 
 def test_learning_hook_requires_successful_matched_probe_evidence() -> None:
+    source_run_id = str(uuid4())
     probes = [
         SimpleNamespace(phase=phase, status="succeeded", trace_digest=str(index) * 64, label=phase)
         for index, phase in enumerate(("baseline", "candidate", "composed"), 1)
     ]
     evidence_refs = [
-        {"digest": probe.trace_digest, "kind": probe.phase, "label": probe.label}
+        {
+            "digest": probe.trace_digest,
+            "kind": probe.phase,
+            "label": probe.label,
+            "run_id": source_run_id,
+        }
         for probe in probes
     ]
     candidate = {
-        "cue": "specific cue",
-        "lesson": "bounded lesson",
-        "repository_scope": "owner/repo",
-        "domain_scope": "repository",
+        "path": "skills/test-skill/SKILL.md",
+        "cue": "test-skill",
+        "lesson": "A bounded lesson.",
+        "artifact_digest": "a" * 64,
+        "artifact_storage_key": "sha256/aa/" + "a" * 64,
+        "artifact_size_bytes": 10,
+        "candidate_digest": "b" * 64,
+        "source_run_id": source_run_id,
+        "evidence_refs": evidence_refs,
     }
-    candidate["candidate_digest"] = experience_candidate_digest(
-        cue=candidate["cue"],
-        lesson=candidate["lesson"],
-        evidence_refs=evidence_refs,
-        repository_scope=candidate["repository_scope"],
-        domain_scope=candidate["domain_scope"],
-    )
     experiment = SimpleNamespace(
         id=uuid4(),
         status="succeeded",
@@ -342,7 +345,12 @@ def test_learning_hook_requires_successful_matched_probe_evidence() -> None:
         specification_hash="b" * 64,
         specification_revision=4,
         policy_revision=3,
-        result={"experience_candidate": candidate},
+        result={
+            "holdout_manifest": {"digest": "c" * 64},
+            "holdout_evaluation": {"status": "passed", "manifest_digest": "c" * 64},
+            "experience_candidate": {"cue": "self-reported", "lesson": "ignored"},
+            "skill_candidates": [candidate],
+        },
     )
     identity = {
         "base_sha": experiment.base_sha,
@@ -353,6 +361,7 @@ def test_learning_hook_requires_successful_matched_probe_evidence() -> None:
     hook = _harness_learning_hook(experiment, probes, **identity)
     assert hook["triggered"] is True
     assert len(hook["evidence_refs"]) == 3
+    assert hook["cue"] == "test-skill"
     assert _harness_learning_hook(experiment, probes[:2], **identity)["triggered"] is False
     assert _harness_learning_hook(
         experiment, probes, **{**identity, "specification_revision": 5}
@@ -361,12 +370,20 @@ def test_learning_hook_requires_successful_matched_probe_evidence() -> None:
         **{
             **experiment.__dict__,
             "result": {
-                "experience_candidate": {**candidate, "candidate_digest": "f" * 64}
+                **experiment.result,
+                "skill_candidates": [
+                    {
+                        **candidate,
+                        "evidence_refs": [
+                            ref for ref in evidence_refs if ref["kind"] != "composed"
+                        ],
+                    }
+                ],
             },
         }
     )
     assert _harness_learning_hook(tampered, probes, **identity)["reason"] == (
-        "experience_candidate_digest_mismatch"
+        "composed_source_run_missing"
     )
 
 

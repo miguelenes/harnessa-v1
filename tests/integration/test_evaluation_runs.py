@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+from uuid import UUID
+
 import pytest
 from fastapi import HTTPException
-from harnessa.api import evaluation_routes, execution_routes
+from harnessa.api import evaluation_routes, execution_routes, harness_routes
 from harnessa.contracts import ModelPoolKind
 from harnessa.db.harness import EvaluationRun, HarnessExperiment, HarnessPolicy, HarnessProbeRun
 from harnessa.db.models import Repository, Task
@@ -21,6 +24,7 @@ pytestmark = pytest.mark.integration
 async def test_project_runner_selection_is_persisted_and_rejects_unavailable_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(execution_routes.settings, "acp_execution_enabled", False)
     fixture = await gateway_fixture()
     async with SessionLocal() as db:
         actor = await db.get(execution_routes.User, fixture["user_id"])
@@ -46,8 +50,12 @@ async def test_project_runner_selection_is_persisted_and_rejects_unavailable_ada
 
 
 @pytest.mark.anyio
-async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children() -> None:
+async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fixture = await gateway_fixture()
+    monkeypatch.setattr(harness_routes.settings, "artifact_root", str(tmp_path))
+    monkeypatch.setattr(evaluation_routes.settings, "artifact_root", str(tmp_path))
     async with SessionLocal() as db:
         budget = await db.scalar(select(evaluation_routes.ModelBudgetPolicy).where(
             evaluation_routes.ModelBudgetPolicy.project_id == fixture["project_id"]
@@ -73,9 +81,25 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
         ))
         actor = await db.get(evaluation_routes.User, fixture["user_id"])
         assert actor is not None
+        skill_content = (
+            "---\nname: eval-skill\ndescription: A grouped evaluation fixture.\n"
+            "license: MIT\nmetadata:\n  dependencies: []\nallowed-tools: []\n---\n\n"
+            "Use this bounded guidance during the evaluation.\n"
+        )
+        skill = await harness_routes.create_skill_candidate(
+            fixture["project_id"],
+            harness_routes.SkillImportRequest(
+                source_kind="operator_authored", scope_type="project",
+                scope_id=str(fixture["project_id"]), skill_path="skills/eval-skill/SKILL.md",
+                content=skill_content,
+            ),
+            actor,
+            db,
+        )
         body = evaluation_routes.EvaluationRunCreate(
             stable_key="grouped-evaluation-fixture", suite="harness2-local",
             task_ids=[task.id], mode="both", k=1, route_alias="coding",
+            skill_experience_id=UUID(skill["id"]),
         )
         estimate = await evaluation_routes.evaluation_dry_run(
             fixture["project_id"], body, actor, db
@@ -93,6 +117,7 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
         assert created.status == "queued"
         assert created.manifest_digest == estimate.manifest_digest
         assert created.manifest["task_inputs"][0]["base_sha"] == "a" * 40
+        assert created.manifest["skill_versions"][0]["artifact_path"] == "skills/eval-skill/SKILL.md"
         assert created.sample_size == 5
         assert created.missing_samples == 5
 

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 
 import pytest
 from fastapi import HTTPException
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.api import review_routes
 from harnessa.config import settings
 from harnessa.contracts import (
@@ -13,12 +15,15 @@ from harnessa.contracts import (
     ReviewDecisionRequest,
     VerificationManifestApprovalRequest,
 )
+from harnessa.db.harness import HarnessExperience, HarnessExperiment
 from harnessa.db.model_gateway import ModelBudgetPolicy
 from harnessa.db.models import Project, Repository, Task
 from harnessa.db.orchestration import Run
 from harnessa.db.review import ReviewBundle, VerificationExecution, VerificationManifestRevision
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
+from harnessa.domain.skill_evolution import validate_skill_artifact
+from harnessa.services import post_integration as post_integration_module
 from harnessa.services.model_gateway import budget_policy_digest
 from harnessa.services.post_integration import process_post_integration_steps
 from sqlalchemy import select
@@ -92,6 +97,7 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
     project_id, repository_id, actor, _repository, manager = await _specification_fixture(
         tmp_path, monkeypatch
     )
+    monkeypatch.setattr(post_integration_module.settings, "artifact_root", str(tmp_path))
     interview_id = await _create_ready_interview(project_id, repository_id, actor)
     monkeypatch.setattr(review_routes, "_manifest_workspace", manager)
     async with SessionLocal() as db:
@@ -152,6 +158,49 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
         )
         db.add(execution)
         await db.flush()
+        skill_content = (
+            "---\nname: integration-guide\ndescription: A verified integration lesson.\n"
+            "license: MIT\nmetadata:\n  dependencies: []\nallowed-tools: []\n---\n\n"
+            "Follow the verified bounded workflow.\n"
+        )
+        skill = validate_skill_artifact("skills/integration-guide/SKILL.md", skill_content)
+        stored_skill = LocalArtifactStore(tmp_path).put_bytes(
+            skill_content.encode(), media_type="text/markdown"
+        )
+        experiment = HarnessExperiment(
+            organization_id=project.organization_id, project_id=project_id, task_id=task.id,
+            created_by=actor.id, stable_key="integration-learning-experiment", mode="parallel",
+            k=1, status="succeeded", phase="complete", attempts=1,
+            base_sha=source_revision, specification_hash=interview.artifact_hash,
+            specification_revision=interview.revision, policy_revision=1,
+            harness2_revision="a" * 40, result={},
+        )
+        db.add(experiment)
+        await db.flush()
+        evidence_refs = [{"run_id": str(run.id), "digest": hashlib.sha256(b"trace").hexdigest()}]
+        identity = {
+            "artifact_digest": stored_skill.digest,
+            "experiment_id": str(experiment.id),
+            "path": skill.path,
+            "policy_revision": experiment.policy_revision,
+            "scope": repository_row.target_id,
+        }
+        candidate_digest = hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        harness_adaptation_hook = {
+            "triggered": True,
+            "experiment_id": str(experiment.id),
+            "source_run_id": str(run.id),
+            "cue": skill.slug,
+            "lesson": skill.description,
+            "path": skill.path,
+            "artifact_digest": stored_skill.digest,
+            "artifact_storage_key": stored_skill.storage_key,
+            "artifact_size_bytes": stored_skill.size_bytes,
+            "candidate_digest": candidate_digest,
+            "evidence_refs": evidence_refs,
+        }
         digest = hashlib.sha256(b"review-bundle").hexdigest()
         bundle = ReviewBundle(
             organization_id=project.organization_id,
@@ -180,6 +229,7 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
                     "diff_sha256": hashlib.sha256(b"").hexdigest(),
                     "review_candidate_ref": f"refs/harnessa/review-candidates/{run.id.hex}-f1",
                 },
+                "harness_adaptation_hook": harness_adaptation_hook,
             },
             status="prepared",
         )
@@ -236,6 +286,7 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
         bundle_row.invalidated_reason = None
         bundle_row.bundle = {
             "implementation_head_sha": source_revision,
+            "harness_adaptation_hook": harness_adaptation_hook,
             "openspec_sync_preview": {
                 "archive_preview_ready": True,
                 "final_head_verified": True,
@@ -397,9 +448,16 @@ async def test_review_bundle_approval_manual_integration_and_recoverable_steps(
         )
         assert {row.kind: row.status for row in step_rows} == {
             "archive": "succeeded",
-            "learning": "skipped",
+            "learning": "succeeded",
             "cleanup": "succeeded",
         }
+        candidate = await db.scalar(select(HarnessExperience).where(
+            HarnessExperience.source_experiment_id == experiment.id
+        ))
+        assert candidate is not None
+        assert candidate.source_run_id == run.id
+        assert candidate.artifact_digest == stored_skill.digest
+        assert candidate.scope_type == "repository"
         task = await db.get(Task, task_id)
         assert task is not None and task.stage == "DONE"
         with pytest.raises(HTTPException) as unknown_step:

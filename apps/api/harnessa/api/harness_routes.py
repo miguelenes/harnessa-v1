@@ -3,27 +3,39 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
-from typing import Any
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.harness2 import UPSTREAM_REVISION, product_manifest
 from harnessa.auth.users import current_active_user
+from harnessa.config import settings
 from harnessa.contracts import TaskStage
 from harnessa.db.harness import (
+    EvaluationRun,
     HarnessExperience,
     HarnessExperiment,
     HarnessPolicy,
     HarnessProbeRun,
     HarnessPromotion,
 )
-from harnessa.db.models import Project, Task, User
+from harnessa.db.models import Membership, Project, Repository, Task, User
 from harnessa.db.session import get_db
 from harnessa.db.specification import SpecificationInterview
+from harnessa.domain.skill_evolution import (
+    compatibility_snapshot,
+    scopes_overlap,
+    validate_provenance,
+    validate_skill_artifact,
+)
 from harnessa.services.authorization import require_membership
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(tags=["harness learning"])
@@ -58,12 +70,109 @@ class PromotionRequest(BaseModel):
     rationale: str = Field(min_length=10, max_length=2000)
 
 
+class SkillImportRequest(BaseModel):
+    source_kind: Literal["imported", "operator_authored"]
+    scope_type: Literal["task", "repository", "project", "organization"]
+    scope_id: str = Field(min_length=1, max_length=300)
+    skill_path: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=64_000)
+
+
 class HarnessOverview(BaseModel):
     manifest: dict[str, Any]
     policy: dict[str, Any]
     experiments: list[dict[str, Any]]
     probes: list[dict[str, Any]]
     experiences: list[dict[str, Any]]
+
+
+async def _skill_evaluation_gate(
+    db: AsyncSession, project_id: UUID, candidate: HarnessExperience
+) -> dict[str, Any] | None:
+    if candidate.license_id == "UNKNOWN" or candidate.conflict_state != "clear":
+        return None
+    evaluations = list(await db.scalars(select(EvaluationRun).where(
+        EvaluationRun.project_id == project_id,
+        EvaluationRun.status == "succeeded",
+    ).order_by(EvaluationRun.created_at.desc()).limit(100)))
+    for evaluation in evaluations:
+        manifest = evaluation.manifest
+        versions = manifest.get("skill_versions") if isinstance(manifest, dict) else None
+        if not isinstance(versions, list) or not any(
+            isinstance(version, dict)
+            and version.get("id") == str(candidate.id)
+            and version.get("version") == candidate.version
+            and version.get("candidate_digest") == candidate.candidate_digest
+            and version.get("artifact_digest") == candidate.artifact_digest
+            for version in versions
+        ):
+            continue
+        task_inputs = manifest.get("task_inputs")
+        if not isinstance(task_inputs, list) or len(task_inputs) < 2:
+            continue
+        children = list(await db.scalars(select(HarnessExperiment).where(
+            HarnessExperiment.evaluation_run_id == evaluation.id,
+            HarnessExperiment.project_id == project_id,
+        ).order_by(HarnessExperiment.task_id)))
+        if (
+            len(children) != len(task_inputs)
+            or len(evaluation.experiment_ids) != len(task_inputs)
+            or any(child.status != "succeeded" for child in children)
+        ):
+            continue
+        child_evidence: list[dict[str, Any]] = []
+        valid = True
+        for child in children:
+            result = child.result if isinstance(child.result, dict) else {}
+            holdout = result.get("holdout_evaluation")
+            holdout_manifest = result.get("holdout_manifest")
+            skill_versions = holdout_manifest.get("skill_versions") if isinstance(holdout_manifest, dict) else None
+            if (
+                result.get("comparison_successful") is not True
+                or result.get("composed_successful") is not True
+                or not isinstance(holdout, dict)
+                or holdout.get("status") != "passed"
+                or not isinstance(holdout_manifest, dict)
+                or holdout.get("manifest_digest") != holdout_manifest.get("digest")
+                or not isinstance(skill_versions, list)
+                or not any(
+                    isinstance(version, dict)
+                    and version.get("experience_id") == str(candidate.id)
+                    and version.get("version") == candidate.version
+                    and version.get("digest") == candidate.artifact_digest
+                    for version in skill_versions
+                )
+            ):
+                valid = False
+                break
+            child_evidence.append({
+                "experiment_id": str(child.id),
+                "result_digest": child.result_digest,
+                "holdout_manifest_digest": holdout_manifest["digest"],
+                "holdout_receipt_digest": holdout.get("result_digest"),
+            })
+        if not valid:
+            continue
+        probes = list(await db.scalars(select(HarnessProbeRun).where(
+            HarnessProbeRun.project_id == project_id,
+            HarnessProbeRun.experiment_id.in_([child.id for child in children]),
+        )))
+        if not probes or any(probe.cost_usd is None for probe in probes):
+            continue
+        return {
+            "evaluation_run_id": str(evaluation.id),
+            "manifest_digest": evaluation.manifest_digest,
+            "sample_size": len(task_inputs),
+            "missing_tasks": 0,
+            "failed_tasks": 0,
+            "unknown_cost_or_outcome": 0,
+            "candidate_digest": candidate.candidate_digest,
+            "regression": "passed",
+            "security": "passed",
+            "cost": "passed",
+            "evidence": child_evidence,
+        }
+    return None
 
 
 def _promotion_gates_passed(result: dict[str, Any], candidate_digest: str) -> bool:
@@ -154,7 +263,12 @@ async def harness_overview(
     experiences = list(
         await db.scalars(
             select(HarnessExperience)
-            .where(HarnessExperience.project_id == project_id)
+            .where(or_(
+                HarnessExperience.project_id == project_id,
+                (HarnessExperience.organization_id == project.organization_id)
+                & (HarnessExperience.scope_type == "organization")
+                & (HarnessExperience.scope_id == str(project.organization_id)),
+            ))
             .order_by(HarnessExperience.created_at.desc())
             .limit(500)
         )
@@ -206,12 +320,258 @@ async def harness_overview(
                 "evidence_refs": row.evidence_refs,
                 "candidate_digest": row.candidate_digest,
                 "conflict_key": row.conflict_key,
+                "conflict_state": row.conflict_state,
+                "source_kind": row.source_kind,
+                "author": row.author,
+                "producer": row.producer,
+                "source_author_id": str(row.source_author_id) if row.source_author_id else None,
+                "source_task_id": str(row.source_task_id) if row.source_task_id else None,
+                "source_experiment_id": str(row.source_experiment_id) if row.source_experiment_id else None,
+                "source_run_id": str(row.source_run_id) if row.source_run_id else None,
+                "source_evaluation_run_id": str(row.source_evaluation_run_id) if row.source_evaluation_run_id else None,
+                "scope_type": row.scope_type,
+                "scope_id": row.scope_id,
+                "license_id": row.license_id,
+                "dependencies": row.dependencies,
+                "allowed_tools": row.allowed_tools,
+                "trust_level": row.trust_level,
+                "artifact_path": row.artifact_path,
+                "artifact_digest": row.artifact_digest,
+                "artifact_size_bytes": row.artifact_size_bytes,
+                "confidence_rationale": row.confidence_rationale,
+                "compatibility_snapshot": row.compatibility_snapshot,
+                "stale_reason": row.stale_reason,
+                "stale_at": row.stale_at.isoformat() if row.stale_at else None,
                 "expiry_at": row.expiry_at.isoformat(),
                 "revalidated_at": row.revalidated_at.isoformat() if row.revalidated_at else None,
             }
             for row in experiences
         ],
     )
+
+
+@router.post("/projects/{project_id}/skills", status_code=201)
+async def create_skill_candidate(
+    project_id: UUID,
+    body: SkillImportRequest,
+    actor: User = Depends(current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Import an untrusted immutable skill version for explicit review."""
+    await _operator(db, actor, project_id)
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    try:
+        artifact = validate_skill_artifact(body.skill_path, body.content)
+        validate_provenance(body.source_kind, body.scope_type, "untrusted")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if body.scope_type == "task":
+        try:
+            task_id = UUID(body.scope_id)
+        except ValueError as exc:
+            raise HTTPException(422, "Task scope must be a task UUID in this project") from exc
+        task = await db.scalar(select(Task).where(Task.id == task_id, Task.project_id == project_id))
+        if task is None:
+            raise HTTPException(422, "Task scope must identify a task in this project")
+        interview = await db.scalar(select(SpecificationInterview).where(
+            SpecificationInterview.task_id == task.id
+        ))
+        repository = await db.get(Repository, interview.repository_id) if interview else None
+        repository_scope = repository.target_id if repository is not None else "*"
+        scope_id = str(task.id)
+    elif body.scope_type == "repository":
+        repository = await db.scalar(select(Repository).where(
+            Repository.project_id == project_id,
+            Repository.target_id == body.scope_id,
+        ))
+        if repository is None:
+            raise HTTPException(422, "Repository scope must identify a repository in this project")
+        repository_scope = repository.target_id
+        scope_id = repository.target_id
+    elif body.scope_type == "project":
+        if body.scope_id != str(project_id):
+            raise HTTPException(422, "Project scope must match the requested project")
+        repository_scope = "*"
+        scope_id = str(project_id)
+    else:
+        membership = await require_membership(db, actor, project_id)
+        if not isinstance(membership, Membership) or membership.role != "administrator":
+            raise HTTPException(403, "Organization-scoped skills require an organization administrator")
+        if body.scope_id != str(project.organization_id):
+            raise HTTPException(422, "Organization scope must match the project's organization")
+        repository_scope = "*"
+        scope_id = str(project.organization_id)
+    key = hashlib.sha256(
+        f"{body.scope_type}:{scope_id}:{artifact.slug}".encode()
+    ).hexdigest()[:32]
+    version_query = select(HarnessExperience).where(
+        HarnessExperience.experience_key == key,
+        HarnessExperience.scope_type == body.scope_type,
+        HarnessExperience.scope_id == scope_id,
+    )
+    if body.scope_type == "organization":
+        version_query = version_query.where(
+            HarnessExperience.organization_id == project.organization_id
+        )
+    else:
+        version_query = version_query.where(HarnessExperience.project_id == project_id)
+    versions = list(await db.scalars(
+        version_query.order_by(HarnessExperience.version.desc()).with_for_update()
+    ))
+    duplicate = next((row for row in versions if row.artifact_digest == artifact.digest), None)
+    if duplicate is not None:
+        return {
+            "id": str(duplicate.id),
+            "status": duplicate.status,
+            "candidate_digest": duplicate.candidate_digest,
+            "idempotent_replay": True,
+        }
+    policy = await db.scalar(select(HarnessPolicy).where(HarnessPolicy.project_id == project_id))
+    policy_revision = policy.revision if policy is not None else 1
+    overlapping_candidates = list(await db.scalars(select(HarnessExperience).where(
+        HarnessExperience.organization_id == project.organization_id,
+        HarnessExperience.conflict_key == artifact.slug,
+        HarnessExperience.status == "candidate",
+        or_(
+            HarnessExperience.project_id == project_id,
+            HarnessExperience.scope_type == "organization",
+        ),
+    ).with_for_update()))
+    conflict = any(
+        row.artifact_digest != artifact.digest
+        and scopes_overlap(
+            body.scope_type,
+            scope_id,
+            repository_scope,
+            row.scope_type,
+            row.scope_id,
+            row.repository_scope,
+        )
+        for row in overlapping_candidates
+    )
+    stored = LocalArtifactStore(Path(settings.artifact_root)).put_bytes(
+        artifact.content.encode("utf-8"), media_type="text/markdown; charset=utf-8"
+    )
+    candidate_identity = {
+        "artifact_digest": stored.digest,
+        "author_id": str(actor.id),
+        "license_id": artifact.license_id,
+        "scope_id": scope_id,
+        "scope_type": body.scope_type,
+    }
+    candidate_digest = hashlib.sha256(
+        json.dumps(candidate_identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    row = HarnessExperience(
+        organization_id=project.organization_id,
+        project_id=(
+            versions[0].project_id
+            if body.scope_type == "organization" and versions
+            else project_id
+        ),
+        source_task_id=None,
+        source_experiment_id=None,
+        source_run_id=None,
+        source_evaluation_run_id=None,
+        experience_key=key,
+        version=(versions[0].version + 1) if versions else 1,
+        status="candidate",
+        repository_scope=repository_scope,
+        domain_scope="skill",
+        cue=artifact.slug,
+        lesson=artifact.description,
+        evidence_refs=[],
+        candidate_digest=candidate_digest,
+        conflict_key=artifact.slug,
+        conflict_state="conflict" if conflict else "clear",
+        source_kind=body.source_kind,
+        author=actor.email,
+        producer="harnessa-skill-import-v1",
+        source_author_id=actor.id,
+        scope_type=body.scope_type,
+        scope_id=scope_id,
+        license_id=artifact.license_id,
+        dependencies=list(artifact.dependencies),
+        allowed_tools=list(artifact.declared_tools),
+        trust_level="untrusted",
+        artifact_path=artifact.path,
+        artifact_digest=stored.digest,
+        artifact_storage_key=stored.storage_key,
+        artifact_size_bytes=stored.size_bytes,
+        confidence_rationale="Imported or operator-authored skill; no task or holdout evidence is implied.",
+        compatibility_snapshot=compatibility_snapshot(
+            harness2_revision=UPSTREAM_REVISION,
+            tool_revision=settings.acp_harness_revision,
+            policy_revision=policy_revision,
+            model_capability_revision=None,
+            route_alias=None,
+            executor_image=settings.acp_agent_image,
+            repository=(
+                repository_scope if body.scope_type in {"repository", "task"} else None
+            ),
+            task=scope_id if body.scope_type == "task" else None,
+            organization=(scope_id if body.scope_type == "organization" else None),
+        ),
+        expiry_at=datetime.now(UTC) + timedelta(days=180),
+        policy_revision=policy_revision,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return {
+        "id": str(row.id),
+        "status": row.status,
+        "candidate_digest": row.candidate_digest,
+        "artifact_digest": row.artifact_digest,
+        "conflict_state": row.conflict_state,
+        "automatically_activated": False,
+        "declared_tools_grant_capabilities": False,
+    }
+
+
+@router.get("/projects/{project_id}/harness-experiences/{experience_id}/artifact")
+async def read_skill_artifact(
+    project_id: UUID,
+    experience_id: UUID,
+    actor: User = Depends(current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> PlainTextResponse:
+    await require_membership(db, actor, project_id)
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    experience = await db.scalar(select(HarnessExperience).where(
+        HarnessExperience.id == experience_id,
+        or_(
+            HarnessExperience.project_id == project_id,
+            (HarnessExperience.organization_id == project.organization_id)
+            & (HarnessExperience.scope_type == "organization")
+            & (HarnessExperience.scope_id == str(project.organization_id)),
+        ),
+    ))
+    if experience is None:
+        raise HTTPException(404, "Skill artifact not found")
+    if not experience.artifact_storage_key or not experience.artifact_digest or not experience.artifact_size_bytes:
+        raise HTTPException(404, "This experience has no skill artifact")
+    store = LocalArtifactStore(Path(settings.artifact_root))
+    state = store.verify_reference(
+        experience.artifact_storage_key,
+        expected_digest=experience.artifact_digest,
+        expected_size=experience.artifact_size_bytes,
+        max_bytes=64_000,
+    )
+    if state != "verified":
+        raise HTTPException(409, "Skill artifact failed content-addressed verification")
+    content = (store.root / experience.artifact_storage_key).read_text(encoding="utf-8")
+    try:
+        artifact = validate_skill_artifact(experience.artifact_path or "", content)
+    except ValueError as exc:
+        raise HTTPException(409, "Skill artifact schema is invalid") from exc
+    if artifact.digest != experience.artifact_digest:
+        raise HTTPException(409, "Skill artifact content changed")
+    return PlainTextResponse(content, media_type="text/markdown; charset=utf-8")
 
 
 @router.post("/projects/{project_id}/tasks/{task_id}/harness-experiments", status_code=202)
@@ -381,6 +741,9 @@ async def promote_harness_experience(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     await _operator(db, actor, project_id, admin=True)
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
     previous = await db.scalar(
         select(HarnessPromotion).where(
             HarnessPromotion.project_id == project_id,
@@ -395,7 +758,12 @@ async def promote_harness_experience(
         select(HarnessExperience)
         .where(
             HarnessExperience.id == experience_id,
-            HarnessExperience.project_id == project_id,
+            or_(
+                HarnessExperience.project_id == project_id,
+                (HarnessExperience.organization_id == project.organization_id)
+                & (HarnessExperience.scope_type == "organization")
+                & (HarnessExperience.scope_id == str(project.organization_id)),
+            ),
         )
         .with_for_update()
     )
@@ -403,21 +771,63 @@ async def promote_harness_experience(
         raise HTTPException(404, "Experience candidate not found")
     if candidate.status != "candidate" or candidate.expiry_at <= datetime.now(UTC):
         raise HTTPException(409, "Only an unexpired candidate experience can be promoted")
+    if candidate.scope_type == "task":
+        raise HTTPException(409, "Task-scoped skills cannot be activated across task boundaries")
+    if candidate.scope_type == "organization":
+        membership = await require_membership(db, actor, project_id)
+        if not isinstance(membership, Membership) or membership.role != "administrator":
+            raise HTTPException(403, "Organization-scoped promotion requires an organization administrator")
     if candidate.candidate_digest != body.candidate_digest:
         raise HTTPException(409, "Candidate digest does not match the reviewed version")
-    experiment = await db.scalar(
-        select(HarnessExperiment).where(
-            HarnessExperiment.id == candidate.source_experiment_id,
-            HarnessExperiment.project_id == project_id,
-            HarnessExperiment.status == "succeeded",
+    competing_candidates = list(await db.scalars(select(HarnessExperience).where(
+        HarnessExperience.organization_id == candidate.organization_id,
+        HarnessExperience.conflict_key == candidate.conflict_key,
+        HarnessExperience.status == "candidate",
+        HarnessExperience.id != candidate.id,
+        or_(
+            HarnessExperience.project_id == project_id,
+            HarnessExperience.scope_type == "organization",
+        ),
+    )))
+    if any(
+        item.artifact_digest != candidate.artifact_digest
+        and scopes_overlap(
+            candidate.scope_type,
+            candidate.scope_id,
+            candidate.repository_scope,
+            item.scope_type,
+            item.scope_id,
+            item.repository_scope,
         )
-    )
-    if experiment is None or not _promotion_gates_passed(
-        experiment.result, candidate.candidate_digest
+        for item in competing_candidates
     ):
-        raise HTTPException(
-            409, "Exact candidate has no passing fixed regression, security, and cost evidence"
+        raise HTTPException(409, "Conflicting skill candidates require an explicit review decision")
+    experiment: HarnessExperiment | None = None
+    if candidate.artifact_digest is not None:
+        promotion_gates = await _skill_evaluation_gate(db, project_id, candidate)
+        if promotion_gates is None:
+            raise HTTPException(
+                409,
+                "Skill promotion requires a matching, passing multi-task evaluation with known costs",
+            )
+    else:
+        experiment = await db.scalar(
+            select(HarnessExperiment).where(
+                HarnessExperiment.id == candidate.source_experiment_id,
+                HarnessExperiment.project_id == project_id,
+                HarnessExperiment.status == "succeeded",
+            )
         )
+        if experiment is None or not _promotion_gates_passed(
+            experiment.result, candidate.candidate_digest
+        ):
+            raise HTTPException(
+                409, "Exact candidate has no passing fixed regression, security, and cost evidence"
+            )
+        promotion_gates = {
+            "candidate_digest": candidate.candidate_digest,
+            **experiment.result["promotion_gates"],
+        }
     policy = await db.scalar(
         select(HarnessPolicy).where(HarnessPolicy.project_id == project_id).with_for_update()
     )
@@ -425,15 +835,23 @@ async def promote_harness_experience(
         raise HTTPException(409, "Reviewed promotion policy is unavailable")
     if policy.revision != candidate.policy_revision:
         raise HTTPException(409, "Candidate policy revision is stale and requires revalidation")
-    active = await db.scalar(
-        select(HarnessExperience)
-        .where(
-            HarnessExperience.project_id == project_id,
-            HarnessExperience.experience_key == candidate.experience_key,
-            HarnessExperience.repository_scope == candidate.repository_scope,
-            HarnessExperience.status == "active",
+    active_query = select(HarnessExperience).where(
+        HarnessExperience.experience_key == candidate.experience_key,
+        HarnessExperience.status == "active",
+    )
+    if candidate.scope_type == "organization":
+        active_query = active_query.where(
+            HarnessExperience.organization_id == candidate.organization_id,
+            HarnessExperience.scope_type == "organization",
+            HarnessExperience.scope_id == candidate.scope_id,
         )
-        .with_for_update()
+    else:
+        active_query = active_query.where(
+            HarnessExperience.project_id == project_id,
+            HarnessExperience.repository_scope == candidate.repository_scope,
+        )
+    active = await db.scalar(
+        active_query.with_for_update()
     )
     apply_reviewed_experience_transition(candidate, active, "promote")
     candidate.revalidated_at = datetime.now(UTC)
@@ -451,7 +869,13 @@ async def promote_harness_experience(
         gate_evidence={
             "reviewed": True,
             "candidate_digest": candidate.candidate_digest,
-            "promotion_gates": experiment.result["promotion_gates"],
+            "promotion_gates": promotion_gates,
+            "skill_version": {
+                "artifact_digest": candidate.artifact_digest,
+                "version": candidate.version,
+                "scope_type": candidate.scope_type,
+                "scope_id": candidate.scope_id,
+            },
             "regression_gate_revision": policy.regression_gate_revision,
             "security_gate_revision": policy.security_gate_revision,
         },
@@ -474,6 +898,9 @@ async def rollback_harness_experience(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     await _operator(db, actor, project_id, admin=True)
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
     key = await db.scalar(
         select(HarnessPromotion).where(
             HarnessPromotion.project_id == project_id,
@@ -488,7 +915,12 @@ async def rollback_harness_experience(
         select(HarnessExperience)
         .where(
             HarnessExperience.id == experience_id,
-            HarnessExperience.project_id == project_id,
+            or_(
+                HarnessExperience.project_id == project_id,
+                (HarnessExperience.organization_id == project.organization_id)
+                & (HarnessExperience.scope_type == "organization")
+                & (HarnessExperience.scope_id == str(project.organization_id)),
+            ),
         )
         .with_for_update()
     )
@@ -496,15 +928,23 @@ async def rollback_harness_experience(
         raise HTTPException(409, "Rollback target must be a prior superseded version")
     if target.candidate_digest != body.candidate_digest:
         raise HTTPException(409, "Rollback digest does not match the prior version")
-    current = await db.scalar(
-        select(HarnessExperience)
-        .where(
-            HarnessExperience.project_id == project_id,
-            HarnessExperience.experience_key == target.experience_key,
-            HarnessExperience.repository_scope == target.repository_scope,
-            HarnessExperience.status == "active",
+    current_query = select(HarnessExperience).where(
+        HarnessExperience.experience_key == target.experience_key,
+        HarnessExperience.status == "active",
+    )
+    if target.scope_type == "organization":
+        current_query = current_query.where(
+            HarnessExperience.organization_id == target.organization_id,
+            HarnessExperience.scope_type == "organization",
+            HarnessExperience.scope_id == target.scope_id,
         )
-        .with_for_update()
+    else:
+        current_query = current_query.where(
+            HarnessExperience.project_id == project_id,
+            HarnessExperience.repository_scope == target.repository_scope,
+        )
+    current = await db.scalar(
+        current_query.with_for_update()
     )
     policy = await db.scalar(
         select(HarnessPolicy).where(HarnessPolicy.project_id == project_id).with_for_update()

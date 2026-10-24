@@ -270,6 +270,7 @@ describe("workspace routes and task board", () => {
       if (url.endsWith("/tasks/task-1/runs")) return response([]);
       if (url.endsWith("/projects/project-1/harness")) return response({
         experiments: experiment ? [experiment] : [],
+        experiences: [{ id: "skill-1", cue: "Bounded guidance", status: "candidate", version: 1, artifact_digest: "f".repeat(64), conflict_state: "clear", license_id: "MIT" }],
         probes: experiment ? [
           { experiment_id: experiment.id, status: "succeeded", delivered: true, wall_ms: 100, cost_usd: "0.01" },
           { experiment_id: experiment.id, status: "failed", delivered: false, wall_ms: 200, cost_usd: "0.02" },
@@ -309,8 +310,9 @@ describe("workspace routes and task board", () => {
     });
 
     render(<Workspace section="evals" />);
-    await screen.findByRole("option", { name: "Prepare release" });
-    fireEvent.change(await screen.findByRole("combobox", { name: "Evaluation task" }), { target: { value: probeTask.id } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Prepare release" }));
+    const skillSelect = await screen.findByRole("combobox", { name: "Candidate skill version" });
+    fireEvent.change(skillSelect, { target: { value: "skill-1" } });
     expect(await screen.findByText(/The estimate assumes the full route context window and configured retry bound/)).toBeTruthy();
     await waitFor(() => expect((screen.getByRole("button", { name: "Estimate evaluation cost" }) as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 });
     fireEvent.click(screen.getByRole("button", { name: "Estimate evaluation cost" }));
@@ -348,6 +350,7 @@ describe("workspace routes and task board", () => {
     const createCall = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).endsWith("/evaluations") && init?.method === "POST");
     expect(createCall?.[1]?.body).toContain('"mode":"both"');
     expect(createCall?.[1]?.body).toContain('"k":1');
+    expect(createCall?.[1]?.body).toContain('"skill_experience_id":"skill-1"');
     fireEvent.click(screen.getByRole("button", { name: "Cancel evaluation" }));
     expect(await screen.findByText(/Cancellation was recorded/)).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("cancelled").length).toBeGreaterThan(0));
