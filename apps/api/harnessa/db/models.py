@@ -103,6 +103,7 @@ class Task(Scoped, Base):
     run_status: Mapped[str] = mapped_column(String(32), default="QUEUED", nullable=False)
     blocked_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     return_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    traceparent: Mapped[str | None] = mapped_column(String(55), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     event_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -29,6 +29,7 @@ from harnessa.services.post_integration import process_post_integration_steps
 from harnessa.services.scheduler import Scheduler
 from harnessa.services.streams import OutboxPublisher, StreamConsumer, prune_retained_events
 from harnessa.services.verification_workflow import VerificationDispatcher
+from harnessa.tracing import configure_tracing, shutdown_tracing
 from redis.asyncio import Redis
 
 logger = logging.getLogger("harnessa.worker")
@@ -75,6 +76,7 @@ def _configured_execution_adapter() -> ExecutionAdapter:
 
 async def run(*, harness_evaluator: HarnessEvaluator | None = None) -> None:
     """Run dispatch and recovery loops; no fake or simulated production executor exists."""
+    configure_tracing("harnessa-worker")
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     owner = f"{socket.gethostname()}:{os.getpid()}:{uuid4()}"
     publisher = OutboxPublisher(redis, owner_id=owner)
@@ -214,6 +216,7 @@ async def run(*, harness_evaluator: HarnessEvaluator | None = None) -> None:
         if pending_workers:
             await asyncio.gather(*pending_workers, return_exceptions=True)
         await redis.aclose()
+        shutdown_tracing()
 
 
 class _UnconfiguredEffectReconciler:

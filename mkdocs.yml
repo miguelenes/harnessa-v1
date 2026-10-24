@@ -50,6 +50,7 @@ nav:
   - Compatibility: compatibility.md
   - Development MCPs: development/mcp-servers.md
   - Local model gateway: development/model-gateway-local.md
+  - Distributed tracing: development/tracing.md
   - Operator guide: operator-guide.md
   - Recovery guide: recovery-guide.md
   - Release acceptance report: acceptance-report.md

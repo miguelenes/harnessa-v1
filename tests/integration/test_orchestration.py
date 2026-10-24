@@ -35,6 +35,7 @@ from harnessa.services.streams import (
     StreamConsumer,
     rebuild_dispatch_stream,
 )
+from harnessa.tracing import extract_trace_context, tracer_for
 from pwdlib import PasswordHash
 from redis.asyncio import Redis
 from sqlalchemy import func, select, text
@@ -127,6 +128,35 @@ async def ready_dispatch_fixture(tmp_path, monkeypatch, *, key: str = "dispatch"
         interview = await db.get(SpecificationInterview, interview_id)
         assert interview is not None
         return project_id, interview.task_id, actor.id, repository_id, repository, manager
+
+
+@pytest.mark.anyio
+async def test_trace_context_survives_ready_task_and_run_claim(tmp_path, monkeypatch):
+    trace_id = "fedcba9876543210fedcba9876543210"
+    parent = f"00-{trace_id}-0123456789abcdef-01"
+    context = extract_trace_context({"traceparent": parent})
+    tracer = tracer_for(__name__)
+    with tracer.start_as_current_span("http.task.ready", context=context):
+        _, task_id, _, *_ = await ready_dispatch_fixture(tmp_path, monkeypatch, key="trace")
+
+    async with SessionLocal() as db:
+        task = await db.get(Task, task_id)
+        assert task is not None
+        assert task.traceparent is not None
+        assert task.traceparent.startswith(f"00-{trace_id}-")
+        assert (await db.scalar(
+            select(DomainEvent).where(DomainEvent.task_id == task_id)
+            .order_by(DomainEvent.created_at.desc()).limit(1)
+        )).correlation_id == UUID(hex=trace_id)
+
+    job = await Scheduler().claim("trace-worker", "test-fake-execution")
+    assert job is not None
+    assert job.traceparent is not None
+    assert job.traceparent.startswith(f"00-{trace_id}-")
+    async with SessionLocal() as db:
+        run = await db.get(Run, job.run_id)
+        assert run is not None
+        assert run.traceparent == job.traceparent
 
 
 async def _user(user_id: UUID) -> User:

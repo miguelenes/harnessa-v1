@@ -13,6 +13,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, PlainTextResponse
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
 from pydantic.json_schema import models_json_schema
 from redis.asyncio import Redis
 from starlette.middleware.base import RequestResponseEndpoint
@@ -148,6 +150,15 @@ from harnessa.contracts import (
     VerificationManifestRevisionRead,
 )
 from harnessa.observability import operational_metrics, request_metrics
+from harnessa.tracing import (
+    configure_tracing,
+    current_trace_id,
+    extract_trace_context,
+    shutdown_tracing,
+    tracer_for,
+)
+
+configure_tracing("harnessa-api")
 
 
 @asynccontextmanager
@@ -161,6 +172,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     yield
     await app.state.redis.aclose()
+    shutdown_tracing()
 
 
 app = FastAPI(title="Harnessa API", version="0.1.0", lifespan=lifespan)
@@ -307,20 +319,25 @@ app.add_middleware(
         "If-Match",
         "X-Request-ID",
         "X-Trace-ID",
+        "traceparent",
+        "tracestate",
     ],
     expose_headers=["X-Request-ID", "X-Trace-ID"],
 )
 
 
-@app.middleware("http")
-async def security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
+async def _security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
     supplied_request_id = request.headers.get("x-request-id", "")
     try:
         request_id = str(UUID(supplied_request_id))
     except (ValueError, AttributeError):
         request_id = str(uuid4())
     supplied_trace_id = request.headers.get("x-trace-id", "")
-    trace_id = supplied_trace_id if re.fullmatch(r"[0-9a-fA-F]{32}", supplied_trace_id) else uuid4().hex
+    trace_id = current_trace_id() or (
+        supplied_trace_id
+        if re.fullmatch(r"[0-9a-fA-F]{32}", supplied_trace_id)
+        else uuid4().hex
+    )
     request.state.request_id = request_id
     request.state.trace_id = trace_id
     started = time.perf_counter()
@@ -382,6 +399,31 @@ async def security_headers(request: Request, call_next: RequestResponseEndpoint)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
     return response
+
+
+@app.middleware("http")
+async def trace_requests(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    """Create a server span before security checks and expose its trace identifier."""
+    carrier = dict(request.headers.items())
+    context = extract_trace_context(carrier)
+    if not trace.get_current_span(context).get_span_context().is_valid:
+        legacy_trace_id = request.headers.get("x-trace-id", "")
+        if re.fullmatch(r"[0-9a-fA-F]{32}", legacy_trace_id):
+            # Preserve the established X-Trace-ID contract while creating a valid
+            # W3C remote parent for spans from legacy clients.
+            context = extract_trace_context(
+                {"traceparent": f"00-{legacy_trace_id.lower()}-{uuid4().hex[:16]}-01"}
+            )
+    with tracer_for(__name__).start_as_current_span(
+        f"HTTP {request.method}", context=context, kind=SpanKind.SERVER
+    ) as span:
+        response = await _security_headers(request, call_next)
+        route = getattr(request.scope.get("route"), "path", "/unmatched")
+        span.set_attribute("http.route", route)
+        span.set_attribute("http.response.status_code", response.status_code)
+        if response.status_code >= 500:
+            span.set_status(Status(StatusCode.ERROR))
+        return response
 
 
 @app.get("/internal/metrics", include_in_schema=False, response_class=PlainTextResponse)

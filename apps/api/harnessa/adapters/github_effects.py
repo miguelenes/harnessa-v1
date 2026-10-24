@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 from uuid import UUID
 
+from opentelemetry.trace import SpanKind
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -28,6 +29,7 @@ from harnessa.db.models import Repository, Task
 from harnessa.db.review import ReviewBundle
 from harnessa.db.session import SessionLocal
 from harnessa.services.effects import EffectResult, ReconcileOutcome
+from harnessa.tracing import traced_async
 
 _PUBLISH_KIND = "github.review_bundle.publish"
 _MARKER_PREFIX = "Harnessa-Bundle:"
@@ -328,6 +330,13 @@ class GitHubEffectReconciler:
             "base_sha": base_sha,
         }
 
+    @traced_async(
+        "harnessa.github.effect.reconcile",
+        kind=SpanKind.CLIENT,
+        attributes=lambda values: {
+            "harnessa.github.effect.kind": str(values.get("kind", "unknown"))
+        },
+    )
     async def reconcile(
         self, *, kind: str, stable_key: str, payload: Mapping[str, object]
     ) -> EffectResult | ReconcileOutcome:

@@ -49,6 +49,7 @@ from harnessa.db.orchestration import EffectIntent
 from harnessa.db.review import ReviewBundle
 from harnessa.db.session import get_db
 from harnessa.services.authorization import require_membership
+from harnessa.tracing import current_traceparent
 from sqlalchemy import false, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -927,6 +928,7 @@ async def receive_github_webhook(
         payload_sha256=digest,
         payload_reference=f"sha256:{digest}",
         payload=payload,
+        traceparent=current_traceparent(),
         result={},
     )
     db.add(delivery)

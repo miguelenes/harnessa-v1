@@ -10,6 +10,8 @@ from uuid import UUID
 from harnessa.config import settings
 from harnessa.db.github import GitHubWebhookDelivery, GitHubWebhookOutbox
 from harnessa.db.session import SessionLocal
+from harnessa.tracing import trace_context_from_parent, tracer_for
+from opentelemetry.trace import SpanKind, Status, StatusCode
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,6 +35,7 @@ class DeliveryEnvelope:
     github_repository_id: int | None
     payload: dict[str, Any]
     delivery_id: str
+    traceparent: str | None = None
 
 
 class DeliveryProcessor(Protocol):
@@ -104,6 +107,7 @@ async def process_github_webhook_outbox(
                         github_repository_id=delivery.github_repository_id,
                         payload=delivery.payload,
                         delivery_id=delivery.delivery_id,
+                        traceparent=delivery.traceparent,
                     ),
                     outbox.attempts,
                 )
@@ -111,15 +115,27 @@ async def process_github_webhook_outbox(
         await db.commit()
 
     for outbox_id, delivery_id, envelope, attempts in claimed:
-        try:
-            outcome = await processor.process(envelope)
-            state: DeliveryState = outcome.state
-            result = outcome.result
-            safe_error = None
-        except Exception as exc:  # noqa: BLE001 - adapter and content errors have one retry boundary.
-            state = "ignored"
-            result = {}
-            safe_error = f"{type(exc).__name__}: webhook handler failed"[:1000]
+        with tracer_for(__name__).start_as_current_span(
+            "harnessa.github.webhook.process",
+            context=trace_context_from_parent(envelope.traceparent),
+            kind=SpanKind.CONSUMER,
+            attributes={
+                "harnessa.github.delivery_id": envelope.delivery_id,
+                "harnessa.github.event_name": envelope.event_name,
+                "harnessa.github.action": envelope.action or "unknown",
+            },
+        ) as span:
+            try:
+                outcome = await processor.process(envelope)
+                state: DeliveryState = outcome.state
+                result = outcome.result
+                safe_error = None
+            except Exception as exc:  # noqa: BLE001 - adapter and content errors share one retry boundary.
+                span.set_status(Status(StatusCode.ERROR))
+                span.set_attribute("error.type", type(exc).__name__)
+                state = "ignored"
+                result = {}
+                safe_error = f"{type(exc).__name__}: webhook handler failed"[:1000]
         async with session_factory() as db:
             outbox = await db.get(GitHubWebhookOutbox, outbox_id)
             delivery = await db.get(GitHubWebhookDelivery, delivery_id)
