@@ -1,8 +1,11 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 from harnessa.config import settings
 from harnessa.main import app
-from harnessa.observability import RequestMetrics
+from harnessa.observability import OperationalMetrics, RequestMetrics, operational_metrics
 from pydantic import SecretStr
+from sqlalchemy.exc import SQLAlchemyError
 
 
 def test_request_metrics_use_bounded_route_labels_and_cumulative_buckets() -> None:
@@ -34,6 +37,11 @@ def test_metrics_endpoint_requires_configured_bearer_token_and_request_ids_are_c
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(settings, "metrics_token", SecretStr("test-only-metrics-token"))
+
+    async def render_operational_metrics() -> str:
+        return "harnessa_operational_metrics_collection_success 1\n"
+
+    monkeypatch.setattr(operational_metrics, "render", render_operational_metrics)
     trace_id = "0123456789abcdef0123456789abcdef"
     request_id = "ca9d6464-6c89-4c77-9709-04d2a7539d4b"
     with TestClient(app) as client:
@@ -51,4 +59,43 @@ def test_metrics_endpoint_requires_configured_bearer_token_and_request_ids_are_c
         )
         assert metrics_response.status_code == 200
         assert 'route="/health/live"' in metrics_response.text
+        assert "harnessa_operational_metrics_collection_success 1" in metrics_response.text
         assert "test-only-metrics-token" not in metrics_response.text
+
+
+def test_operational_metrics_cache_keeps_database_queries_bounded(monkeypatch) -> None:
+    metrics = OperationalMetrics()
+    collection_count = 0
+
+    async def collect() -> dict[str, float]:
+        nonlocal collection_count
+        collection_count += 1
+        return {"queue_runs": 2.0, "artifact_bytes": 64.0}
+
+    monkeypatch.setattr(metrics, "_collect", collect)
+
+    expected = {
+        "queue_runs": 2.0,
+        "artifact_bytes": 64.0,
+        "collection_success": 1.0,
+    }
+    assert asyncio.run(metrics.snapshot()) == expected
+    assert asyncio.run(metrics.snapshot()) == expected
+    assert collection_count == 1
+
+
+def test_operational_metrics_report_collection_failure_without_leaking_error(
+    monkeypatch, caplog
+) -> None:
+    metrics = OperationalMetrics()
+
+    async def collect() -> dict[str, float]:
+        raise SQLAlchemyError("postgres://user:secret@db.internal/harnessa")
+
+    monkeypatch.setattr(metrics, "_collect", collect)
+
+    assert asyncio.run(metrics.render()) == """# HELP harnessa_operational_metrics_collection_success Whether durable metrics were collected.
+# TYPE harnessa_operational_metrics_collection_success gauge
+harnessa_operational_metrics_collection_success 0
+"""
+    assert "secret" not in caplog.text
