@@ -1,6 +1,6 @@
 # M13 release acceptance report
 
-**Status:** In progress. This report separates evidence already present in the repository from live release acceptance that is still outstanding. No unavailable benchmark or external integration is represented as a score or a pass.
+**Status:** M13 implementation and deterministic offline acceptance complete; external live release blockers remain. This report separates verified repository/local evidence from live scenarios that need external setup. No unavailable benchmark or external integration is represented as a score or a pass.
 
 ## Deterministic, offline evidence
 

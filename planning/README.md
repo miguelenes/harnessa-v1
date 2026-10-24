@@ -22,7 +22,7 @@ Read [shared planning decisions](architecture-decisions.md) for runtime ownershi
 | 10 | [GitHub synchronization and completion](archive/completed/10-github.md) — **archived complete** | Authorized issue/PR workflow and reconciled effects |
 | 11 | [Cross-system evidence and provenance](archive/completed/11-evidence-plane.md) — **archived complete** | Core delivery joins and future-source contracts |
 | 12 | [Harness² adaptation and learning](archive/completed/12-harness-learning.md) — **archived complete** | Matched baseline/candidate/composed evaluation |
-| 13 | [Complete control plane and release](prompts/13-release.md) | All views, operations, restore and clean-install acceptance |
+| 13 | [Complete control plane and release](archive/completed/13-release.md) — **archived complete** | All views, operations, restore and clean-install acceptance; external release blockers remain explicitly recorded |
 | 14 | [Measured skill and harness evolution](prompts/14-skill-evolution.md) | Scoped candidates, evaluation, promotion and rollback |
 | 15 | [Governed A2A delegation](prompts/15-agent-delegation.md) | Bounded parent/child execution |
 | 16 | [Structured decisions with Jev](prompts/16-jev-decision-workflows.md) | Evaluated routing and workflow decisions |
