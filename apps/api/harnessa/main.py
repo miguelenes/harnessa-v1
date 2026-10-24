@@ -147,7 +147,7 @@ from harnessa.contracts import (
     VerificationManifestApprovalRequest,
     VerificationManifestRevisionRead,
 )
-from harnessa.observability import request_metrics
+from harnessa.observability import operational_metrics, request_metrics
 
 
 @asynccontextmanager
@@ -396,8 +396,9 @@ async def metrics(request: Request) -> PlainTextResponse:
         or not secrets.compare_digest(presented_token, expected_token)
     ):
         raise HTTPException(status_code=404, detail="Not found")
+    durable_metrics = await operational_metrics.render()
     return PlainTextResponse(
-        request_metrics.render(),
+        request_metrics.render() + durable_metrics,
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )
 
