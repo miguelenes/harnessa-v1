@@ -200,11 +200,12 @@ class ModelBudgetCounter(Scoped, Base):
     __table_args__ = (
         UniqueConstraint("project_id", "workload", "scope", "scope_id", name="uq_budget_counter_workload_scope"),
         CheckConstraint("workload IN ('interactive', 'probe')", name="ck_budget_counter_workload"),
-        CheckConstraint("scope IN ('project', 'task', 'run')", name="ck_budget_counter_scope"),
+        CheckConstraint("scope IN ('project', 'task', 'run', 'evaluation')", name="ck_budget_counter_scope"),
         CheckConstraint(
-            "(scope = 'project' AND scope_id = project_id AND task_id IS NULL AND run_id IS NULL) OR "
-            "(scope = 'task' AND task_id IS NOT NULL AND scope_id = task_id AND run_id IS NULL) OR "
-            "(scope = 'run' AND task_id IS NOT NULL AND run_id IS NOT NULL AND scope_id = run_id)",
+            "(scope = 'project' AND scope_id = project_id AND task_id IS NULL AND run_id IS NULL AND evaluation_run_id IS NULL) OR "
+            "(scope = 'task' AND task_id IS NOT NULL AND scope_id = task_id AND run_id IS NULL AND evaluation_run_id IS NULL) OR "
+            "(scope = 'run' AND task_id IS NOT NULL AND run_id IS NOT NULL AND evaluation_run_id IS NULL AND scope_id = run_id) OR "
+            "(scope = 'evaluation' AND task_id IS NOT NULL AND run_id IS NULL AND evaluation_run_id IS NOT NULL AND scope_id = evaluation_run_id)",
             name="ck_budget_counter_scope_identity",
         ),
         CheckConstraint("reserved_usd >= 0", name="ck_budget_reserved_usd_nonnegative"),
@@ -226,6 +227,9 @@ class ModelBudgetCounter(Scoped, Base):
     )
     run_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("runs.id", ondelete="CASCADE"), index=True
+    )
+    evaluation_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="CASCADE"), index=True
     )
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
     workload: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -259,6 +263,9 @@ class ModelReservation(Scoped, Base):
     )
     run_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("runs.id", ondelete="CASCADE"), index=True
+    )
+    evaluation_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="CASCADE"), index=True
     )
     pool_id: Mapped[UUID] = mapped_column(ForeignKey("model_pools.id", ondelete="CASCADE"), index=True)
     deployment_id: Mapped[UUID] = mapped_column(

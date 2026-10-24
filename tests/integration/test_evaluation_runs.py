@@ -3,8 +3,10 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 from harnessa.api import evaluation_routes, execution_routes
+from harnessa.contracts import ModelPoolKind
 from harnessa.db.harness import EvaluationRun, HarnessExperiment, HarnessPolicy, HarnessProbeRun
 from harnessa.db.models import Repository, Task
+from harnessa.db.orchestration import Run
 from harnessa.db.review import VerificationManifestRevision  # noqa: F401
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
@@ -91,8 +93,8 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
         assert created.status == "queued"
         assert created.manifest_digest == estimate.manifest_digest
         assert created.manifest["task_inputs"][0]["base_sha"] == "a" * 40
-        assert created.sample_size == 6
-        assert created.missing_samples == 6
+        assert created.sample_size == 5
+        assert created.missing_samples == 5
 
         child = await db.scalar(select(HarnessExperiment).where(
             HarnessExperiment.id == created.experiment_ids[0]
@@ -100,6 +102,42 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
         run = await db.get(EvaluationRun, created.id)
         assert child is not None and run is not None
         assert child.result["evaluation_manifest_digest"] == run.manifest_digest
+        # Every descendant model request must also fit the immutable aggregate budget.
+        harnessa_run = await db.get(Run, fixture["run_id"])
+        assert harnessa_run is not None
+        harnessa_run.execution_result = {"experiment_id": str(child.id)}
+        run.max_cost_usd = "0.00000001"
+        await db.flush()
+        from harnessa.services.model_gateway import (
+            ModelGatewayError,
+            _reserve,
+            route_candidates,
+        )
+
+        from tests.integration.test_model_gateway import model_request
+
+        request = model_request(fixture, pool=ModelPoolKind.PROBE)
+        pool, candidates = await route_candidates(
+            db,
+            organization_id=fixture["organization_id"],
+            pool_kind=request.pool.value,
+            alias_name=request.model_alias,
+            requirements=request.requirements,
+        )
+        with pytest.raises(ModelGatewayError, match="Evaluation spend ceiling"):
+            await _reserve(
+                db,
+                organization_id=fixture["organization_id"],
+                project_id=fixture["project_id"],
+                task_id=task.id,
+                run_id=harnessa_run.id,
+                pool=pool,
+                candidates=candidates,
+                request=request,
+                idempotency_key="aggregate-evaluation-budget-test",
+            )
+        run.max_cost_usd = "3.10500000"
+        harnessa_run.execution_result = None
         db.add_all([
             HarnessProbeRun(
                 organization_id=fixture["organization_id"], project_id=fixture["project_id"],
@@ -108,22 +146,20 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
                 tokens=100, cost_usd="0.0001",
             )
             for index, (lane, phase, delivered, duration) in enumerate([
-                (lane, phase, delivered, duration)
-                for lane in ("parallel", "sequential")
-                for phase, delivered, duration in (
-                    ("baseline", False, 100 if lane == "parallel" else 200),
-                    ("candidate", True, 120 if lane == "parallel" else 220),
-                    ("composed", True, 140 if lane == "parallel" else 240),
-                )
+                ("shared", "baseline", False, 100),
+                ("parallel", "candidate", True, 120),
+                ("parallel", "composed", True, 140),
+                ("sequential", "candidate", True, 220),
+                ("sequential", "composed", True, 240),
             ])
         ])
         await db.flush()
         summarized = await evaluation_routes._read_run(db, run)
-        assert summarized.completed_samples == 6
+        assert summarized.completed_samples == 5
         assert summarized.failed_samples == 0 and summarized.missing_samples == 0
-        assert summarized.delivery_samples == 6 and summarized.delivery_successes == 4
+        assert summarized.delivery_samples == 5 and summarized.delivery_successes == 4
         assert summarized.delivery_wilson_95 is not None
-        assert summarized.cost_usd == "0.00060000"
+        assert summarized.cost_usd == "0.00050000"
         assert summarized.p50_latency_ms == 140 and summarized.p95_latency_ms == 240
         cancelled = await evaluation_routes.cancel_evaluation_run(
             fixture["project_id"], created.id, actor, db

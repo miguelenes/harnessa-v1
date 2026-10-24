@@ -462,8 +462,12 @@ async def _read_run(db: AsyncSession, run: EvaluationRun) -> EvaluationRunRead:
         rank = max(1, ceil(len(latencies) * q))
         return latencies[min(len(latencies) - 1, rank - 1)]
 
-    lane_count = 2 if run.manifest["mode"] == "both" else 1
-    expected_samples = len(experiments) * lane_count * (int(run.manifest["k"]) + 2)
+    mode = run.manifest["mode"]
+    k = int(run.manifest["k"])
+    # Each child shares one baseline across both lanes and runs one candidate plus
+    # one composed rollout per lane. The baseline must not be counted twice.
+    per_experiment_samples = 1 + (2 if mode == "both" else 1) * (k + 1)
+    expected_samples = len(experiments) * per_experiment_samples
     observed_samples = len(probe_rows)
     delivered = [row.delivered for row in probe_rows if row.delivered is not None]
     successes = sum(delivered)

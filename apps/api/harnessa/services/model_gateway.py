@@ -269,14 +269,44 @@ def budget_policy_digest(policy: ModelBudgetPolicy) -> str:
 
 
 def _scope_values(
-    project_id: UUID, task_id: UUID | None, run_id: UUID | None
-) -> list[tuple[str, UUID, UUID | None, UUID | None]]:
-    result: list[tuple[str, UUID, UUID | None, UUID | None]] = [("project", project_id, None, None)]
+    project_id: UUID, task_id: UUID | None, run_id: UUID | None,
+    evaluation_run_id: UUID | None = None,
+) -> list[tuple[str, UUID, UUID | None, UUID | None, UUID | None]]:
+    result: list[tuple[str, UUID, UUID | None, UUID | None, UUID | None]] = [
+        ("project", project_id, None, None, None)
+    ]
     if task_id is not None:
-        result.append(("task", task_id, task_id, None))
+        result.append(("task", task_id, task_id, None, None))
+    if evaluation_run_id is not None and task_id is not None:
+        result.append(("evaluation", evaluation_run_id, task_id, None, evaluation_run_id))
     if run_id is not None:
-        result.append(("run", run_id, task_id, run_id))
+        result.append(("run", run_id, task_id, run_id, None))
     return result
+
+
+async def _evaluation_run_id_for_run(db: AsyncSession, run: Run | None) -> UUID | None:
+    """Resolve the immutable grouped evaluation that owns a Harness² model run."""
+    if run is None or not run.execution_result:
+        return None
+    raw_id = run.execution_result.get("experiment_id")
+    try:
+        experiment_id = UUID(raw_id) if isinstance(raw_id, str) else None
+    except ValueError:
+        return None
+    if experiment_id is None:
+        return None
+    from harnessa.db.harness import EvaluationRun, HarnessExperiment
+
+    experiment = await db.get(HarnessExperiment, experiment_id)
+    if experiment is None:
+        return None
+    candidates = list(await db.scalars(select(EvaluationRun).where(
+        EvaluationRun.project_id == run.project_id,
+        EvaluationRun.cancel_requested_at.is_(None),
+    ).with_for_update()))
+    return next(
+        (item.id for item in candidates if str(experiment_id) in item.experiment_ids), None
+    )
 
 
 async def _extend_reservation_lease(db: AsyncSession, reservation_id: UUID) -> None:
@@ -412,6 +442,9 @@ async def _reserve(
             raise ModelGatewayError(
                 "task_time_limit_exceeded", 409, "Task has reached its wall-time limit"
             )
+    run: Run | None = None
+    evaluation_run_id: UUID | None = None
+    evaluation_cost_limit: Decimal | None = None
     if run_id is not None:
         run = await db.get(Run, run_id)
         if run is None or run.project_id != project_id or run.task_id != task_id:
@@ -423,6 +456,20 @@ async def _reserve(
             raise ModelGatewayError(
                 "run_time_limit_exceeded", 409, "Run has reached its wall-time limit"
             )
+        evaluation_run_id = await _evaluation_run_id_for_run(db, run)
+        if evaluation_run_id is not None:
+            from harnessa.db.harness import EvaluationRun
+
+            evaluation = await db.scalar(select(EvaluationRun).where(
+                EvaluationRun.id == evaluation_run_id,
+                EvaluationRun.project_id == project_id,
+            ))
+            if evaluation is None:
+                raise ModelGatewayError(
+                    "evaluation_budget_unavailable", 409,
+                    "The grouped evaluation budget is no longer available",
+                )
+            evaluation_cost_limit = Decimal(evaluation.max_cost_usd)
 
     idempotency_hash = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
     previous = (
@@ -456,9 +503,13 @@ async def _reserve(
             "task": (Decimal(policy.probe_task_limit_usd), policy.probe_task_token_limit),
             "run": (Decimal(policy.probe_run_limit_usd), policy.probe_run_token_limit),
         }
+    if evaluation_run_id is not None and evaluation_cost_limit is not None:
+        # Evaluation scope is cost-only: its immutable manifest provides the aggregate ceiling,
+        # while project/task/run scopes retain the configured token and step controls.
+        limits["evaluation"] = (evaluation_cost_limit, 2**63 - 1)
     counters: list[ModelBudgetCounter] = []
-    for scope, scope_id, counter_task_id, counter_run_id in _scope_values(
-        project_id, task_id, run_id
+    for scope, scope_id, counter_task_id, counter_run_id, counter_evaluation_id in _scope_values(
+        project_id, task_id, run_id, evaluation_run_id
     ):
         counter = (
             (
@@ -483,6 +534,7 @@ async def _reserve(
                 project_id=project_id,
                 task_id=counter_task_id,
                 run_id=counter_run_id,
+                evaluation_run_id=counter_evaluation_id,
                 scope=scope,
                 workload=pool.kind,
                 scope_id=scope_id,
@@ -506,7 +558,11 @@ async def _reserve(
             raise ModelGatewayError(
                 "model_budget_exceeded",
                 409,
-                f"{counter.scope.title()} spend ceiling would be exceeded",
+                (
+                    "Evaluation spend ceiling would be exceeded"
+                    if counter.scope == "evaluation"
+                    else f"{counter.scope.title()} spend ceiling would be exceeded"
+                ),
             )
         if counter.used_tokens + counter.reserved_tokens + reserved_tokens > token_limit:
             raise ModelGatewayError(
@@ -514,7 +570,7 @@ async def _reserve(
                 409,
                 f"{counter.scope.title()} token ceiling would be exceeded",
             )
-        if counter.used_steps >= policy.max_steps:
+        if counter.scope != "evaluation" and counter.used_steps >= policy.max_steps:
             raise ModelGatewayError(
                 "model_step_limit_exceeded", 409, f"{counter.scope.title()} step limit is exhausted"
             )
@@ -613,6 +669,7 @@ async def _reserve(
         project_id=project_id,
         task_id=task_id,
         run_id=run_id,
+        evaluation_run_id=evaluation_run_id,
         pool_id=pool.id,
         deployment_id=deployment.id,
         request_id=request_id,
@@ -957,8 +1014,9 @@ async def _settle(
     )
     if reservation.status != "pending":
         return
-    for scope, scope_id, _, _ in _scope_values(
-        reservation.project_id, reservation.task_id, reservation.run_id
+    for scope, scope_id, _, _, _ in _scope_values(
+        reservation.project_id, reservation.task_id, reservation.run_id,
+        reservation.evaluation_run_id,
     ):
         counter = (
             (
@@ -1825,6 +1883,7 @@ async def reconcile_stale_model_reservations(
                     reservation.project_id,
                     reservation.task_id,
                     reservation.run_id,
+                    reservation.evaluation_run_id,
                 }:
                     counter.reserved_usd = max(
                         _ZERO, counter.reserved_usd - reservation.reserved_usd
