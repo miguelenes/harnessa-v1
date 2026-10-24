@@ -5,7 +5,7 @@ import Login from "../app/login/page";
 import RootLayout from "../app/layout";
 import Projects from "../app/projects/page";
 import SetupPage from "../app/setup/page";
-import { Button } from "../components/ui/button";
+import { Button } from "@harnessa/ui-react";
 
 const { push, router } = vi.hoisted(() => {
   const push = vi.fn();
@@ -43,7 +43,7 @@ describe("web application pages", () => {
     expect(layout.props.lang).toBe("en");
     render(<Button variant="outline" size="sm" className="px-8" aria-label="Save">Save</Button>);
     const button = screen.getByRole("button", { name: "Save" });
-    expect(button.className).toContain("border-stone-300");
+    expect(button.className).toContain("border-input");
     expect(button.className).toContain("px-8");
   });
 
@@ -169,42 +169,47 @@ describe("web application pages", () => {
     fetchMock.mockReset();
     fetchMock.mockResolvedValueOnce(response({}, 503) as Response);
     const second = render(<Projects />);
-    expect(await screen.findByText("Could not load projects")).toBeTruthy();
+    expect(await screen.findByText("Could not load projects (503).")).toBeTruthy();
     second.unmount();
 
     fetchMock.mockReset();
     fetchMock.mockRejectedValueOnce(new Error("offline fixture"));
     render(<Projects />);
-    expect(await screen.findByText("Could not load projects")).toBeTruthy();
+    expect(await screen.findByText("Could not reach the Harnessa API. Check the connection and try again.")).toBeTruthy();
   });
 
   it("reports failed project creation and repository registration", async () => {
     const fetchMock = vi.mocked(fetch);
     const project = { id: "project-1", name: "Alpha", slug: "alpha" };
-    fetchMock.mockImplementation(async (_input, init) => {
-      if (init?.method === "POST") return response({}, 500) as Response;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (init?.method === "POST") {
+        return response({}, String(input).endsWith("/repositories") ? 403 : 500) as Response;
+      }
       return response([project]) as Response;
     });
     render(<Projects />);
     await screen.findByRole("button", { name: /Alpha/ });
+    expect(screen.getByRole("heading", { name: "Your projects", level: 2 })).toBeTruthy();
+    expect(screen.getByLabelText("Project name")).toBeTruthy();
+    expect(screen.getByLabelText("Project slug")).toBeTruthy();
 
-    fireEvent.change(screen.getByPlaceholderText("Project name"), { target: { value: "Alpha" } });
-    fireEvent.change(screen.getByPlaceholderText("project-slug"), { target: { value: "alpha" } });
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Alpha" } });
+    fireEvent.change(screen.getByLabelText("Project slug"), { target: { value: "alpha" } });
     fireEvent.submit(screen.getByRole("heading", { name: "Create project" }).closest("form")!);
-    expect(await screen.findByText("Project creation failed")).toBeTruthy();
+    expect(await screen.findByText("Could not create project (500).")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
-    fireEvent.change(screen.getByPlaceholderText("team/repository"), {
+    fireEvent.change(screen.getByLabelText("Repository target ID"), {
       target: { value: "team/alpha" },
     });
-    fireEvent.change(screen.getByPlaceholderText("Display name"), {
+    fireEvent.change(screen.getByLabelText("Display name"), {
       target: { value: "Alpha repository" },
     });
     fireEvent.submit(
       screen.getByRole("heading", { name: "Register configured target" }).closest("form")!,
     );
     expect(
-      await screen.findByText(/Repository registration failed\. Confirm target is configured/),
+      await screen.findByText(/Repository registration was denied/),
     ).toBeTruthy();
   });
 
@@ -213,6 +218,8 @@ describe("web application pages", () => {
     fetchMock.mockResolvedValueOnce(response({ csrf_token: "fixture-token" }) as Response);
     fetchMock.mockResolvedValueOnce(response({}, 401) as Response);
     const { rerender } = render(<Login />);
+    expect(screen.getByLabelText("Email").className).toContain("bg-background");
+    expect(screen.getByRole("button", { name: "Sign in" }).className).toContain("bg-primary");
     fireEvent.change(screen.getByLabelText("Email"), { target: { value: "person@example.test" } });
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "not-a-password" } });
     fireEvent.submit(screen.getByRole("button", { name: "Sign in" }).closest("form")!);
@@ -253,18 +260,21 @@ describe("web application pages", () => {
 
     render(<Projects />);
     await screen.findByRole("button", { name: /Alpha/ });
+    expect(screen.getByRole("button", { name: /Alpha/ }).getAttribute("aria-pressed")).toBe("false");
 
-    fireEvent.change(screen.getByPlaceholderText("Project name"), { target: { value: "Alpha" } });
-    fireEvent.change(screen.getByPlaceholderText("project-slug"), { target: { value: "alpha" } });
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Alpha" } });
+    fireEvent.change(screen.getByLabelText("Project slug"), { target: { value: "alpha" } });
     fireEvent.submit(screen.getByRole("heading", { name: "Create project" }).closest("form")!);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
 
     fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
     expect(await screen.findByText("Configured repositories")).toBeTruthy();
-    fireEvent.change(screen.getByPlaceholderText("team/repository"), {
+    expect(screen.getByRole("button", { name: /Alpha/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByLabelText("Default branch")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Repository target ID"), {
       target: { value: "team/alpha" },
     });
-    fireEvent.change(screen.getByPlaceholderText("Display name"), {
+    fireEvent.change(screen.getByLabelText("Display name"), {
       target: { value: "Alpha repository" },
     });
     fireEvent.submit(
