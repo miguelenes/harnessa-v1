@@ -21,6 +21,7 @@ from harnessa.db.model_gateway import (
     ModelBudgetCounter,
     ModelBudgetPolicy,
     ModelDeployment,
+    ModelGlobalSpendBudget,
     ModelPool,
     ModelRequestLedger,
     ModelReservation,
@@ -35,6 +36,7 @@ from harnessa.services.model_gateway import (
     ModelGatewayError,
     reconcile_stale_model_reservations,
 )
+from harnessa.services.spend_budget import GlobalSpendBudgetError, record_external_spend_estimate
 from pwdlib import PasswordHash
 from sqlalchemy import select, text
 
@@ -410,6 +412,91 @@ async def test_probe_ceilings_are_independent_from_interactive_ceilings():
         if not probe.done():
             await probe
         await client.aclose()
+
+
+@pytest.mark.anyio
+async def test_global_budget_serializes_spend_across_projects_and_workloads():
+    first_data = await gateway_fixture()
+    second_data = await gateway_fixture()
+    global_limit = Decimal("0.00009")
+    async with SessionLocal() as db:
+        budget = await db.get(ModelGlobalSpendBudget, 1)
+        assert budget is not None
+        original_budget = (budget.max_usd, budget.reserved_usd, budget.billed_usd, budget.estimated_usd)
+        budget.max_usd = global_limit
+        budget.reserved_usd = Decimal(0)
+        budget.billed_usd = Decimal(0)
+        budget.estimated_usd = Decimal(0)
+        await db.commit()
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    provider_calls = 0
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        nonlocal provider_calls
+        provider_calls += 1
+        entered.set()
+        await release.wait()
+        return success_response("gateway-primary")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(provider), base_url="http://litellm")
+    router = LiteLLMModelRouter(client=client)
+    first = asyncio.create_task(
+        _complete_request(router, first_data, "global-probe", ModelPoolKind.PROBE)
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        with pytest.raises(ModelGatewayError) as raised:
+            await _complete_request(
+                router, second_data, "global-interactive", ModelPoolKind.INTERACTIVE
+            )
+        assert raised.value.code == "model_global_budget_exceeded"
+        assert provider_calls == 1
+        release.set()
+        await first
+        async with SessionLocal() as db:
+            budget = await db.get(ModelGlobalSpendBudget, 1)
+            assert budget is not None
+            assert budget.reserved_usd == 0
+            assert budget.billed_usd + budget.estimated_usd > 0
+    finally:
+        release.set()
+        await asyncio.gather(first, return_exceptions=True)
+        await client.aclose()
+        async with SessionLocal() as db:
+            budget = await db.get(ModelGlobalSpendBudget, 1)
+            assert budget is not None
+            budget.max_usd, budget.reserved_usd, budget.billed_usd, budget.estimated_usd = original_budget
+            await db.commit()
+
+
+@pytest.mark.anyio
+async def test_external_evaluator_estimate_is_debited_before_dispatch():
+    async with SessionLocal() as db:
+        budget = await db.get(ModelGlobalSpendBudget, 1)
+        assert budget is not None
+        original_budget = (budget.max_usd, budget.reserved_usd, budget.billed_usd, budget.estimated_usd)
+        budget.max_usd = Decimal("0.01")
+        budget.reserved_usd = Decimal(0)
+        budget.billed_usd = Decimal(0)
+        budget.estimated_usd = Decimal(0)
+        await db.commit()
+
+    try:
+        await record_external_spend_estimate(Decimal("0.006"))
+        with pytest.raises(GlobalSpendBudgetError):
+            await record_external_spend_estimate(Decimal("0.005"))
+        async with SessionLocal() as db:
+            budget = await db.get(ModelGlobalSpendBudget, 1)
+            assert budget is not None
+            assert budget.estimated_usd == Decimal("0.00600000")
+    finally:
+        async with SessionLocal() as db:
+            budget = await db.get(ModelGlobalSpendBudget, 1)
+            assert budget is not None
+            budget.max_usd, budget.reserved_usd, budget.billed_usd, budget.estimated_usd = original_budget
+            await db.commit()
 
 
 async def _complete(router: LiteLLMModelRouter, data, key: str):

@@ -28,9 +28,31 @@ gateway from a login-interactive zsh session where the keys are exported by
 name is `harnessa`, which is also used by the normal local stack, so the API and
 worker can resolve `litellm` on the internal network:
 
+Set `LITELLM_POSTGRES_PASSWORD` in `.env` to a URL-safe random value (for
+example, `openssl rand -hex 32`). LiteLLM stores spend data in its own
+`litellm` database and role, created by the `litellm-db-init` service. Its role
+does not receive access to Harnessa's application database. LiteLLM stores
+provider spend records there. Harnessa's PostgreSQL scheduler and reservation
+ledger enforce a shared lifetime model-spend ceiling across all projects and
+interactive, probe, and grouped-evaluation requests. The database starts with a
+$20 ceiling and includes the two already billed M13 route checks. Set
+`MODEL_GLOBAL_BUDGET_USD` lower in `.env` when externally billed evaluator or
+judge costs need to share the €20 milestone ceiling; do not raise it above
+$20. The app uses the lower of the database ceiling and this configured value.
+When configuring the independent holdout evaluator, also set a positive
+`HARNESS_HOLDOUT_EVALUATOR_MAX_COST_USD`. Harnessa books that maximum against
+the same lifetime ledger before dispatch and retains it after timeouts or
+failures, when billing may be unknown. Keep other separately billed judge
+services unavailable unless their maximum cost is also booked against the
+shared ledger. LiteLLM only records spend; Harnessa's scheduler owns budget
+enforcement.
+
 ```sh
 zsh -lic 'export DEEPSEEK_API_KEY OPENROUTER_API_KEY; podman compose --env-file .env -f infra/compose.yaml up -d litellm'
 ```
+
+Compose waits for PostgreSQL, then creates the isolated LiteLLM database and
+role before starting the proxy. The command does not print provider keys.
 
 The login-interactive zsh loads `~/.zshrc`, and `export` makes the two
 configured keys available for Compose interpolation in that child process.

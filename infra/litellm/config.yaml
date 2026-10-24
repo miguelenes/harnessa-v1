@@ -28,5 +28,8 @@ litellm_settings:
   set_verbose: false
   turn_off_message_logging: true
 
+general_settings:
+  database_url: os.environ/LITELLM_DATABASE_URL
+
 # Provider keys are mapped only to the LiteLLM service in infra/compose.yaml.
 # They are intentionally not passed to the API, worker, web, or agent containers.
