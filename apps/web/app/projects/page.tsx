@@ -39,11 +39,15 @@ export default function Projects() {
   const [pending, setPending] = useState<PendingAction>(null);
   const repositorySelectionRequest = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setError("");
     setLoading(true);
     try {
-      const response = await fetch(`${API}/projects`, { credentials: "include" });
+      const response = await fetch(`${API}/projects`, {
+        credentials: "include",
+        ...(signal ? { signal } : {}),
+      });
+      if (signal?.aborted) return;
       if (response.status === 401) {
         router.push("/login");
         return;
@@ -54,14 +58,20 @@ export default function Projects() {
       }
       setItems((await response.json()) as Project[]);
     } catch {
-      setError("Could not reach the Harnessa API. Check the connection and try again.");
+      if (!signal?.aborted) {
+        setError("Could not reach the Harnessa API. Check the connection and try again.");
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [router]);
 
   useEffect(() => {
-    queueMicrotask(() => { void load(); });
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) void load(controller.signal);
+    });
+    return () => controller.abort();
   }, [load]);
 
   async function create(event: FormEvent<HTMLFormElement>) {

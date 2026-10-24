@@ -178,6 +178,20 @@ describe("web application pages", () => {
     expect(await screen.findByText("Could not reach the Harnessa API. Check the connection and try again.")).toBeTruthy();
   });
 
+  it("ignores project-list responses after the page unmounts", async () => {
+    const fetchMock = vi.mocked(fetch);
+    let resolveResponse!: (value: Response) => void;
+    const pendingResponse = new Promise<Response>((resolve) => { resolveResponse = resolve; });
+    fetchMock.mockReturnValueOnce(pendingResponse);
+    const { unmount } = render(<Projects />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    unmount();
+    resolveResponse(response({}, 401) as Response);
+    await pendingResponse;
+    await Promise.resolve();
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it("reports failed project creation and repository registration", async () => {
     const fetchMock = vi.mocked(fetch);
     const project = { id: "project-1", name: "Alpha", slug: "alpha" };
