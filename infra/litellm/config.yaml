@@ -27,11 +27,6 @@ router_settings:
 litellm_settings:
   set_verbose: false
   turn_off_message_logging: true
-  # Keep the proxy ceiling at USD 20, below the user's EUR 20 remaining-
-  # milestone ceiling with room for currency movement.
-  # LiteLLM v1.83.14 requires a database for this proxy-wide spend check.
-  max_budget: 20.00
-  budget_duration: 30d
 
 general_settings:
   database_url: os.environ/LITELLM_DATABASE_URL
