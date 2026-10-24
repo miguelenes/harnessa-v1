@@ -155,6 +155,7 @@ from harnessa.tracing import (
     current_trace_id,
     extract_trace_context,
     shutdown_tracing,
+    start_redacted_span,
     tracer_for,
 )
 
@@ -414,12 +415,11 @@ async def trace_requests(request: Request, call_next: RequestResponseEndpoint) -
             context = extract_trace_context(
                 {"traceparent": f"00-{legacy_trace_id.lower()}-{uuid4().hex[:16]}-01"}
             )
-    with tracer_for(__name__).start_as_current_span(
+    with start_redacted_span(
+        tracer_for(__name__),
         f"HTTP {request.method}",
         context=context,
         kind=SpanKind.SERVER,
-        record_exception=False,
-        set_status_on_exception=False,
     ) as span:
         try:
             response = await _security_headers(request, call_next)

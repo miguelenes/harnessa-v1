@@ -10,7 +10,7 @@ from uuid import UUID
 from harnessa.config import settings
 from harnessa.db.github import GitHubWebhookDelivery, GitHubWebhookOutbox
 from harnessa.db.session import SessionLocal
-from harnessa.tracing import trace_context_from_parent, tracer_for
+from harnessa.tracing import start_redacted_span, trace_context_from_parent, tracer_for
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -115,7 +115,8 @@ async def process_github_webhook_outbox(
         await db.commit()
 
     for outbox_id, delivery_id, envelope, attempts in claimed:
-        with tracer_for(__name__).start_as_current_span(
+        with start_redacted_span(
+            tracer_for(__name__),
             "harnessa.github.webhook.process",
             context=trace_context_from_parent(envelope.traceparent),
             kind=SpanKind.CONSUMER,

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Iterator, Mapping
+from contextlib import contextmanager
 from functools import wraps
 from typing import Any, ParamSpec, TypeVar
 
@@ -56,6 +57,27 @@ def tracer_for(module_name: str) -> trace.Tracer:
     return trace.get_tracer(module_name)
 
 
+@contextmanager
+def start_redacted_span(
+    tracer: trace.Tracer,
+    name: str,
+    *,
+    context: Context | None = None,
+    kind: SpanKind = SpanKind.INTERNAL,
+    attributes: Mapping[str, Any] | None = None,
+) -> Iterator[trace.Span]:
+    """Start a span without SDK exception recording or raw exception status metadata."""
+    with tracer.start_as_current_span(
+        name,
+        context=context,
+        kind=kind,
+        attributes=attributes,
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
+        yield span
+
+
 def shutdown_tracing() -> None:
     provider = trace.get_tracer_provider()
     if isinstance(provider, TracerProvider):
@@ -100,12 +122,11 @@ def traced_async(
         @wraps(function)
         async def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
             safe_attributes = attributes(kwargs) if attributes is not None else {}
-            with tracer_for(function.__module__).start_as_current_span(
+            with start_redacted_span(
+                tracer_for(function.__module__),
                 name,
                 kind=kind,
                 attributes=safe_attributes,
-                record_exception=False,
-                set_status_on_exception=False,
             ) as span:
                 try:
                     return await function(*args, **kwargs)

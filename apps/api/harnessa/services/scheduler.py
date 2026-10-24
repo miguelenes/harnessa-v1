@@ -47,7 +47,7 @@ from harnessa.db.specification import (
 from harnessa.services.lifecycle import _record_event, record_system_transition
 from harnessa.services.model_gateway import budget_policy_digest
 from harnessa.services.specifications import specification_workspace_manager
-from harnessa.tracing import trace_context_from_parent, tracer_for
+from harnessa.tracing import start_redacted_span, trace_context_from_parent, tracer_for
 from opentelemetry.trace import Status, StatusCode
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -1300,7 +1300,8 @@ class Scheduler:
         if job is None:
             return False
         parent_context = trace_context_from_parent(job.traceparent)
-        with tracer_for(__name__).start_as_current_span(
+        with start_redacted_span(
+            tracer_for(__name__),
             "harnessa.run.execute",
             context=parent_context,
             attributes={
@@ -1309,8 +1310,6 @@ class Scheduler:
                 "harnessa.run.attempt": job.attempt,
                 "harnessa.execution.adapter": adapter.name,
             },
-            record_exception=False,
-            set_status_on_exception=False,
         ) as span:
             try:
                 await self._execute_claimed_run(job, adapter)
