@@ -33,6 +33,7 @@ from harnessa.db.model_gateway import (
 from harnessa.db.models import Project, Task
 from harnessa.db.orchestration import Run
 from harnessa.db.session import SessionLocal
+from harnessa.services.spend_budget import would_exceed_global_spend_budget
 from harnessa.tracing import traced_async
 from opentelemetry.trace import SpanKind
 from sqlalchemy import select, update
@@ -598,13 +599,8 @@ async def _reserve(
             503,
             "The shared model spend budget is not initialized",
         )
-    global_limit = min(global_budget.max_usd, settings.model_global_budget_usd)
-    if (
-        global_budget.billed_usd
-        + global_budget.estimated_usd
-        + global_budget.reserved_usd
-        + reserved_usd
-        > global_limit
+    if would_exceed_global_spend_budget(
+        global_budget, reserved_usd, settings.model_global_budget_usd
     ):
         raise ModelGatewayError(
             "model_global_budget_exceeded",

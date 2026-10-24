@@ -12,6 +12,15 @@ class GlobalSpendBudgetError(RuntimeError):
     """An external evaluator request cannot fit under the shared spend ceiling."""
 
 
+def would_exceed_global_spend_budget(
+    budget: ModelGlobalSpendBudget, amount_usd: Decimal, configured_limit_usd: Decimal
+) -> bool:
+    """Use the same committed and in-flight total for every external admission path."""
+    limit_usd = min(budget.max_usd, configured_limit_usd)
+    committed_usd = budget.billed_usd + budget.estimated_usd + budget.reserved_usd
+    return committed_usd + amount_usd > limit_usd
+
+
 async def record_external_spend_estimate(amount_usd: Decimal) -> None:
     """Book an evaluator's declared maximum before dispatch; retain it conservatively."""
     if amount_usd <= 0:
@@ -27,8 +36,9 @@ async def record_external_spend_estimate(amount_usd: Decimal) -> None:
         if budget is None:
             raise GlobalSpendBudgetError("The shared model spend budget is not initialized")
 
-        global_limit = min(budget.max_usd, settings.model_global_budget_usd)
-        if budget.billed_usd + budget.estimated_usd + budget.reserved_usd + amount_usd > global_limit:
+        if would_exceed_global_spend_budget(
+            budget, amount_usd, settings.model_global_budget_usd
+        ):
             raise GlobalSpendBudgetError("External evaluator cost exceeds the shared spend ceiling")
 
         # Keep the full configured maximum charged even if the evaluator fails or
