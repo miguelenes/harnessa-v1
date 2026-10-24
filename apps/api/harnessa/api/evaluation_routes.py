@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from math import ceil
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from harnessa.adapters.harness2 import UPSTREAM_REVISION
@@ -295,6 +295,24 @@ async def create_evaluation_run(
         if prior.manifest_digest != digest:
             raise HTTPException(409, "Evaluation key is already bound to a different immutable manifest")
         return await _read_run(db, prior)
+    run = EvaluationRun(
+        id=uuid4(),
+        organization_id=project.organization_id, project_id=project_id, created_by=actor.id,
+        stable_key=body.stable_key, status="queued", manifest=manifest,
+        manifest_digest=digest, experiment_ids=[], max_cost_usd=estimate,
+    )
+    db.add(run)
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        prior = await db.scalar(select(EvaluationRun).where(
+            EvaluationRun.project_id == project_id,
+            EvaluationRun.stable_key == body.stable_key,
+        ))
+        if prior is not None and prior.manifest_digest == digest:
+            return await _read_run(db, prior)
+        raise HTTPException(409, "Evaluation idempotency key conflicts with an existing manifest") from exc
     experiment_ids: list[str] = []
     for task in tasks:
         task_id = UUID(task["task_id"])
@@ -304,6 +322,7 @@ async def create_evaluation_run(
         child_key = hashlib.sha256(f"{body.stable_key}:{task_id}".encode()).hexdigest()
         child = HarnessExperiment(
             organization_id=project.organization_id, project_id=project_id, task_id=task_id,
+            evaluation_run_id=run.id,
             created_by=actor.id, stable_key=f"eval-{child_key}", mode=body.mode, k=body.k,
             status="queued", phase="queued", attempts=0, base_sha=task["base_sha"],
             specification_hash=task["specification_hash"],
@@ -316,12 +335,7 @@ async def create_evaluation_run(
         db.add(child)
         await db.flush()
         experiment_ids.append(str(child.id))
-    run = EvaluationRun(
-        organization_id=project.organization_id, project_id=project_id, created_by=actor.id,
-        stable_key=body.stable_key, status="queued", manifest=manifest,
-        manifest_digest=digest, experiment_ids=experiment_ids, max_cost_usd=estimate,
-    )
-    db.add(run)
+    run.experiment_ids = experiment_ids
     try:
         await db.commit()
     except IntegrityError as exc:

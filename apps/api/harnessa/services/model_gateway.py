@@ -295,18 +295,12 @@ async def _evaluation_run_id_for_run(db: AsyncSession, run: Run | None) -> UUID 
         return None
     if experiment_id is None:
         return None
-    from harnessa.db.harness import EvaluationRun, HarnessExperiment
+    from harnessa.db.harness import HarnessExperiment
 
     experiment = await db.get(HarnessExperiment, experiment_id)
     if experiment is None:
         return None
-    candidates = list(await db.scalars(select(EvaluationRun).where(
-        EvaluationRun.project_id == run.project_id,
-        EvaluationRun.cancel_requested_at.is_(None),
-    ).with_for_update()))
-    return next(
-        (item.id for item in candidates if str(experiment_id) in item.experiment_ids), None
-    )
+    return experiment.evaluation_run_id
 
 
 async def _extend_reservation_lease(db: AsyncSession, reservation_id: UUID) -> None:
@@ -463,7 +457,7 @@ async def _reserve(
             evaluation = await db.scalar(select(EvaluationRun).where(
                 EvaluationRun.id == evaluation_run_id,
                 EvaluationRun.project_id == project_id,
-            ))
+            ).with_for_update())
             if evaluation is None:
                 raise ModelGatewayError(
                     "evaluation_budget_unavailable", 409,

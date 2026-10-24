@@ -102,11 +102,13 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
         run = await db.get(EvaluationRun, created.id)
         assert child is not None and run is not None
         assert child.result["evaluation_manifest_digest"] == run.manifest_digest
+        assert child.evaluation_run_id == run.id
         # Every descendant model request must also fit the immutable aggregate budget.
         harnessa_run = await db.get(Run, fixture["run_id"])
         assert harnessa_run is not None
         harnessa_run.execution_result = {"experiment_id": str(child.id)}
         run.max_cost_usd = "0.00000001"
+        run.cancel_requested_at = run.created_at
         await db.flush()
         from harnessa.services.model_gateway import (
             ModelGatewayError,
