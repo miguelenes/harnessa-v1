@@ -246,6 +246,82 @@ describe("workspace routes and task board", () => {
     }
   });
 
+  it("queues and cancels a bounded Harness² evaluation from a READY probe task", async () => {
+    const probeTask = { ...task, stage: "HARNESS_PROBE" as const };
+    const budget = {
+      id: "budget-1", project_id: project.id,
+      project_limit_usd: "1.00", task_limit_usd: "0.10", run_limit_usd: "0.05",
+      project_token_limit: 100000, task_token_limit: 10000, run_token_limit: 5000,
+      max_steps: 8, max_wall_seconds: 300, max_output_tokens: 2048, max_attempts: 2,
+    };
+    let experiment: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/projects")) return response([project]);
+      if (url.includes("/events/stream")) return response({}, 403);
+      if (url.endsWith("/tasks?limit=100")) return response([probeTask]);
+      if (url.endsWith("/tasks/task-1/runs")) return response([]);
+      if (url.endsWith("/projects/project-1/harness")) return response({
+        experiments: experiment ? [experiment] : [],
+        probes: experiment ? [
+          { experiment_id: experiment.id, status: "succeeded", delivered: true, wall_ms: 100, cost_usd: "0.01" },
+          { experiment_id: experiment.id, status: "failed", delivered: false, wall_ms: 200, cost_usd: "0.02" },
+        ] : [],
+      });
+      if (url.endsWith("/projects/project-1/models/budget")) return response(budget);
+      if (url.endsWith("/harness-experiments") && init?.method === "POST") {
+        experiment = { id: "experiment-1", task_id: probeTask.id, status: "queued", mode: "both", k: 1, base_sha: "b".repeat(40), specification_hash: "c".repeat(64), policy_revision: 1, upstream_revision: "a".repeat(40), result: { adaptation_usage: { usage_known: true, cost_usd: "0.03" }, comparison_integrity: { status: "passed" }, holdout_evaluation: { status: "passed" } } };
+        return response(experiment, 202);
+      }
+      if (url.endsWith("/harness-experiments/experiment-1/cancel") && init?.method === "POST") {
+        experiment = { ...experiment, status: "cancelled" };
+        return response(experiment);
+      }
+      return response({}, 404);
+    });
+
+    render(<Workspace section="evals" />);
+    fireEvent.change(await screen.findByRole("combobox", { name: "Evaluation task" }), { target: { value: probeTask.id } });
+    expect(await screen.findByText(/Maximum authorized spend ceiling: \$0.10000000.*Per-run ceiling \$0.05.*expected-cost estimate is unavailable/)).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Queue bounded comparison" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Queue bounded comparison" }));
+    expect(await screen.findByText(/Evaluation queued with the project/)).toBeTruthy();
+    expect(await screen.findByText(/Experiment experiment-1/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel evaluation" })).toBeTruthy();
+    expect(screen.getByText(/Sample size 2 · failed rollouts 1 · delivery 1\/2 · 95% Wilson interval/)).toBeTruthy();
+    expect(screen.getByText(/Latency p50\/p95 100\/200 ms · all-in recorded cost \$0.06000000/)).toBeTruthy();
+    const createCall = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).endsWith("/harness-experiments") && init?.method === "POST");
+    expect(createCall?.[1]?.body).toContain('"mode":"both"');
+    expect(createCall?.[1]?.body).toContain('"k":1');
+    fireEvent.click(screen.getByRole("button", { name: "Cancel evaluation" }));
+    expect(await screen.findByText(/Cancellation was recorded/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("cancelled")).toBeTruthy());
+  });
+
+  it("resumes a failed evaluation only through its existing manifest", async () => {
+    const failed = { id: "experiment-1", task_id: task.id, status: "failed", mode: "both", k: 1, base_sha: "b".repeat(40), specification_hash: "c".repeat(64), policy_revision: 1, upstream_revision: "a".repeat(40), result: { route_alias: "harnessa-deepseek-flash" } };
+    let experiment: Record<string, unknown> = failed;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/projects")) return response([project]);
+      if (url.includes("/events/stream")) return response({}, 403);
+      if (url.endsWith("/tasks?limit=100")) return response([task]);
+      if (url.endsWith("/projects/project-1/harness")) return response({ experiments: [experiment] });
+      if (url.endsWith("/projects/project-1/models/budget")) return response({ project_limit_usd: "1", task_limit_usd: "1", run_limit_usd: "1", max_steps: 2, max_attempts: 1 });
+      if (url.endsWith("/harness-experiments/experiment-1/resume") && init?.method === "POST") {
+        experiment = { ...experiment, status: "queued", result: { ...failed.result, resume_count: 1 } };
+        return response(experiment, 202);
+      }
+      return response({}, 404);
+    });
+    render(<Workspace section="evals" />);
+    expect(await screen.findByText(/Experiment experiment-1/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Resume same manifest" }));
+    expect(await screen.findByText(/same frozen manifest was requeued/)).toBeTruthy();
+    expect(await screen.findByText("queued")).toBeTruthy();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/harness-experiments/experiment-1/resume"))).toBe(true);
+  });
+
   it("projects Harness Studio history and sends reviewed promotion and rollback decisions", async () => {
     const run = { id: "run-1", attempt: 1, status: "SUCCEEDED", started_at: "2026-10-23T00:00:00Z" };
     const harness = {

@@ -308,6 +308,14 @@ async def _doctor(organization_id: UUID, db: AsyncSession) -> ModelDoctorRead:
         configured_deployments=int(deployment_count or 0),
         configured_aliases=int(alias_count or 0),
         pools=[pool.name for pool in pools],
+        execution_adapter="acp-opencode" if settings.acp_execution_enabled else None,
+        execution_adapter_configured=settings.acp_execution_enabled,
+        execution_agent_image=settings.acp_agent_image if settings.acp_execution_enabled else None,
+        execution_model_route_ready=(
+            settings.acp_execution_enabled
+            and settings.acp_model_broker_enabled
+            and bool(settings.model_gateway_url)
+        ),
         provider_credentials_checked=False,
         live_request_sent=False,
         findings=findings,

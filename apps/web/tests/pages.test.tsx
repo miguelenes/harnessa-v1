@@ -67,6 +67,44 @@ describe("web application pages", () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/models/live-check"))).toBe(false);
   });
 
+  it("lets an authorized operator configure finite project, task, and run budgets", async () => {
+    const budget = {
+      id: "budget-1", project_id: "project-1",
+      project_limit_usd: "1.00", task_limit_usd: "0.25", run_limit_usd: "0.10",
+      project_token_limit: 100000, task_token_limit: 25000, run_token_limit: 10000,
+      max_steps: 8, max_wall_seconds: 600, max_output_tokens: 4096, max_attempts: 2,
+    };
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) return response({ id: "user-1", email: "admin@example.test", organization_id: "org-1", role: "administrator" }) as Response;
+      if (url.endsWith("/projects")) return response([{ id: "project-1", name: "Alpha", slug: "alpha" }]) as Response;
+      if (url.endsWith("/ops/models/doctor")) return response({ status: "setup_required", gateway_ready: false, configured_accounts: 0, configured_deployments: 0, configured_aliases: 0, pools: [], findings: [] }) as Response;
+      if (url.endsWith("/github/status")) return response({ configured_apps: [], installations: [], repository_links: [], actor_mappings: [], webhook_health: {}, recent_deliveries: [] }) as Response;
+      if (url.endsWith("/health/ready")) return response({ status: "ready" }) as Response;
+      if (url.endsWith("/projects/project-1/repositories")) return response([]) as Response;
+      if (url.endsWith("/projects/project-1/models/budget") && init?.method === "PUT") return response(budget) as Response;
+      if (url.endsWith("/projects/project-1/models/budget")) return response({}, 404) as Response;
+      return response({}, 404) as Response;
+    });
+
+    render(<SetupPage />);
+    await screen.findByRole("button", { name: "Set budget policy" });
+    for (const [name, value] of Object.entries({
+      "project limit usd": "1.00", "task limit usd": "0.25", "run limit usd": "0.10",
+      "project token limit": "100000", "task token limit": "25000", "run token limit": "10000",
+      "max steps": "8", "max wall seconds": "600", "max output tokens": "4096", "max attempts": "2",
+    })) {
+      fireEvent.change(screen.getByRole("spinbutton", { name }), { target: { value } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Set budget policy" }));
+    expect(await screen.findByText(/The same policy governs both primary and probe requests/)).toBeTruthy();
+    const save = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith("/models/budget") && init?.method === "PUT");
+    expect(save?.[1]?.body).toContain('"project_limit_usd":"1.00"');
+    expect(save?.[1]?.body).toContain('"max_steps":8');
+    expect(save?.[1]?.headers).toHaveProperty("X-CSRF-Token");
+  });
+
   it("sends only an explicitly authorized one-token route check", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation(async (input, init) => {

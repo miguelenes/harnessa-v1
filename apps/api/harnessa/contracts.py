@@ -342,6 +342,10 @@ class ModelDoctorRead(BaseModel):
     configured_deployments: int
     configured_aliases: int
     pools: list[str]
+    execution_adapter: str | None = None
+    execution_adapter_configured: bool = False
+    execution_agent_image: str | None = None
+    execution_model_route_ready: bool = False
     provider_credentials_checked: bool = False
     live_request_sent: bool = False
     findings: list[str] = Field(default_factory=list)

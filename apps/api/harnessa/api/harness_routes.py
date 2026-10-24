@@ -175,11 +175,16 @@ async def harness_overview(
         experiments=[_experiment_read(row).model_dump(mode="json") for row in experiments],
         probes=[
             {
+                "id": str(row.id),
+                "experiment_id": str(row.experiment_id),
                 "label": row.label,
                 "phase": row.phase,
                 "status": row.status,
                 "delivered": row.delivered,
                 "wall_ms": row.wall_ms,
+                "tokens": row.tokens,
+                "cost_usd": str(row.cost_usd) if row.cost_usd is not None else None,
+                "created_at": row.created_at.isoformat(),
                 "route_alias": row.route_alias,
                 "harness_digest": row.harness_digest,
                 "trace_digest": row.trace_digest,
@@ -306,6 +311,64 @@ async def cancel_harness_experiment(
             row.status, row.phase, row.completed_at = "cancelled", "cancelled", datetime.now(UTC)
         await db.commit()
         await db.refresh(row)
+    return _experiment_read(row)
+
+
+@router.post("/projects/{project_id}/harness-experiments/{experiment_id}/resume", status_code=202)
+async def resume_harness_experiment(
+    project_id: UUID,
+    experiment_id: UUID,
+    actor: User = Depends(current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> ExperimentRead:
+    """Requeue the same frozen experiment after a recoverable terminal failure."""
+    await _operator(db, actor, project_id)
+    row = await db.scalar(
+        select(HarnessExperiment)
+        .where(HarnessExperiment.project_id == project_id, HarnessExperiment.id == experiment_id)
+        .with_for_update()
+    )
+    if row is None:
+        raise HTTPException(404, "Experiment not found")
+    if row.status not in {"failed", "blocked"}:
+        raise HTTPException(409, "Only failed or blocked experiments can be resumed")
+    if row.cancel_requested_at is not None:
+        raise HTTPException(409, "A cancelled experiment cannot be resumed; queue a new manifest")
+    state = dict(row.result or {})
+    resume_count = state.get("resume_count", 0)
+    if (
+        not isinstance(resume_count, int)
+        or isinstance(resume_count, bool)
+        or resume_count < 0
+        or resume_count >= 2
+    ):
+        raise HTTPException(409, "The experiment resume limit has been reached")
+    task = await db.scalar(
+        select(Task).where(Task.id == row.task_id, Task.project_id == project_id).with_for_update()
+    )
+    policy = await db.scalar(select(HarnessPolicy).where(HarnessPolicy.project_id == project_id))
+    interview = await db.scalar(
+        select(SpecificationInterview).where(SpecificationInterview.task_id == row.task_id)
+    )
+    if (
+        task is None
+        or task.stage != TaskStage.HARNESS_PROBE.value
+        or interview is None
+        or interview.readiness_state != "READY"
+        or interview.base_sha != row.base_sha
+        or interview.artifact_hash != row.specification_hash
+        or interview.revision != row.specification_revision
+        or policy is None
+        or policy.revision != row.policy_revision
+    ):
+        raise HTTPException(409, "Frozen task, specification, or evaluation policy changed; queue a new manifest")
+    state["resume_count"] = resume_count + 1
+    row.result = state
+    row.status, row.phase = "queued", "queued"
+    row.last_error = None
+    row.worker_heartbeat_at = None
+    await db.commit()
+    await db.refresh(row)
     return _experiment_read(row)
 
 

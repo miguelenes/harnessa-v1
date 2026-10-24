@@ -55,6 +55,22 @@ function eventSummary(event: AgUiEvent): string {
   }
 }
 
+function wilsonInterval(successes: number, sampleSize: number): [number, number] | null {
+  if (sampleSize <= 0) return null;
+  const z = 1.96;
+  const proportion = successes / sampleSize;
+  const denominator = 1 + (z * z) / sampleSize;
+  const center = (proportion + (z * z) / (2 * sampleSize)) / denominator;
+  const margin = (z * Math.sqrt((proportion * (1 - proportion) + (z * z) / (4 * sampleSize)) / sampleSize)) / denominator;
+  return [Math.max(0, center - margin), Math.min(1, center + margin)];
+}
+
+function percentile(values: number[], quantile: number): number | null {
+  if (!values.length) return null;
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.ceil(quantile * ordered.length) - 1] ?? ordered[ordered.length - 1] ?? null;
+}
+
 function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, isDragging } = useDraggable({ id: task.id, data: { task } });
   const dragDescription = [attributes["aria-describedby"], `task-title-${task.id}`].filter(Boolean).join(" ");
@@ -607,25 +623,165 @@ function HarnessStudioView({ projectId, tasks }: { projectId: string; tasks: Tas
 function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[] }) {
   const visibleTasks = useMemo(() => tasks.slice(0, 50), [tasks]);
   const [experiments, setExperiments] = useState<Record<string, unknown>[]>([]);
+  const [probeRows, setProbeRows] = useState<Record<string, unknown>[]>([]);
+  const [selectedTask, setSelectedTask] = useState("");
+  const [routeAlias, setRouteAlias] = useState("harnessa-deepseek-flash");
+  const [mode, setMode] = useState("both");
+  const [sampleSize, setSampleSize] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [budget, setBudget] = useState<components["schemas"]["ModelBudgetPolicyRead"] | null>(null);
+  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const eligibleTasks = visibleTasks.filter((task) =>
+    task.stage === "HARNESS_PROBE" && task.specification_readiness_state === "READY",
+  );
   useEffect(() => {
     let mounted = true;
     void fetch(`${API}/projects/${projectId}/harness`, { credentials: "include", cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error(response.status === 403 ? "Evaluation evidence is not authorized for this project." : "Evaluation evidence is unavailable.");
-        const value = await response.json() as { experiments?: unknown };
-        if (mounted) setExperiments(Array.isArray(value.experiments) ? value.experiments.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+        const value = await response.json() as { experiments?: unknown; probes?: unknown };
+        if (mounted) {
+          setExperiments(Array.isArray(value.experiments) ? value.experiments.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+          setProbeRows(Array.isArray(value.probes) ? value.probes.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+        }
       })
       .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "Evaluation evidence is unavailable."); });
     return () => { mounted = false; };
   }, [projectId]);
+  useEffect(() => {
+    let mounted = true;
+    void fetch(`${API}/projects/${projectId}/models/budget`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error("Project budget limits are unavailable.");
+        return await response.json() as components["schemas"]["ModelBudgetPolicyRead"];
+      })
+      .then((value) => { if (mounted) setBudget(value); })
+      .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "Project budget limits are unavailable."); });
+    return () => { mounted = false; };
+  }, [projectId]);
+  async function refreshExperiments() {
+    const response = await fetch(`${API}/projects/${projectId}/harness`, { credentials: "include", cache: "no-store" });
+    if (!response.ok) throw new Error("Evaluation records could not be refreshed.");
+    const value = await response.json() as { experiments?: unknown; probes?: unknown };
+    setExperiments(Array.isArray(value.experiments) ? value.experiments.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+    setProbeRows(Array.isArray(value.probes) ? value.probes.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+  }
+  async function startExperiment() {
+    if (!selectedTask || !routeAlias.trim()) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/tasks/${selectedTask}/harness-experiments`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "",
+        },
+        body: JSON.stringify({
+          stable_key: crypto.randomUUID(),
+          mode,
+          k: sampleSize,
+          route_alias: routeAlias.trim(),
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(response.status === 409
+          ? "The task must have a frozen READY specification and be in Harness probe."
+          : response.status === 403
+            ? "Only a project operator can queue a Harness² evaluation."
+            : `The bounded evaluation could not be queued (${response.status}).`);
+      }
+      setNotice("Evaluation queued with the project’s fixed Harness² limits. The result will retain its frozen source and policy revisions.");
+      await refreshExperiments();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The bounded evaluation could not be queued.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function cancelExperiment(experiment: Record<string, unknown>) {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/harness-experiments/${String(experiment.id)}/cancel`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+      });
+      if (!response.ok) throw new Error(response.status === 403 ? "Only a project operator can cancel this evaluation." : "The evaluation could not be cancelled.");
+      setNotice("Cancellation was recorded; the worker will stop at its next safe checkpoint.");
+      await refreshExperiments();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The evaluation could not be cancelled.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function resumeExperiment(experiment: Record<string, unknown>) {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/harness-experiments/${String(experiment.id)}/resume`, {
+        method: "POST", credentials: "include",
+        headers: { "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+      });
+      if (!response.ok) throw new Error(response.status === 409
+        ? "Frozen inputs or policy changed, or the two-resume limit was reached. Queue a new evaluation manifest."
+        : response.status === 403 ? "Only a project operator can resume this evaluation." : "The evaluation could not be resumed.");
+      setNotice("The same frozen manifest was requeued. Model budgets are reserved again before provider dispatch.");
+      await refreshExperiments();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The evaluation could not be resumed.");
+    } finally {
+      setBusy(false);
+    }
+  }
   const adapters = [
     { name: "Harnessa repository acceptance", state: "Available", detail: "Deterministic offline checks and revision-bound verification manifests. No benchmark score is inferred from task status." },
     { name: "WorkBuddy-Bench", state: "Blocked: jurisdiction review", detail: "Tencent's published terms say the benchmark is not intended for use within the European Union. Dataset setup and execution are disabled pending a documented jurisdiction and license review." },
     { name: "JobBench", state: "Unavailable: isolated adapter required", detail: "Official runner uses its own CLI/Harbor lifecycle and an external judge. Dataset setup, licenses, runner isolation, and budget-metered judge integration have not been provisioned here." },
     { name: "Harvey LAB", state: "Unavailable: isolated adapter required", detail: "The MIT-licensed public harness and task set need a dedicated runner and judge adapter. It is not currently executed by Harnessa." },
   ];
-  return <div className="space-y-4"><Card><CardHeader><CardTitle>Evaluation center</CardTitle><CardDescription>Only immutable, source-backed evaluation manifests can produce results. Blocked adapters do not show fabricated scores.</CardDescription></CardHeader><CardContent><div className="grid gap-3 md:grid-cols-2">{adapters.map((adapter) => <section key={adapter.name} className="rounded-lg border border-[var(--border)] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">{adapter.name}</h3><Badge variant={adapter.state === "Available" ? "success" : "warning"}>{adapter.state}</Badge></div><p className="mt-2 text-sm text-[var(--muted-foreground)]">{adapter.detail}</p></section>)}</div></CardContent></Card><Card><CardHeader><CardTitle>Repository acceptance</CardTitle><CardDescription>Review task-linked verification and readiness evidence. Task or run status is not an evaluation score.</CardDescription></CardHeader>{visibleTasks.length === 0 ? <Card><CardHeader><CardTitle>No task evidence</CardTitle><CardDescription>Create or select a task to see its specification readiness state.</CardDescription></CardHeader></Card> : visibleTasks.map((task) => <Card key={task.id}><CardHeader><CardTitle>{task.title}</CardTitle><CardDescription>{LABELS[task.stage]} · run {task.run_status}</CardDescription></CardHeader><CardContent>{task.specification_readiness_state ? <div className="flex flex-wrap items-center gap-2"><Badge variant={task.specification_readiness_state === "READY" ? "success" : "warning"}>Specification {task.specification_readiness_state}</Badge><span className="text-sm text-[var(--muted-foreground)]">Revision {task.specification_revision}</span></div> : <p className="text-sm text-[var(--muted-foreground)]">No specification readiness record is attached.</p>}</CardContent></Card>)}</Card>{error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}<Card><CardHeader><CardTitle>Harness experiment records</CardTitle><CardDescription>Project-scoped experiment records include the immutable task, source, specification, policy, and Harness² revisions. Missing result fields remain explicitly unavailable.</CardDescription></CardHeader>{experiments.length === 0 ? <CardContent><p className="text-sm text-[var(--muted-foreground)]" role="status">No Harness² evaluation records are available for this project.</p></CardContent> : experiments.map((experiment) => <Card key={String(experiment.id)}><CardHeader><CardTitle className="flex items-center gap-2">Experiment {String(experiment.id)}<Badge variant={experiment.status === "succeeded" ? "success" : "warning"}>{String(experiment.status ?? "unknown")}</Badge></CardTitle><CardDescription>Task {String(experiment.task_id)} · {String(experiment.mode)} · k={String(experiment.k)} · {String(experiment.created_at)}</CardDescription></CardHeader><CardContent><dl className="grid gap-2 text-xs sm:grid-cols-2"><div><dt className="text-[var(--muted-foreground)]">Common code base</dt><dd className="break-all font-mono">{String(experiment.base_sha ?? "unavailable")}</dd></div><div><dt className="text-[var(--muted-foreground)]">Specification hash</dt><dd className="break-all font-mono">{String(experiment.specification_hash ?? "unavailable")}</dd></div><div><dt className="text-[var(--muted-foreground)]">Policy revision</dt><dd>{String(experiment.policy_revision ?? "unavailable")}</dd></div><div><dt className="text-[var(--muted-foreground)]">Harness² revision</dt><dd className="break-all font-mono">{String(experiment.upstream_revision ?? "unavailable")}</dd></div></dl><p className="mt-3 text-xs text-[var(--muted-foreground)]">Detailed evaluator artifacts remain attached to the source experiment; no aggregate quality score is inferred here.</p></CardContent></Card>)}</Card></div>;
+  return <div className="space-y-4">
+    <Card><CardHeader><CardTitle>Evaluation center</CardTitle><CardDescription>Only immutable, source-backed evaluation manifests can produce results. Blocked adapters do not show fabricated scores.</CardDescription></CardHeader><CardContent><div className="grid gap-3 md:grid-cols-2">{adapters.map((adapter) => <section key={adapter.name} className="rounded-lg border border-[var(--border)] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">{adapter.name}</h3><Badge variant={adapter.state === "Available" ? "success" : "warning"}>{adapter.state}</Badge></div><p className="mt-2 text-sm text-[var(--muted-foreground)]">{adapter.detail}</p></section>)}</div></CardContent></Card>
+    <Card><CardHeader><CardTitle>Run a bounded Harness² comparison</CardTitle><CardDescription>Queues the existing task-level baseline, candidate probes, and composed evaluation. The server enforces the reviewed project harness policy and model budgets; no hidden benchmark data is exposed to the agent.</CardDescription></CardHeader><CardContent className="space-y-4">
+      <label className="grid gap-1 text-sm">Eligible task<select aria-label="Evaluation task" value={selectedTask} onChange={(event) => setSelectedTask(event.target.value)} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="">Select a READY task in Harness probe</option>{eligibleTasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
+      {eligibleTasks.length === 0 && <p className="text-sm text-[var(--muted-foreground)]">No task is currently READY in Harness probe. Move an eligible task into that stage after its specification is frozen.</p>}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="grid gap-1 text-sm">Comparison mode<select aria-label="Comparison mode" value={mode} onChange={(event) => setMode(event.target.value)} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="both">Parallel and sequential</option><option value="parallel">Parallel</option><option value="sequential">Sequential</option></select></label>
+        <label className="grid gap-1 text-sm">Candidate sample size<select aria-label="Candidate sample size" value={sampleSize} onChange={(event) => setSampleSize(Number(event.target.value))} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3">{[1, 2, 3].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
+        <label className="grid gap-1 text-sm">Model route alias<input aria-label="Evaluation route alias" value={routeAlias} onChange={(event) => setRouteAlias(event.target.value)} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" autoComplete="off" /></label>
+      </div>
+      {budget ? <p className="text-xs text-[var(--muted-foreground)]">Maximum authorized spend ceiling: ${Math.min(Number(budget.project_limit_usd), Number(budget.task_limit_usd)).toFixed(8)} for this task under current policy; previous usage may lower the available amount. Per-run ceiling ${budget.run_limit_usd}; max {budget.max_steps} steps and {budget.max_attempts} attempts. An expected-cost estimate is unavailable for this evaluator because rollout usage varies by task and tool execution.</p> : <p className="text-xs text-[var(--danger)]">No project model budget is configured. Paid evaluation requests will remain blocked until an administrator or operator sets finite project, task, and run limits in Model routing.</p>}
+      <Button disabled={!selectedTask || !routeAlias.trim() || busy || eligibleTasks.length === 0 || !budget} onClick={() => void startExperiment()}>{busy ? "Updating evaluation…" : "Queue bounded comparison"}</Button>
+      {notice && <p role="status" className="text-sm">{notice}</p>}
+    </CardContent></Card>
+    <Card><CardHeader><CardTitle>Repository acceptance</CardTitle><CardDescription>Review task-linked verification and readiness evidence. Task or run status is not an evaluation score.</CardDescription></CardHeader>{visibleTasks.length === 0 ? <Card><CardHeader><CardTitle>No task evidence</CardTitle><CardDescription>Create or select a task to see its specification readiness state.</CardDescription></CardHeader></Card> : visibleTasks.map((task) => <Card key={task.id}><CardHeader><CardTitle>{task.title}</CardTitle><CardDescription>{LABELS[task.stage]} · run {task.run_status}</CardDescription></CardHeader><CardContent>{task.specification_readiness_state ? <div className="flex flex-wrap items-center gap-2"><Badge variant={task.specification_readiness_state === "READY" ? "success" : "warning"}>Specification {task.specification_readiness_state}</Badge><span className="text-sm text-[var(--muted-foreground)]">Revision {task.specification_revision}</span></div> : <p className="text-sm text-[var(--muted-foreground)]">No specification readiness record is attached.</p>}</CardContent></Card>)}</Card>
+    {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+    <Card><CardHeader><CardTitle>Harness experiment records</CardTitle><CardDescription>Project-scoped experiment records include the immutable task, source, specification, policy, and Harness² revisions. Evaluation summaries report rollout delivery and reliability, not a fabricated quality score.</CardDescription></CardHeader>{experiments.length === 0 ? <CardContent><p className="text-sm text-[var(--muted-foreground)]" role="status">No Harness² evaluation records are available for this project.</p></CardContent> : experiments.map((experiment) => {
+      const rows = probeRows.filter((row) => row.experiment_id === experiment.id);
+      const delivered = rows.filter((row) => row.delivered === true).length;
+      const interval = wilsonInterval(delivered, rows.length);
+      const durations = rows.map((row) => row.wall_ms).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+      const knownCosts = rows.map((row) => row.cost_usd).filter((value): value is string => typeof value === "string" && Number.isFinite(Number(value)));
+      const usage = experiment.result && typeof experiment.result === "object" ? (experiment.result as Record<string, unknown>).adaptation_usage : null;
+      const usageRecord = usage && typeof usage === "object" ? usage as Record<string, unknown> : null;
+      const totalCost = rows.length > 0 && knownCosts.length === rows.length && usageRecord?.usage_known === true && typeof usageRecord.cost_usd === "string"
+        ? knownCosts.reduce((sum, value) => sum + Number(value), Number(usageRecord.cost_usd))
+        : null;
+      return <Card key={String(experiment.id)}><CardHeader><CardTitle className="flex items-center gap-2">Experiment {String(experiment.id)}<Badge variant={experiment.status === "succeeded" ? "success" : "warning"}>{String(experiment.status ?? "unknown")}</Badge></CardTitle><CardDescription>Task {String(experiment.task_id)} · {String(experiment.mode)} · k={String(experiment.k)} · {String(experiment.created_at)}</CardDescription></CardHeader><CardContent>
+        <dl className="grid gap-2 text-xs sm:grid-cols-2"><div><dt className="text-[var(--muted-foreground)]">Common code base</dt><dd className="break-all font-mono">{String(experiment.base_sha ?? "unavailable")}</dd></div><div><dt className="text-[var(--muted-foreground)]">Specification hash</dt><dd className="break-all font-mono">{String(experiment.specification_hash ?? "unavailable")}</dd></div><div><dt className="text-[var(--muted-foreground)]">Policy revision</dt><dd>{String(experiment.policy_revision ?? "unavailable")}</dd></div><div><dt className="text-[var(--muted-foreground)]">Harness² revision</dt><dd className="break-all font-mono">{String(experiment.upstream_revision ?? "unavailable")}</dd></div></dl>
+        <section aria-label={`Evaluation summary ${String(experiment.id)}`} className="mt-3 rounded-lg border border-[var(--border)] p-3"><h3 className="text-sm font-medium">Rollout summary</h3><p className="mt-1 text-xs">Sample size {rows.length} · failed rollouts {rows.filter((row) => row.status === "failed").length} · delivery {rows.length ? `${delivered}/${rows.length}` : "unavailable"}{interval ? ` · 95% Wilson interval ${(interval[0] * 100).toFixed(1)}–${(interval[1] * 100).toFixed(1)}%` : ""}</p><p className="mt-1 text-xs">Latency p50/p95 {percentile(durations, 0.5) ?? "unknown"}/{percentile(durations, 0.95) ?? "unknown"} ms · all-in recorded cost {totalCost === null ? "unknown" : `$${totalCost.toFixed(8)}`}</p><p className="mt-1 text-xs">Matched comparison {String((experiment.result as Record<string, unknown> | undefined)?.comparison_integrity && ((experiment.result as Record<string, unknown>).comparison_integrity as Record<string, unknown>).status || "unavailable")} · holdout {String((experiment.result as Record<string, unknown> | undefined)?.holdout_evaluation && (((experiment.result as Record<string, unknown>).holdout_evaluation as Record<string, unknown>).status) || "unavailable")}</p></section>
+        {["queued", "running"].includes(String(experiment.status)) && <Button size="sm" variant="outline" className="mt-3" disabled={busy} onClick={() => void cancelExperiment(experiment)}>Cancel evaluation</Button>}{["failed", "blocked"].includes(String(experiment.status)) && <Button size="sm" variant="outline" className="mt-3" disabled={busy} onClick={() => void resumeExperiment(experiment)}>Resume same manifest</Button>}<p className="mt-3 text-xs text-[var(--muted-foreground)]">Detailed evaluator artifacts remain attached to the source experiment. Delivery rate is not an agent quality score.</p>
+      </CardContent></Card>;
+    })}</Card>
+  </div>;
 }
 
 function RoutingView({ projectId }: { projectId: string }) {

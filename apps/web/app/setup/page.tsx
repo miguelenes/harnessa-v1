@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from "@harnessa/ui-react";
 import type { components } from "@harnessa/contracts";
@@ -11,7 +11,14 @@ type Project = components["schemas"]["ProjectRead"];
 type Identity = components["schemas"]["Identity"];
 type ModelDoctor = components["schemas"]["ModelDoctorRead"];
 type GitHubStatus = components["schemas"]["GitHubConnectionStatusRead"];
+type ModelBudget = components["schemas"]["ModelBudgetPolicyRead"];
 type Check = { state: "ready" | "blocked" | "unavailable"; detail: string };
+type BudgetForm = Pick<ModelBudget, "project_limit_usd" | "task_limit_usd" | "run_limit_usd" | "project_token_limit" | "task_token_limit" | "run_token_limit" | "max_steps" | "max_wall_seconds" | "max_output_tokens" | "max_attempts">;
+const EMPTY_BUDGET: BudgetForm = {
+  project_limit_usd: "", task_limit_usd: "", run_limit_usd: "",
+  project_token_limit: 0, task_token_limit: 0, run_token_limit: 0,
+  max_steps: 0, max_wall_seconds: 0, max_output_tokens: 0, max_attempts: 0,
+};
 
 export default function SetupPage() {
   const router = useRouter();
@@ -19,6 +26,9 @@ export default function SetupPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState("");
   const [repositoryCount, setRepositoryCount] = useState<{ projectId: string; count: number } | null>(null);
+  const [budget, setBudget] = useState<ModelBudget | null>(null);
+  const [budgetForm, setBudgetForm] = useState<BudgetForm>(EMPTY_BUDGET);
+  const [budgetState, setBudgetState] = useState("");
   const [modelDoctor, setModelDoctor] = useState<ModelDoctor | null>(null);
   const [github, setGithub] = useState<GitHubStatus | null>(null);
   const [runtime, setRuntime] = useState<Check>({ state: "unavailable", detail: "Checking runtime readiness…" });
@@ -73,6 +83,27 @@ export default function SetupPage() {
     return () => { mounted = false; };
   }, [selectedProject]);
 
+  useEffect(() => {
+    if (!selectedProject) return;
+    let mounted = true;
+    void fetch(`${API}/projects/${selectedProject}/models/budget`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error("Project budget policy is unavailable.");
+        return await response.json() as ModelBudget;
+      })
+      .then((value) => {
+        if (!mounted) return;
+        setBudget(value);
+        if (value) {
+          const { project_limit_usd, task_limit_usd, run_limit_usd, project_token_limit, task_token_limit, run_token_limit, max_steps, max_wall_seconds, max_output_tokens, max_attempts } = value;
+          setBudgetForm({ project_limit_usd, task_limit_usd, run_limit_usd, project_token_limit, task_token_limit, run_token_limit, max_steps, max_wall_seconds, max_output_tokens, max_attempts });
+        } else setBudgetForm(EMPTY_BUDGET);
+      })
+      .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "Project budget policy is unavailable."); });
+    return () => { mounted = false; };
+  }, [selectedProject]);
+
   async function verifyRoute() {
     if (!selectedProject || !authorizePaid || !alias.trim()) return;
     setProbeState("Sending the bounded request through the project budget policy…");
@@ -94,6 +125,34 @@ export default function SetupPage() {
     }
   }
 
+  async function saveBudget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProject || !budgetForm.project_limit_usd || !budgetForm.task_limit_usd || !budgetForm.run_limit_usd) return;
+    setBudgetState("Saving the finite project model policy…");
+    setError("");
+    try {
+      const response = await fetch(`${API}/projects/${selectedProject}/models/budget`, {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+        body: JSON.stringify({
+          ...budgetForm,
+          project_limit_usd: budgetForm.project_limit_usd,
+          task_limit_usd: budgetForm.task_limit_usd,
+          run_limit_usd: budgetForm.run_limit_usd,
+        }),
+      });
+      if (!response.ok) throw new Error(response.status === 403
+        ? "Only a project administrator or operator can change budget policy."
+        : `Project budget policy could not be saved (${response.status}).`);
+      const saved = await response.json() as ModelBudget;
+      setBudget(saved);
+      setBudgetState("Project, task, and run limits saved. The same policy governs both primary and probe requests.");
+    } catch (cause) {
+      setBudgetState("");
+      setError(cause instanceof Error ? cause.message : "Project budget policy could not be saved.");
+    }
+  }
+
   const identityCheck: Check = identity
     ? { state: "ready", detail: `${identity.email} · ${identity.role}` }
     : { state: "unavailable", detail: "Administrator identity could not be verified." };
@@ -103,8 +162,10 @@ export default function SetupPage() {
     : currentRepositoryCount > 0
       ? { state: "ready", detail: `${currentRepositoryCount} repository grant${currentRepositoryCount === 1 ? "" : "s"} configured for the selected project.` }
       : { state: "blocked", detail: "No repository grant is configured for the selected project." };
-  const routeCheck: Check = modelDoctor?.status === "ready"
-    ? { state: "ready", detail: `${modelDoctor.configured_aliases} alias(es), ${modelDoctor.pools.length} pool(s), LiteLLM process ready. Provider credentials still require an authorized live probe.` }
+  const routeCheck: Check = modelDoctor?.status === "ready" && modelDoctor.execution_adapter_configured && modelDoctor.execution_model_route_ready
+    ? { state: "ready", detail: `${modelDoctor.execution_adapter} · ${modelDoctor.execution_agent_image ?? "agent image unavailable"} · ${modelDoctor.configured_aliases} alias(es), ${modelDoctor.pools.length} pools, LiteLLM process ready. Provider credentials still require an authorized live probe.` }
+    : modelDoctor?.status === "ready"
+      ? { state: "blocked", detail: `${modelDoctor.execution_adapter_configured ? modelDoctor.execution_adapter : "No execution adapter configured"}; enable the pinned ACP/OpenCode runner and Harnessa model broker in the deployment before paid agent work. ${modelDoctor.configured_aliases} alias(es), ${modelDoctor.pools.length} pools. Provider credentials still require an authorized live probe.` }
     : modelDoctor
       ? { state: "blocked", detail: (modelDoctor.findings ?? []).join(" ") || "Model routing setup is incomplete." }
       : { state: "unavailable", detail: "Administrator model-routing status is unavailable." };
@@ -133,6 +194,19 @@ export default function SetupPage() {
         <CardContent>{href !== "/setup" && <Link className="text-sm text-[var(--primary)] underline underline-offset-4" href={href}>Open {name.toLowerCase()} settings</Link>}</CardContent>
       </Card>)}
     </section>
+    <Card className="mt-6"><CardHeader><CardTitle>Project model budget</CardTitle><CardDescription>Configure finite project, task, and run cost and token ceilings before enabling paid tasks. One shared policy currently governs both primary and probe pools.</CardDescription></CardHeader><CardContent>
+      {!selectedProject ? <p role="status" className="text-sm text-[var(--muted-foreground)]">Select or create a project before configuring its budget.</p> : <form className="space-y-4" onSubmit={(event) => void saveBudget(event)}>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {(["project_limit_usd", "task_limit_usd", "run_limit_usd"] as const).map((key) => <label key={key} className="grid gap-1 text-sm">{key.replaceAll("_", " ")}<input aria-label={key.replaceAll("_", " ")} type="number" min="0.00000001" step="0.00000001" required value={budgetForm[key]} onChange={(event) => setBudgetForm((current) => ({ ...current, [key]: event.target.value }))} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" /></label>)}
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {(["project_token_limit", "task_token_limit", "run_token_limit", "max_steps", "max_wall_seconds", "max_output_tokens", "max_attempts"] as const).map((key) => <label key={key} className="grid gap-1 text-sm">{key.replaceAll("_", " ")}<input aria-label={key.replaceAll("_", " ")} type="number" min="1" step="1" required value={budgetForm[key] || ""} onChange={(event) => setBudgetForm((current) => ({ ...current, [key]: Number(event.target.value) }))} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" /></label>)}
+        </div>
+        <Button type="submit" disabled={identity?.role !== "administrator" && identity?.role !== "operator"}>{budget ? "Save budget policy" : "Set budget policy"}</Button>
+        {budgetState && <p role="status" className="text-sm">{budgetState}</p>}
+        {budget && <p className="text-xs text-[var(--muted-foreground)]">Current ceilings: project ${budget.project_limit_usd}, task ${budget.task_limit_usd}, run ${budget.run_limit_usd}; at most {budget.max_attempts} attempts.</p>}
+      </form>}
+    </CardContent></Card>
     <Card className="mt-6"><CardHeader><CardTitle>Verify a provider route</CardTitle><CardDescription>This sends one minimal, paid request through Harnessa’s existing project, task, and run budget controls. It does not start an agent task. Provider credentials remain in LiteLLM.</CardDescription></CardHeader>
       <CardContent className="space-y-4">
         <label className="grid gap-1 text-sm">Project<select value={selectedProject} onChange={(event) => setSelectedProject(event.target.value)} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" disabled={!projects.length}><option value="">Select a project</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>

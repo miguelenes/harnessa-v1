@@ -35,3 +35,13 @@ def test_litellm_does_not_log_messages():
 
     assert config["litellm_settings"]["set_verbose"] is False
     assert config["litellm_settings"]["turn_off_message_logging"] is True
+
+
+def test_compose_passes_only_credentials_used_by_configured_routes():
+    compose_path = Path(__file__).parents[1] / "infra" / "compose.yaml"
+    compose = yaml.safe_load(compose_path.read_text())
+
+    assert set(compose["services"]["litellm"]["environment"]) == {
+        "DEEPSEEK_API_KEY",
+        "OPENROUTER_API_KEY",
+    }

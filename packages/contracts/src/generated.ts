@@ -1121,6 +1121,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/harness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Harness Overview */
+        get: operations["harness_overview_projects__project_id__harness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/tasks/{task_id}/harness-experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Harness Experiment */
+        post: operations["create_harness_experiment_projects__project_id__tasks__task_id__harness_experiments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/harness-experiments/{experiment_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Harness Experiment */
+        post: operations["cancel_harness_experiment_projects__project_id__harness_experiments__experiment_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/harness-experiments/{experiment_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Harness Experiment
+         * @description Requeue the same frozen experiment after a recoverable terminal failure.
+         */
+        post: operations["resume_harness_experiment_projects__project_id__harness_experiments__experiment_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/harness-experiences/{experience_id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote Harness Experience */
+        post: operations["promote_harness_experience_projects__project_id__harness_experiences__experience_id__promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/harness-experiences/{experience_id}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rollback Harness Experience */
+        post: operations["rollback_harness_experience_projects__project_id__harness_experiences__experience_id__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{project_id}/evidence/gateway-usage/reconcile": {
         parameters: {
             query?: never;
@@ -1566,6 +1671,57 @@ export interface components {
          * @enum {string}
          */
         EvidenceValueStatus: "known" | "unknown" | "redacted";
+        /** ExperimentCreate */
+        ExperimentCreate: {
+            /** Stable Key */
+            stable_key: string;
+            /** Mode */
+            mode: string;
+            /** K */
+            k: number;
+            /** Route Alias */
+            route_alias: string;
+        };
+        /** ExperimentRead */
+        ExperimentRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Status */
+            status: string;
+            /** Phase */
+            phase: string;
+            /** Mode */
+            mode: string;
+            /** K */
+            k: number;
+            /** Base Sha */
+            base_sha: string;
+            /** Specification Hash */
+            specification_hash: string;
+            /** Specification Revision */
+            specification_revision: number;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Upstream Revision */
+            upstream_revision: string;
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** GatewayUsageImportBatch */
         GatewayUsageImportBatch: {
             /** Observations */
@@ -1873,6 +2029,29 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HarnessOverview */
+        HarnessOverview: {
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Policy */
+            policy: {
+                [key: string]: unknown;
+            };
+            /** Experiments */
+            experiments: {
+                [key: string]: unknown;
+            }[];
+            /** Probes */
+            probes: {
+                [key: string]: unknown;
+            }[];
+            /** Experiences */
+            experiences: {
+                [key: string]: unknown;
+            }[];
         };
         /** Identity */
         Identity: {
@@ -2213,6 +2392,26 @@ export interface components {
             configured_aliases: number;
             /** Pools */
             pools: string[];
+            /**
+             * Execution Adapter
+             * @default null
+             */
+            execution_adapter: string | null;
+            /**
+             * Execution Adapter Configured
+             * @default false
+             */
+            execution_adapter_configured: boolean;
+            /**
+             * Execution Agent Image
+             * @default null
+             */
+            execution_agent_image: string | null;
+            /**
+             * Execution Model Route Ready
+             * @default false
+             */
+            execution_model_route_ready: boolean;
             /**
              * Provider Credentials Checked
              * @default false
@@ -2661,6 +2860,15 @@ export interface components {
              * Format: uuid
              */
             id: string;
+        };
+        /** PromotionRequest */
+        PromotionRequest: {
+            /** Stable Key */
+            stable_key: string;
+            /** Candidate Digest */
+            candidate_digest: string;
+            /** Rationale */
+            rationale: string;
         };
         /** RecoveryRequest */
         RecoveryRequest: {
@@ -6351,6 +6559,213 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitHubWebhookReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    harness_overview_projects__project_id__harness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessOverview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_harness_experiment_projects__project_id__tasks__task_id__harness_experiments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExperimentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExperimentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_harness_experiment_projects__project_id__harness_experiments__experiment_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                experiment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExperimentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_harness_experiment_projects__project_id__harness_experiments__experiment_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                experiment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExperimentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_harness_experience_projects__project_id__harness_experiences__experience_id__promote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                experience_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromotionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_harness_experience_projects__project_id__harness_experiences__experience_id__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                experience_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromotionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
