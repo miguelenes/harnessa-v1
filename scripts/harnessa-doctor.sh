@@ -22,15 +22,15 @@ check "Redis service" "${compose[@]}" exec -T redis redis-cli ping
 check "API readiness" curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${API_PORT:-8010}/health/ready"
 check "LiteLLM readiness" "${compose[@]}" exec -T litellm python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/readiness', timeout=2)"
 
-if [[ -n "${BOOTSTRAP_TOKEN:-}" && -n "${SECRET_KEY:-}" ]]; then
+if "${compose[@]}" exec -T api python -c 'import os,sys; sys.exit(0 if os.environ.get("BOOTSTRAP_TOKEN") and os.environ.get("SECRET_KEY") else 1)' >/dev/null 2>&1; then
   printf 'PASS bootstrap and signing secrets are present (values hidden)\n'
 else
-  printf 'WARN bootstrap or signing secret is unset; do not use this configuration for production\n'
+  printf 'WARN bootstrap or signing secret is missing from the API container; do not use this configuration for production\n'
 fi
-if [[ "${COOKIE_SECURE:-false}" == "true" ]]; then
+if "${compose[@]}" exec -T api python -c 'import os,sys; sys.exit(0 if os.environ.get("COOKIE_SECURE", "false").lower() == "true" else 1)' >/dev/null 2>&1; then
   printf 'PASS secure session cookies enabled\n'
 else
-  printf 'WARN secure session cookies are disabled; configure TLS before production use\n'
+  printf 'WARN secure session cookies are disabled or unavailable; configure TLS before production use\n'
 fi
 
 exit "$failed"
