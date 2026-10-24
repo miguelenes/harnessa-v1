@@ -15,6 +15,16 @@ The Compose file now stores content-addressed artifacts in the named `artifacts`
 5. Configure primary and probe pools, route capability requirements, and project/task/run limits before enabling model-backed tasks. These controls remain authoritative even when the host itself has no spend ceiling.
 6. Enable only a tested trusted runner with rootless Podman and a pinned image. Do not pass provider secrets or evaluator holdout data to the runner.
 
+## M13 live acceptance prerequisites
+
+Complete these steps before a provider-backed agent run or external GitHub effect:
+
+1. If a provider key may have been exposed, revoke it in that provider's account before replacing it. Store the replacement only in the operator's secret source (for the local setup, `~/.zshrc`), start a fresh zsh login environment, and recreate the LiteLLM service so it receives the new environment. Never paste a key into chat, a command argument, a report, or Harnessa's database. The doctor checks presence only; it does not send a provider request.
+2. Use one dedicated disposable Harnessa project for all authorized remaining-milestone model traffic. Configure finite project, task, and run limits for both interactive and probe pools. The two project-level USD ceilings are enforced separately; set their combined maximum to **no more than USD 18** (for example, USD 9 per pool) and lower it if the current EUR/USD rate makes USD 18 exceed the €20 aggregate authorization. Include provider, evaluator, and judge charges, and count the previously recorded USD 0.0000228 route checks. Keep task and run limits below those project limits. Check billed, estimated, reserved, and unknown usage before authorizing each live scenario. Do not start another project to reset the ceiling.
+3. Create the GitHub App with only the permissions and webhook subscriptions in [the GitHub App integration guide](integrations/github-app.md). Set repository selection to **Only select repositories**, install it only on `miguelenes/harnessa-m13-acceptance-20261024`, register and refresh the installation in Harnessa, and explicitly opt in that single repository. Confirm the displayed account, repository ID, granted permissions, and required checks before allowing an issue or pull-request effect.
+4. For browser acceptance, enable Chrome remote debugging at `chrome://inspect/#remote-debugging`. Verify that Browser Harness reports a live browser connection before using the logged-in session. Do not run the browser scenarios while its CDP endpoint is unavailable.
+5. Run the bounded real-agent, budget-contention, webhook-replay, cancellation/reconnect, and archive scenarios against that disposable project and repository. Retain redacted request IDs, task/run IDs, GitHub effect IDs, costs, and exact revisions in the acceptance report; never retain keys or hidden grader material.
+
 ## Readiness and routine operation
 
 `GET /health/live` checks process liveness. `GET /health/ready` checks application dependencies. The Compose healthchecks gate API and worker startup on PostgreSQL, Redis, and LiteLLM process readiness. A deployment doctor result does not replace an authorized model-route probe or a GitHub installation check.
