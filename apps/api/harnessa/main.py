@@ -415,9 +415,18 @@ async def trace_requests(request: Request, call_next: RequestResponseEndpoint) -
                 {"traceparent": f"00-{legacy_trace_id.lower()}-{uuid4().hex[:16]}-01"}
             )
     with tracer_for(__name__).start_as_current_span(
-        f"HTTP {request.method}", context=context, kind=SpanKind.SERVER
+        f"HTTP {request.method}",
+        context=context,
+        kind=SpanKind.SERVER,
+        record_exception=False,
+        set_status_on_exception=False,
     ) as span:
-        response = await _security_headers(request, call_next)
+        try:
+            response = await _security_headers(request, call_next)
+        except Exception as exc:
+            span.set_status(Status(StatusCode.ERROR))
+            span.set_attribute("error.type", type(exc).__name__)
+            raise
         route = getattr(request.scope.get("route"), "path", "/unmatched")
         span.set_attribute("http.route", route)
         span.set_attribute("http.response.status_code", response.status_code)

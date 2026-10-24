@@ -48,6 +48,7 @@ from harnessa.services.lifecycle import _record_event, record_system_transition
 from harnessa.services.model_gateway import budget_policy_digest
 from harnessa.services.specifications import specification_workspace_manager
 from harnessa.tracing import trace_context_from_parent, tracer_for
+from opentelemetry.trace import Status, StatusCode
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -1308,8 +1309,15 @@ class Scheduler:
                 "harnessa.run.attempt": job.attempt,
                 "harnessa.execution.adapter": adapter.name,
             },
-        ):
-            await self._execute_claimed_run(job, adapter)
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            try:
+                await self._execute_claimed_run(job, adapter)
+            except Exception as exc:
+                span.set_status(Status(StatusCode.ERROR))
+                span.set_attribute("error.type", type(exc).__name__)
+                raise
         return True
 
     async def _execute_claimed_run(self, job: ClaimedRun, adapter: ExecutionAdapter) -> None:

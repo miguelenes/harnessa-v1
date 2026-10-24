@@ -101,7 +101,11 @@ def traced_async(
         async def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
             safe_attributes = attributes(kwargs) if attributes is not None else {}
             with tracer_for(function.__module__).start_as_current_span(
-                name, kind=kind, attributes=safe_attributes
+                name,
+                kind=kind,
+                attributes=safe_attributes,
+                record_exception=False,
+                set_status_on_exception=False,
             ) as span:
                 try:
                     return await function(*args, **kwargs)
