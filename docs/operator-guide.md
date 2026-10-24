@@ -21,6 +21,12 @@ The Compose file now stores content-addressed artifacts in the named `artifacts`
 
 Use the workspace Events, Routing and GitHub views for durable event connectivity, ledger/budget state, and webhook/effect status. A browser reconnect replays durable events and does not start/cancel work. Inspect stale runs and dead letters using project-authorized APIs. Dead-letter replay requires an authorized identity, an operator reason, and an idempotency key; it is audited. Reconcile unknown external effects before any manual retry.
 
+## Execution and evaluation controls
+
+In Setup & Health, choose a project execution adapter and save separate interactive/primary and probe project/task/run USD and token ceilings. `deployment-default` uses the worker's configured runner; `acp-opencode` requires `ACP_EXECUTION_ENABLED` and the matching repository source mapping; `disabled` prevents dispatch. The readiness detail reports when the selected runner is not available.
+
+The evaluation center first dry-runs a bounded Harness² suite. It freezes at most 20 READY probe tasks, route alias, specification/base/policy revisions and the Harness² revision, and reports a conservative full-context estimate. It counts both parallel and sequential lanes when mode is `both`, plus configured model steps/retries and the Harness² policy multiplier. The estimate must fit each task's remaining probe ceiling, the run ceiling and remaining project ceiling. Create then records one immutable group and idempotent child experiments; cancellation is checkpointed by child workers, and resume is limited to failed children with unchanged frozen inputs. Review missing samples and the delivery Wilson interval alongside known cost and latency; no external benchmark result is implied.
+
 API request logs are structured JSON and carry validated `X-Request-ID` and `X-Trace-ID` correlation values. The API also keeps process-local HTTP request counters and latency histograms by method, route template, and status. To scrape them, configure a high-entropy `METRICS_TOKEN` in the API service's secret environment and request `/internal/metrics` with `Authorization: Bearer <token>`. Without a non-empty token the endpoint stays hidden. These metrics do not yet cover queue age, stale leases, dead letters, provider reconciliation, external effects, or artifact growth, and Harnessa does not yet export OpenTelemetry spans. Keep the endpoint private to the monitoring network. Do not expose raw prompts, completions, webhook bodies, provider credentials, or hidden grader content in logs.
 
 ## Backup

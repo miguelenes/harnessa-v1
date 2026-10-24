@@ -139,6 +139,27 @@ class Scheduler:
                 selected: tuple[Task, Project] | None = None
                 readiness_invalidated = False
                 for task, project in candidates:
+                    adapter_unavailable = (
+                        project.execution_adapter == "disabled"
+                        or not settings.acp_execution_enabled
+                    )
+                    if adapter_unavailable:
+                        reason = (
+                            "execution_adapter_disabled"
+                            if project.execution_adapter == "disabled"
+                            else "execution_adapter_unavailable"
+                        )
+                        if task.blocked_reason != reason:
+                            task.blocked_reason = reason
+                            await _record_event(
+                                db,
+                                task=task,
+                                event_type="task.dispatch_blocked",
+                                actor_id=None,
+                                payload={"reason": reason, "adapter": project.execution_adapter},
+                            )
+                            readiness_invalidated = True
+                        continue
                     interview = await db.scalar(
                         select(SpecificationInterview)
                         .where(SpecificationInterview.task_id == task.id)
@@ -194,6 +215,7 @@ class Scheduler:
                         project_counter = await db.scalar(
                             select(ModelBudgetCounter).where(
                                 ModelBudgetCounter.project_id == project.id,
+                                ModelBudgetCounter.workload == "interactive",
                                 ModelBudgetCounter.scope == "project",
                                 ModelBudgetCounter.scope_id == project.id,
                             )
@@ -201,6 +223,7 @@ class Scheduler:
                         task_counter = await db.scalar(
                             select(ModelBudgetCounter).where(
                                 ModelBudgetCounter.project_id == project.id,
+                                ModelBudgetCounter.workload == "interactive",
                                 ModelBudgetCounter.task_id == task.id,
                                 ModelBudgetCounter.scope == "task",
                                 ModelBudgetCounter.scope_id == task.id,

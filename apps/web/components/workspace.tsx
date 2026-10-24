@@ -628,6 +628,9 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
   const [routeAlias, setRouteAlias] = useState("harnessa-deepseek-flash");
   const [mode, setMode] = useState("both");
   const [sampleSize, setSampleSize] = useState(1);
+  const [costEstimate, setCostEstimate] = useState<{ cost_estimate_usd: string; estimate_kind: string; manifest_digest: string } | null>(null);
+  const [costEstimateInputs, setCostEstimateInputs] = useState<string | null>(null);
+  const [evaluationRuns, setEvaluationRuns] = useState<Record<string, unknown>[]>([]);
   const [busy, setBusy] = useState(false);
   const [budget, setBudget] = useState<components["schemas"]["ModelBudgetPolicyRead"] | null>(null);
   const [notice, setNotice] = useState("");
@@ -635,6 +638,7 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
   const eligibleTasks = visibleTasks.filter((task) =>
     task.stage === "HARNESS_PROBE" && task.specification_readiness_state === "READY",
   );
+  const evaluationInputs = JSON.stringify([selectedTask, routeAlias.trim(), mode, sampleSize]);
   useEffect(() => {
     let mounted = true;
     void fetch(`${API}/projects/${projectId}/harness`, { credentials: "include", cache: "no-store" })
@@ -647,6 +651,30 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
         }
       })
       .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "Evaluation evidence is unavailable."); });
+    return () => { mounted = false; };
+  }, [projectId]);
+  useEffect(() => {
+    if (!evaluationRuns.some((run) => run.status === "queued" || run.status === "running")) return;
+    const timer = window.setInterval(() => {
+      void fetch(`${API}/projects/${projectId}/evaluations`, { credentials: "include", cache: "no-store" })
+        .then(async (response) => response.ok ? await response.json() as { runs?: unknown } : null)
+        .then((value) => {
+          if (value && Array.isArray(value.runs)) setEvaluationRuns(value.runs.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null));
+        });
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [evaluationRuns, projectId]);
+  useEffect(() => {
+    let mounted = true;
+    void fetch(`${API}/projects/${projectId}/evaluations`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Grouped evaluation runs are unavailable.");
+        return await response.json() as { runs?: unknown };
+      })
+      .then((value) => {
+        if (mounted) setEvaluationRuns(Array.isArray(value.runs) ? value.runs.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+      })
+      .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "Grouped evaluation runs are unavailable."); });
     return () => { mounted = false; };
   }, [projectId]);
   useEffect(() => {
@@ -667,14 +695,46 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
     const value = await response.json() as { experiments?: unknown; probes?: unknown };
     setExperiments(Array.isArray(value.experiments) ? value.experiments.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
     setProbeRows(Array.isArray(value.probes) ? value.probes.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+    const runResponse = await fetch(`${API}/projects/${projectId}/evaluations`, { credentials: "include", cache: "no-store" });
+    if (runResponse.ok) {
+      const runValue = await runResponse.json() as { runs?: unknown };
+      setEvaluationRuns(Array.isArray(runValue.runs) ? runValue.runs.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+    }
   }
-  async function startExperiment() {
+  async function previewEvaluationCost() {
     if (!selectedTask || !routeAlias.trim()) return;
     setBusy(true);
     setError("");
     setNotice("");
+    const inputsAtRequest = JSON.stringify([selectedTask, routeAlias.trim(), mode, sampleSize]);
     try {
-      const response = await fetch(`${API}/projects/${projectId}/tasks/${selectedTask}/harness-experiments`, {
+      const response = await fetch(`${API}/projects/${projectId}/evaluations/dry-run`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+        body: JSON.stringify({ stable_key: `preview-${crypto.randomUUID()}`, suite: "harness2-local", task_ids: [selectedTask], mode, k: sampleSize, route_alias: routeAlias.trim() }),
+      });
+      if (!response.ok) throw new Error(response.status === 409
+        ? "Configure the selected probe route and a finite project/run budget before estimating."
+        : `Evaluation estimate is unavailable (${response.status}).`);
+      const result = await response.json() as { cost_estimate_usd: string; estimate_kind: string; manifest_digest: string };
+      setCostEstimate(result);
+      setCostEstimateInputs(inputsAtRequest);
+      setNotice(`Conservative maximum estimate: $${result.cost_estimate_usd} (${result.estimate_kind}).`);
+    } catch (cause) {
+      setCostEstimate(null);
+      setCostEstimateInputs(null);
+      setError(cause instanceof Error ? cause.message : "Evaluation estimate is unavailable.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function startExperiment() {
+    if (!selectedTask || !routeAlias.trim() || !costEstimate) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/evaluations`, {
         method: "POST",
         credentials: "include",
         headers: {
@@ -683,6 +743,8 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
         },
         body: JSON.stringify({
           stable_key: crypto.randomUUID(),
+          suite: "harness2-local",
+          task_ids: [selectedTask],
           mode,
           k: sampleSize,
           route_alias: routeAlias.trim(),
@@ -693,12 +755,35 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
           ? "The task must have a frozen READY specification and be in Harness probe."
           : response.status === 403
             ? "Only a project operator can queue a Harness² evaluation."
-            : `The bounded evaluation could not be queued (${response.status}).`);
+          : `The bounded evaluation could not be queued (${response.status}).`);
       }
-      setNotice("Evaluation queued with the project’s fixed Harness² limits. The result will retain its frozen source and policy revisions.");
+      const run = await response.json() as Record<string, unknown>;
+      setNotice(`Immutable evaluation ${String(run.id)} queued · manifest ${String(run.manifest_digest)} · estimated ceiling $${String((run.manifest as Record<string, unknown>)?.estimate_usd ?? costEstimate.cost_estimate_usd)}.`);
+      setCostEstimate(null);
+      setCostEstimateInputs(null);
       await refreshExperiments();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The bounded evaluation could not be queued.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function updateEvaluationRun(run: Record<string, unknown>, action: "cancel" | "resume") {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`${API}/projects/${projectId}/evaluations/${String(run.id)}/${action}`, {
+        method: "POST", credentials: "include",
+        headers: { "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+      });
+      if (!response.ok) throw new Error(response.status === 409
+        ? "The evaluation state or frozen inputs no longer allow this operation."
+        : `Evaluation ${action} failed (${response.status}).`);
+      setNotice(action === "cancel" ? "Evaluation cancellation was recorded across queued and active children." : "Failed children were requeued against the same frozen manifest.");
+      await refreshExperiments();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : `Evaluation ${action} failed.`);
     } finally {
       setBusy(false);
     }
@@ -750,16 +835,21 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
   ];
   return <div className="space-y-4">
     <Card><CardHeader><CardTitle>Evaluation center</CardTitle><CardDescription>Only immutable, source-backed evaluation manifests can produce results. Blocked adapters do not show fabricated scores.</CardDescription></CardHeader><CardContent><div className="grid gap-3 md:grid-cols-2">{adapters.map((adapter) => <section key={adapter.name} className="rounded-lg border border-[var(--border)] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">{adapter.name}</h3><Badge variant={adapter.state === "Available" ? "success" : "warning"}>{adapter.state}</Badge></div><p className="mt-2 text-sm text-[var(--muted-foreground)]">{adapter.detail}</p></section>)}</div></CardContent></Card>
+    <Card><CardHeader><CardTitle>Grouped evaluation manifests</CardTitle><CardDescription>Each run pins its suite, task revisions, route, policy revision, maximum subset size, and content digest. Cancellation and resume operate only on children of that unchanged manifest.</CardDescription></CardHeader>{evaluationRuns.length === 0 ? <CardContent><p className="text-sm text-[var(--muted-foreground)]">No grouped evaluation runs are recorded.</p></CardContent> : evaluationRuns.map((run) => {
+      const interval = Array.isArray(run.delivery_wilson_95) ? run.delivery_wilson_95 as number[] : null;
+      return <Card key={String(run.id)}><CardHeader><CardTitle className="flex flex-wrap items-center gap-2">Evaluation {String(run.id)}<Badge variant={run.status === "succeeded" ? "success" : "warning"}>{String(run.status)}</Badge></CardTitle><CardDescription>Manifest {String(run.manifest_digest)} · {String(run.completed_samples)}/{String(run.sample_size)} rollout records · {String(run.missing_samples)} missing · {String(run.failed_samples)} failed · {String(run.unknown_samples)} usage/outcome unknown · cost {run.cost_usd === null ? "unknown" : `$${String(run.cost_usd)}`}</CardDescription></CardHeader><CardContent className="space-y-2"><p className="text-xs">Delivery {String(run.delivery_successes)}/{String(run.delivery_samples)}{interval ? ` · 95% Wilson interval ${(interval[0] * 100).toFixed(1)}–${(interval[1] * 100).toFixed(1)}%` : " · uncertainty unavailable"} · latency p50/p95 {String(run.p50_latency_ms ?? "unknown")}/{String(run.p95_latency_ms ?? "unknown")} ms</p><div className="flex flex-wrap gap-2">{["queued", "running"].includes(String(run.status)) && <Button size="sm" variant="outline" disabled={busy} onClick={() => void updateEvaluationRun(run, "cancel")}>Cancel grouped evaluation</Button>}{["failed", "blocked"].includes(String(run.status)) && <Button size="sm" variant="outline" disabled={busy} onClick={() => void updateEvaluationRun(run, "resume")}>Resume failed children</Button>}</div></CardContent></Card>;
+    })}</Card>
     <Card><CardHeader><CardTitle>Run a bounded Harness² comparison</CardTitle><CardDescription>Queues the existing task-level baseline, candidate probes, and composed evaluation. The server enforces the reviewed project harness policy and model budgets; no hidden benchmark data is exposed to the agent.</CardDescription></CardHeader><CardContent className="space-y-4">
-      <label className="grid gap-1 text-sm">Eligible task<select aria-label="Evaluation task" value={selectedTask} onChange={(event) => setSelectedTask(event.target.value)} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="">Select a READY task in Harness probe</option>{eligibleTasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
+      <label className="grid gap-1 text-sm">Eligible task<select aria-label="Evaluation task" value={selectedTask} onChange={(event) => { setSelectedTask(event.target.value); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="">Select a READY task in Harness probe</option>{eligibleTasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
       {eligibleTasks.length === 0 && <p className="text-sm text-[var(--muted-foreground)]">No task is currently READY in Harness probe. Move an eligible task into that stage after its specification is frozen.</p>}
       <div className="grid gap-3 sm:grid-cols-3">
-        <label className="grid gap-1 text-sm">Comparison mode<select aria-label="Comparison mode" value={mode} onChange={(event) => setMode(event.target.value)} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="both">Parallel and sequential</option><option value="parallel">Parallel</option><option value="sequential">Sequential</option></select></label>
-        <label className="grid gap-1 text-sm">Candidate sample size<select aria-label="Candidate sample size" value={sampleSize} onChange={(event) => setSampleSize(Number(event.target.value))} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3">{[1, 2, 3].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
-        <label className="grid gap-1 text-sm">Model route alias<input aria-label="Evaluation route alias" value={routeAlias} onChange={(event) => setRouteAlias(event.target.value)} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" autoComplete="off" /></label>
+        <label className="grid gap-1 text-sm">Comparison mode<select aria-label="Comparison mode" value={mode} onChange={(event) => { setMode(event.target.value); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="both">Parallel and sequential</option><option value="parallel">Parallel</option><option value="sequential">Sequential</option></select></label>
+        <label className="grid gap-1 text-sm">Candidate sample size<select aria-label="Candidate sample size" value={sampleSize} onChange={(event) => { setSampleSize(Number(event.target.value)); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3">{[1, 2, 3].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
+        <label className="grid gap-1 text-sm">Model route alias<input aria-label="Evaluation route alias" value={routeAlias} onChange={(event) => { setRouteAlias(event.target.value); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" autoComplete="off" /></label>
       </div>
-      {budget ? <p className="text-xs text-[var(--muted-foreground)]">Maximum authorized spend ceiling: ${Math.min(Number(budget.project_limit_usd), Number(budget.task_limit_usd)).toFixed(8)} for this task under current policy; previous usage may lower the available amount. Per-run ceiling ${budget.run_limit_usd}; max {budget.max_steps} steps and {budget.max_attempts} attempts. An expected-cost estimate is unavailable for this evaluator because rollout usage varies by task and tool execution.</p> : <p className="text-xs text-[var(--danger)]">No project model budget is configured. Paid evaluation requests will remain blocked until an administrator or operator sets finite project, task, and run limits in Model routing.</p>}
-      <Button disabled={!selectedTask || !routeAlias.trim() || busy || eligibleTasks.length === 0 || !budget} onClick={() => void startExperiment()}>{busy ? "Updating evaluation…" : "Queue bounded comparison"}</Button>
+      {budget ? <p className="text-xs text-[var(--muted-foreground)]">Each request is reserved against project/task/run cost and token ceilings. The estimate assumes the full route context window and configured retry bound; actual usage may be lower. Prior usage can reduce remaining availability.</p> : <p className="text-xs text-[var(--danger)]">No project model budget is configured. Evaluation remains blocked until finite project, task, and run limits are set in Model routing.</p>}
+      {costEstimate && costEstimateInputs === evaluationInputs && <p role="status" className="text-sm">Conservative evaluation estimate ${costEstimate.cost_estimate_usd} · {costEstimate.estimate_kind} · manifest {costEstimate.manifest_digest.slice(0, 12)}</p>}
+      <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={!selectedTask || !routeAlias.trim() || busy || eligibleTasks.length === 0 || !budget} onClick={() => void previewEvaluationCost()}>{busy ? "Estimating…" : "Estimate evaluation cost"}</Button><Button disabled={!selectedTask || !routeAlias.trim() || busy || eligibleTasks.length === 0 || !budget || !costEstimate || costEstimateInputs !== evaluationInputs} onClick={() => void startExperiment()}>{busy ? "Updating evaluation…" : "Queue immutable evaluation"}</Button></div>
       {notice && <p role="status" className="text-sm">{notice}</p>}
     </CardContent></Card>
     <Card><CardHeader><CardTitle>Repository acceptance</CardTitle><CardDescription>Review task-linked verification and readiness evidence. Task or run status is not an evaluation score.</CardDescription></CardHeader>{visibleTasks.length === 0 ? <Card><CardHeader><CardTitle>No task evidence</CardTitle><CardDescription>Create or select a task to see its specification readiness state.</CardDescription></CardHeader></Card> : visibleTasks.map((task) => <Card key={task.id}><CardHeader><CardTitle>{task.title}</CardTitle><CardDescription>{LABELS[task.stage]} · run {task.run_status}</CardDescription></CardHeader><CardContent>{task.specification_readiness_state ? <div className="flex flex-wrap items-center gap-2"><Badge variant={task.specification_readiness_state === "READY" ? "success" : "warning"}>Specification {task.specification_readiness_state}</Badge><span className="text-sm text-[var(--muted-foreground)]">Revision {task.specification_revision}</span></div> : <p className="text-sm text-[var(--muted-foreground)]">No specification readiness record is attached.</p>}</CardContent></Card>)}</Card>

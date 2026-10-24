@@ -1226,6 +1226,113 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/evaluations/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Evaluation Catalog */
+        get: operations["evaluation_catalog_projects__project_id__evaluations_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evaluations/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Evaluation Dry Run */
+        post: operations["evaluation_dry_run_projects__project_id__evaluations_dry_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evaluations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Evaluation Runs */
+        get: operations["list_evaluation_runs_projects__project_id__evaluations_get"];
+        put?: never;
+        /** Create Evaluation Run */
+        post: operations["create_evaluation_run_projects__project_id__evaluations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evaluations/{evaluation_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Evaluation Run */
+        post: operations["cancel_evaluation_run_projects__project_id__evaluations__evaluation_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/evaluations/{evaluation_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Evaluation Run
+         * @description Resume failed children only when every frozen input and policy still matches.
+         */
+        post: operations["resume_evaluation_run_projects__project_id__evaluations__evaluation_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/execution-adapter": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Execution Adapter */
+        get: operations["get_execution_adapter_projects__project_id__execution_adapter_get"];
+        /** Set Execution Adapter */
+        put: operations["set_execution_adapter_projects__project_id__execution_adapter_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{project_id}/evidence/gateway-usage/reconcile": {
         parameters: {
             query?: never;
@@ -1483,6 +1590,87 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** EvaluationDryRun */
+        EvaluationDryRun: {
+            /** Suite */
+            suite: string;
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Manifest Digest */
+            manifest_digest: string;
+            /** Task Count */
+            task_count: number;
+            /** Cost Estimate Usd */
+            cost_estimate_usd: string;
+            /** Estimate Kind */
+            estimate_kind: string;
+            /** Within Project Policy */
+            within_project_policy: boolean;
+        };
+        /** EvaluationRunCreate */
+        EvaluationRunCreate: {
+            /** Stable Key */
+            stable_key: string;
+            /** Suite */
+            suite: string;
+            /** Task Ids */
+            task_ids: string[];
+            /** Mode */
+            mode: string;
+            /** K */
+            k: number;
+            /** Route Alias */
+            route_alias: string;
+        };
+        /** EvaluationRunRead */
+        EvaluationRunRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Stable Key */
+            stable_key: string;
+            /** Status */
+            status: string;
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Manifest Digest */
+            manifest_digest: string;
+            /** Sample Size */
+            sample_size: number;
+            /** Completed Samples */
+            completed_samples: number;
+            /** Failed Samples */
+            failed_samples: number;
+            /** Cancelled Samples */
+            cancelled_samples: number;
+            /** Missing Samples */
+            missing_samples: number;
+            /** Delivery Samples */
+            delivery_samples: number;
+            /** Delivery Successes */
+            delivery_successes: number;
+            /** Delivery Wilson 95 */
+            delivery_wilson_95: number[] | null;
+            /** Cost Usd */
+            cost_usd: string | null;
+            /** P50 Latency Ms */
+            p50_latency_ms: number | null;
+            /** P95 Latency Ms */
+            p95_latency_ms: number | null;
+            /** Experiment Ids */
+            experiment_ids: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** EventEnvelope */
         EventEnvelope: {
             /**
@@ -1671,6 +1859,33 @@ export interface components {
          * @enum {string}
          */
         EvidenceValueStatus: "known" | "unknown" | "redacted";
+        /** ExecutionAdapterRead */
+        ExecutionAdapterRead: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Adapter
+             * @enum {string}
+             */
+            adapter: "deployment-default" | "acp-opencode" | "disabled";
+            /** Available Adapters */
+            available_adapters: ("deployment-default" | "acp-opencode" | "disabled")[];
+            /** Configured */
+            configured: boolean;
+            /** Detail */
+            detail: string;
+        };
+        /** ExecutionAdapterWrite */
+        ExecutionAdapterWrite: {
+            /**
+             * Adapter
+             * @enum {string}
+             */
+            adapter: "deployment-default" | "acp-opencode" | "disabled";
+        };
         /** ExperimentCreate */
         ExperimentCreate: {
             /** Stable Key */
@@ -2226,12 +2441,24 @@ export interface components {
             task_limit_usd: number | string;
             /** Run Limit Usd */
             run_limit_usd: number | string;
+            /** Probe Project Limit Usd */
+            probe_project_limit_usd: number | string;
+            /** Probe Task Limit Usd */
+            probe_task_limit_usd: number | string;
+            /** Probe Run Limit Usd */
+            probe_run_limit_usd: number | string;
             /** Project Token Limit */
             project_token_limit: number;
             /** Task Token Limit */
             task_token_limit: number;
             /** Run Token Limit */
             run_token_limit: number;
+            /** Probe Project Token Limit */
+            probe_project_token_limit: number;
+            /** Probe Task Token Limit */
+            probe_task_token_limit: number;
+            /** Probe Run Token Limit */
+            probe_run_token_limit: number;
             /** Max Steps */
             max_steps: number;
             /** Max Wall Seconds */
@@ -2262,12 +2489,24 @@ export interface components {
             task_limit_usd: number | string;
             /** Run Limit Usd */
             run_limit_usd: number | string;
+            /** Probe Project Limit Usd */
+            probe_project_limit_usd: number | string;
+            /** Probe Task Limit Usd */
+            probe_task_limit_usd: number | string;
+            /** Probe Run Limit Usd */
+            probe_run_limit_usd: number | string;
             /** Project Token Limit */
             project_token_limit: number;
             /** Task Token Limit */
             task_token_limit: number;
             /** Run Token Limit */
             run_token_limit: number;
+            /** Probe Project Token Limit */
+            probe_project_token_limit: number;
+            /** Probe Task Token Limit */
+            probe_task_token_limit: number;
+            /** Probe Run Token Limit */
+            probe_run_token_limit: number;
             /** Max Steps */
             max_steps: number;
             /** Max Wall Seconds */
@@ -6766,6 +7005,272 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluation_catalog_projects__project_id__evaluations_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluation_dry_run_projects__project_id__evaluations_dry_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvaluationRunCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationDryRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_evaluation_runs_projects__project_id__evaluations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_evaluation_run_projects__project_id__evaluations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvaluationRunCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationRunRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_evaluation_run_projects__project_id__evaluations__evaluation_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                evaluation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationRunRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_evaluation_run_projects__project_id__evaluations__evaluation_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                evaluation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationRunRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_execution_adapter_projects__project_id__execution_adapter_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionAdapterRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_execution_adapter_projects__project_id__execution_adapter_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutionAdapterWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionAdapterRead"];
                 };
             };
             /** @description Validation Error */

@@ -13,10 +13,12 @@ type ModelDoctor = components["schemas"]["ModelDoctorRead"];
 type GitHubStatus = components["schemas"]["GitHubConnectionStatusRead"];
 type ModelBudget = components["schemas"]["ModelBudgetPolicyRead"];
 type Check = { state: "ready" | "blocked" | "unavailable"; detail: string };
-type BudgetForm = Pick<ModelBudget, "project_limit_usd" | "task_limit_usd" | "run_limit_usd" | "project_token_limit" | "task_token_limit" | "run_token_limit" | "max_steps" | "max_wall_seconds" | "max_output_tokens" | "max_attempts">;
+type BudgetForm = Pick<ModelBudget, "project_limit_usd" | "task_limit_usd" | "run_limit_usd" | "probe_project_limit_usd" | "probe_task_limit_usd" | "probe_run_limit_usd" | "project_token_limit" | "task_token_limit" | "run_token_limit" | "probe_project_token_limit" | "probe_task_token_limit" | "probe_run_token_limit" | "max_steps" | "max_wall_seconds" | "max_output_tokens" | "max_attempts">;
 const EMPTY_BUDGET: BudgetForm = {
   project_limit_usd: "", task_limit_usd: "", run_limit_usd: "",
+  probe_project_limit_usd: "", probe_task_limit_usd: "", probe_run_limit_usd: "",
   project_token_limit: 0, task_token_limit: 0, run_token_limit: 0,
+  probe_project_token_limit: 0, probe_task_token_limit: 0, probe_run_token_limit: 0,
   max_steps: 0, max_wall_seconds: 0, max_output_tokens: 0, max_attempts: 0,
 };
 
@@ -29,6 +31,9 @@ export default function SetupPage() {
   const [budget, setBudget] = useState<ModelBudget | null>(null);
   const [budgetForm, setBudgetForm] = useState<BudgetForm>(EMPTY_BUDGET);
   const [budgetState, setBudgetState] = useState("");
+  const [selectedAdapter, setSelectedAdapter] = useState("deployment-default");
+  const [adapterDetail, setAdapterDetail] = useState("");
+  const [adapterState, setAdapterState] = useState("");
   const [modelDoctor, setModelDoctor] = useState<ModelDoctor | null>(null);
   const [github, setGithub] = useState<GitHubStatus | null>(null);
   const [runtime, setRuntime] = useState<Check>({ state: "unavailable", detail: "Checking runtime readiness…" });
@@ -86,6 +91,21 @@ export default function SetupPage() {
   useEffect(() => {
     if (!selectedProject) return;
     let mounted = true;
+    void fetch(`${API}/projects/${selectedProject}/execution-adapter`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Project execution adapter selection is unavailable.");
+        return await response.json() as { adapter: string; detail: string };
+      })
+      .then((value) => {
+        if (mounted) { setSelectedAdapter(value.adapter); setAdapterDetail(value.detail); }
+      })
+      .catch((cause: unknown) => { if (mounted) setAdapterDetail(cause instanceof Error ? cause.message : "Adapter status unavailable."); });
+    return () => { mounted = false; };
+  }, [selectedProject]);
+
+  useEffect(() => {
+    if (!selectedProject) return;
+    let mounted = true;
     void fetch(`${API}/projects/${selectedProject}/models/budget`, { credentials: "include", cache: "no-store" })
       .then(async (response) => {
         if (response.status === 404) return null;
@@ -96,8 +116,8 @@ export default function SetupPage() {
         if (!mounted) return;
         setBudget(value);
         if (value) {
-          const { project_limit_usd, task_limit_usd, run_limit_usd, project_token_limit, task_token_limit, run_token_limit, max_steps, max_wall_seconds, max_output_tokens, max_attempts } = value;
-          setBudgetForm({ project_limit_usd, task_limit_usd, run_limit_usd, project_token_limit, task_token_limit, run_token_limit, max_steps, max_wall_seconds, max_output_tokens, max_attempts });
+          const { project_limit_usd, task_limit_usd, run_limit_usd, probe_project_limit_usd, probe_task_limit_usd, probe_run_limit_usd, project_token_limit, task_token_limit, run_token_limit, probe_project_token_limit, probe_task_token_limit, probe_run_token_limit, max_steps, max_wall_seconds, max_output_tokens, max_attempts } = value;
+          setBudgetForm({ project_limit_usd, task_limit_usd, run_limit_usd, probe_project_limit_usd, probe_task_limit_usd, probe_run_limit_usd, project_token_limit, task_token_limit, run_token_limit, probe_project_token_limit, probe_task_token_limit, probe_run_token_limit, max_steps, max_wall_seconds, max_output_tokens, max_attempts });
         } else setBudgetForm(EMPTY_BUDGET);
       })
       .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "Project budget policy is unavailable."); });
@@ -127,8 +147,8 @@ export default function SetupPage() {
 
   async function saveBudget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedProject || !budgetForm.project_limit_usd || !budgetForm.task_limit_usd || !budgetForm.run_limit_usd) return;
-    setBudgetState("Saving the finite project model policy…");
+    if (!selectedProject || !budgetForm.project_limit_usd || !budgetForm.task_limit_usd || !budgetForm.run_limit_usd || !budgetForm.probe_project_limit_usd || !budgetForm.probe_task_limit_usd || !budgetForm.probe_run_limit_usd) return;
+    setBudgetState("Saving separate interactive and probe model policies…");
     setError("");
     try {
       const response = await fetch(`${API}/projects/${selectedProject}/models/budget`, {
@@ -139,6 +159,9 @@ export default function SetupPage() {
           project_limit_usd: budgetForm.project_limit_usd,
           task_limit_usd: budgetForm.task_limit_usd,
           run_limit_usd: budgetForm.run_limit_usd,
+          probe_project_limit_usd: budgetForm.probe_project_limit_usd,
+          probe_task_limit_usd: budgetForm.probe_task_limit_usd,
+          probe_run_limit_usd: budgetForm.probe_run_limit_usd,
         }),
       });
       if (!response.ok) throw new Error(response.status === 403
@@ -146,10 +169,32 @@ export default function SetupPage() {
         : `Project budget policy could not be saved (${response.status}).`);
       const saved = await response.json() as ModelBudget;
       setBudget(saved);
-      setBudgetState("Project, task, and run limits saved. The same policy governs both primary and probe requests.");
+      setBudgetState("Separate interactive and probe project, task, and run ceilings saved.");
     } catch (cause) {
       setBudgetState("");
       setError(cause instanceof Error ? cause.message : "Project budget policy could not be saved.");
+    }
+  }
+
+  async function saveAdapter() {
+    if (!selectedProject) return;
+    setAdapterState("Saving the project runner selection…");
+    setError("");
+    try {
+      const response = await fetch(`${API}/projects/${selectedProject}/execution-adapter`, {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+        body: JSON.stringify({ adapter: selectedAdapter }),
+      });
+      if (!response.ok) throw new Error(response.status === 409
+        ? "The selected ACP/OpenCode adapter is unavailable in this deployment."
+        : `Project adapter selection could not be saved (${response.status}).`);
+      const value = await response.json() as { detail: string };
+      setAdapterDetail(value.detail);
+      setAdapterState("Project execution adapter saved.");
+    } catch (cause) {
+      setAdapterState("");
+      setError(cause instanceof Error ? cause.message : "Project adapter selection could not be saved.");
     }
   }
 
@@ -194,17 +239,23 @@ export default function SetupPage() {
         <CardContent>{href !== "/setup" && <Link className="text-sm text-[var(--primary)] underline underline-offset-4" href={href}>Open {name.toLowerCase()} settings</Link>}</CardContent>
       </Card>)}
     </section>
-    <Card className="mt-6"><CardHeader><CardTitle>Project model budget</CardTitle><CardDescription>Configure finite project, task, and run cost and token ceilings before enabling paid tasks. One shared policy currently governs both primary and probe pools.</CardDescription></CardHeader><CardContent>
+    <Card className="mt-6"><CardHeader><CardTitle>Project execution adapter</CardTitle><CardDescription>Choose the deployment default, the installed ACP/OpenCode adapter, or disable agent dispatch for this project. The scheduler enforces this selection before creating a run.</CardDescription></CardHeader><CardContent className="space-y-3">
+      <label className="grid gap-1 text-sm">Execution adapter<select aria-label="Execution adapter" value={selectedAdapter} onChange={(event) => { setSelectedAdapter(event.target.value); setAdapterState(""); }} disabled={!selectedProject} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="deployment-default">Deployment default</option><option value="acp-opencode" disabled={!modelDoctor?.execution_adapter_configured}>ACP / OpenCode{modelDoctor?.execution_adapter_configured ? "" : " (unavailable)"}</option><option value="disabled">Disabled</option></select></label>
+      {adapterDetail && <p className="text-sm text-[var(--muted-foreground)]">{adapterDetail}</p>}
+      <Button disabled={!selectedProject || (identity?.role !== "administrator" && identity?.role !== "operator")} onClick={() => void saveAdapter()}>Save execution adapter</Button>
+      {adapterState && <p role="status" className="text-sm">{adapterState}</p>}
+    </CardContent></Card>
+    <Card className="mt-6"><CardHeader><CardTitle>Project model budgets</CardTitle><CardDescription>Configure separate finite interactive/primary and probe cost and token ceilings. Both pools remain subject to the project reservation ledger.</CardDescription></CardHeader><CardContent>
       {!selectedProject ? <p role="status" className="text-sm text-[var(--muted-foreground)]">Select or create a project before configuring its budget.</p> : <form className="space-y-4" onSubmit={(event) => void saveBudget(event)}>
         <div className="grid gap-3 sm:grid-cols-3">
-          {(["project_limit_usd", "task_limit_usd", "run_limit_usd"] as const).map((key) => <label key={key} className="grid gap-1 text-sm">{key.replaceAll("_", " ")}<input aria-label={key.replaceAll("_", " ")} type="number" min="0.00000001" step="0.00000001" required value={budgetForm[key]} onChange={(event) => setBudgetForm((current) => ({ ...current, [key]: event.target.value }))} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" /></label>)}
+          {(["project_limit_usd", "task_limit_usd", "run_limit_usd", "probe_project_limit_usd", "probe_task_limit_usd", "probe_run_limit_usd"] as const).map((key) => <label key={key} className="grid gap-1 text-sm">{key.replaceAll("_", " ")}<input aria-label={key.replaceAll("_", " ")} type="number" min="0.00000001" step="0.00000001" required value={budgetForm[key]} onChange={(event) => setBudgetForm((current) => ({ ...current, [key]: event.target.value }))} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" /></label>)}
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {(["project_token_limit", "task_token_limit", "run_token_limit", "max_steps", "max_wall_seconds", "max_output_tokens", "max_attempts"] as const).map((key) => <label key={key} className="grid gap-1 text-sm">{key.replaceAll("_", " ")}<input aria-label={key.replaceAll("_", " ")} type="number" min="1" step="1" required value={budgetForm[key] || ""} onChange={(event) => setBudgetForm((current) => ({ ...current, [key]: Number(event.target.value) }))} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" /></label>)}
+          {(["project_token_limit", "task_token_limit", "run_token_limit", "probe_project_token_limit", "probe_task_token_limit", "probe_run_token_limit", "max_steps", "max_wall_seconds", "max_output_tokens", "max_attempts"] as const).map((key) => <label key={key} className="grid gap-1 text-sm">{key.replaceAll("_", " ")}<input aria-label={key.replaceAll("_", " ")} type="number" min="1" step="1" required value={budgetForm[key] || ""} onChange={(event) => setBudgetForm((current) => ({ ...current, [key]: Number(event.target.value) }))} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3" /></label>)}
         </div>
         <Button type="submit" disabled={identity?.role !== "administrator" && identity?.role !== "operator"}>{budget ? "Save budget policy" : "Set budget policy"}</Button>
         {budgetState && <p role="status" className="text-sm">{budgetState}</p>}
-        {budget && <p className="text-xs text-[var(--muted-foreground)]">Current ceilings: project ${budget.project_limit_usd}, task ${budget.task_limit_usd}, run ${budget.run_limit_usd}; at most {budget.max_attempts} attempts.</p>}
+        {budget && <p className="text-xs text-[var(--muted-foreground)]">Interactive ceilings: project ${budget.project_limit_usd}, task ${budget.task_limit_usd}, run ${budget.run_limit_usd}. Probe ceilings: project ${budget.probe_project_limit_usd}, task ${budget.probe_task_limit_usd}, run ${budget.probe_run_limit_usd}; at most {budget.max_attempts} attempts per request.</p>}
       </form>}
     </CardContent></Card>
     <Card className="mt-6"><CardHeader><CardTitle>Verify a provider route</CardTitle><CardDescription>This sends one minimal, paid request through Harnessa’s existing project, task, and run budget controls. It does not start an agent task. Provider credentials remain in LiteLLM.</CardDescription></CardHeader>

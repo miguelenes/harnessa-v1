@@ -57,6 +57,7 @@ describe("web application pages", () => {
       if (url.endsWith("/github/status")) return response({ configured_apps: [], installations: [], repository_links: [], actor_mappings: [], webhook_health: {}, recent_deliveries: [] }) as Response;
       if (url.endsWith("/health/ready")) return response({ status: "ready" }) as Response;
       if (url.endsWith("/projects/project-1/repositories")) return response([{ id: "repo-1" }]) as Response;
+      if (url.endsWith("/projects/project-1/execution-adapter")) return response({ project_id: "project-1", adapter: "deployment-default", available_adapters: ["deployment-default", "disabled"], configured: false, detail: "Deployment runner unavailable." }) as Response;
       return response({}, 404) as Response;
     });
     render(<SetupPage />);
@@ -71,7 +72,9 @@ describe("web application pages", () => {
     const budget = {
       id: "budget-1", project_id: "project-1",
       project_limit_usd: "1.00", task_limit_usd: "0.25", run_limit_usd: "0.10",
+      probe_project_limit_usd: "0.50", probe_task_limit_usd: "0.20", probe_run_limit_usd: "0.08",
       project_token_limit: 100000, task_token_limit: 25000, run_token_limit: 10000,
+      probe_project_token_limit: 50000, probe_task_token_limit: 15000, probe_run_token_limit: 7000,
       max_steps: 8, max_wall_seconds: 600, max_output_tokens: 4096, max_attempts: 2,
     };
     const fetchMock = vi.mocked(fetch);
@@ -83,6 +86,7 @@ describe("web application pages", () => {
       if (url.endsWith("/github/status")) return response({ configured_apps: [], installations: [], repository_links: [], actor_mappings: [], webhook_health: {}, recent_deliveries: [] }) as Response;
       if (url.endsWith("/health/ready")) return response({ status: "ready" }) as Response;
       if (url.endsWith("/projects/project-1/repositories")) return response([]) as Response;
+      if (url.endsWith("/projects/project-1/execution-adapter")) return response({ project_id: "project-1", adapter: "deployment-default", available_adapters: ["deployment-default", "disabled"], configured: false, detail: "Deployment runner unavailable." }) as Response;
       if (url.endsWith("/projects/project-1/models/budget") && init?.method === "PUT") return response(budget) as Response;
       if (url.endsWith("/projects/project-1/models/budget")) return response({}, 404) as Response;
       return response({}, 404) as Response;
@@ -92,13 +96,15 @@ describe("web application pages", () => {
     await screen.findByRole("button", { name: "Set budget policy" });
     for (const [name, value] of Object.entries({
       "project limit usd": "1.00", "task limit usd": "0.25", "run limit usd": "0.10",
+      "probe project limit usd": "0.50", "probe task limit usd": "0.20", "probe run limit usd": "0.08",
       "project token limit": "100000", "task token limit": "25000", "run token limit": "10000",
+      "probe project token limit": "50000", "probe task token limit": "15000", "probe run token limit": "7000",
       "max steps": "8", "max wall seconds": "600", "max output tokens": "4096", "max attempts": "2",
     })) {
       fireEvent.change(screen.getByRole("spinbutton", { name }), { target: { value } });
     }
     fireEvent.click(screen.getByRole("button", { name: "Set budget policy" }));
-    expect(await screen.findByText(/The same policy governs both primary and probe requests/)).toBeTruthy();
+    expect(await screen.findByText(/Separate interactive and probe project, task, and run ceilings saved/)).toBeTruthy();
     const save = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith("/models/budget") && init?.method === "PUT");
     expect(save?.[1]?.body).toContain('"project_limit_usd":"1.00"');
     expect(save?.[1]?.body).toContain('"max_steps":8');

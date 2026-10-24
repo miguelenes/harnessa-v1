@@ -22,9 +22,11 @@ The normal repository setup supplies the non-provider application settings in
 passes the declared provider variables only to LiteLLM; they are not sent to
 the API, worker, web, or agent containers.
 
-Start the gateway service after `.env` contains both variables. Compose's
-configured project name is `harnessa`, which is also used by the normal local
-stack, so the API and worker can resolve `litellm` on the internal network:
+The provider variables in `.env.example` are intentionally blank. Start the
+gateway from a login-interactive zsh session where the keys are exported by
+`~/.zshrc`; do not copy the key values into `.env`. Compose's configured project
+name is `harnessa`, which is also used by the normal local stack, so the API and
+worker can resolve `litellm` on the internal network:
 
 ```sh
 zsh -lic 'export DEEPSEEK_API_KEY OPENROUTER_API_KEY; podman compose --env-file .env -f infra/compose.yaml up -d litellm'
@@ -33,7 +35,9 @@ zsh -lic 'export DEEPSEEK_API_KEY OPENROUTER_API_KEY; podman compose --env-file 
 The login-interactive zsh loads `~/.zshrc`, and `export` makes the two
 configured keys available for Compose interpolation in that child process.
 This command does not print either value. Limit shell tracing and command
-logging when invoking it from another tool.
+logging when invoking it from another tool. Compose forwards these variables to
+LiteLLM only; the application API, worker, web, and agent containers receive no
+provider key.
 
 Inspect readiness and the configured aliases without invoking a model:
 

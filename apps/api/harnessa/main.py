@@ -18,7 +18,22 @@ from redis.asyncio import Redis
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
+from harnessa.api.evaluation_routes import (
+    EvaluationDryRun,
+    EvaluationRunCreate,
+    EvaluationRunRead,
+)
+from harnessa.api.evaluation_routes import (
+    router as evaluation_router,
+)
 from harnessa.api.evidence_routes import router as evidence_router
+from harnessa.api.execution_routes import (
+    ExecutionAdapterRead,
+    ExecutionAdapterWrite,
+)
+from harnessa.api.execution_routes import (
+    router as execution_router,
+)
 from harnessa.api.github_routes import router as github_router
 from harnessa.api.harness_routes import (
     ExperimentCreate,
@@ -200,6 +215,11 @@ CONTRACT_MODELS = (
     ExperimentCreate,
     ExperimentRead,
     HarnessOverview,
+    EvaluationRunCreate,
+    EvaluationRunRead,
+    EvaluationDryRun,
+    ExecutionAdapterRead,
+    ExecutionAdapterWrite,
     PromotionRequest,
     VerificationManifestApprovalRequest,
     VerificationManifestRevisionRead,
@@ -443,6 +463,8 @@ app.include_router(retrieval_router)
 app.include_router(review_router)
 app.include_router(github_router)
 app.include_router(harness_router)
+app.include_router(evaluation_router)
+app.include_router(execution_router)
 app.include_router(evidence_router)
 
 

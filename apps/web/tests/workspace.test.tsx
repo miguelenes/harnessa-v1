@@ -236,6 +236,7 @@ describe("workspace routes and task board", () => {
         if (url.endsWith("/projects")) return response([project]);
         if (url.includes("/events/stream")) return response({}, 403);
         if (url.endsWith("/tasks?limit=100")) return response([task]);
+        if (url.endsWith("/projects/project-1/evaluations")) return response({ runs: [] });
         if (url.endsWith("/projects/project-1/harness")) return response(status === 200 ? { experiments: [] } : {}, status);
         if (url.includes("/runs")) return response([]);
         return response({}, 404);
@@ -251,10 +252,16 @@ describe("workspace routes and task board", () => {
     const budget = {
       id: "budget-1", project_id: project.id,
       project_limit_usd: "1.00", task_limit_usd: "0.10", run_limit_usd: "0.05",
+      probe_project_limit_usd: "0.50", probe_task_limit_usd: "0.20", probe_run_limit_usd: "0.08",
       project_token_limit: 100000, task_token_limit: 10000, run_token_limit: 5000,
+      probe_project_token_limit: 50000, probe_task_token_limit: 15000, probe_run_token_limit: 7000,
       max_steps: 8, max_wall_seconds: 300, max_output_tokens: 2048, max_attempts: 2,
     };
     let experiment: Record<string, unknown> | null = null;
+    let groupedRun: Record<string, unknown> | null = null;
+    let failEstimate = true;
+    let failGroupCancel = true;
+    let failCreate = true;
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
@@ -268,11 +275,32 @@ describe("workspace routes and task board", () => {
           { experiment_id: experiment.id, status: "failed", delivered: false, wall_ms: 200, cost_usd: "0.02" },
         ] : [],
       });
-      if (url.endsWith("/projects/project-1/models/budget")) return response(budget);
-      if (url.endsWith("/harness-experiments") && init?.method === "POST") {
-        experiment = { id: "experiment-1", task_id: probeTask.id, status: "queued", mode: "both", k: 1, base_sha: "b".repeat(40), specification_hash: "c".repeat(64), policy_revision: 1, upstream_revision: "a".repeat(40), result: { adaptation_usage: { usage_known: true, cost_usd: "0.03" }, comparison_integrity: { status: "passed" }, holdout_evaluation: { status: "passed" } } };
-        return response(experiment, 202);
+      if (url.endsWith("/projects/project-1/evaluations") && init?.method === "POST") {
+        if (failCreate) {
+          failCreate = false;
+          return response({}, 409);
+        }
+        groupedRun = { id: "evaluation-1", stable_key: "stable-1", status: "queued", manifest: { estimate_usd: "0.04" }, manifest_digest: "d".repeat(64), sample_size: 6, completed_samples: 0, failed_samples: 0, cancelled_samples: 0, missing_samples: 6, delivery_samples: 0, delivery_successes: 0, delivery_wilson_95: null, cost_usd: null, experiment_ids: ["experiment-1"] };
+        experiment = { id: "experiment-1", task_id: probeTask.id, status: "queued", mode: "both", k: 1, base_sha: "b".repeat(40), specification_hash: "c".repeat(64), policy_revision: 1, upstream_revision: "a".repeat(40), result: { adaptation_usage: { usage_known: true, cost_usd: "0.03" } } };
+        return response(groupedRun, 202);
       }
+      if (url.endsWith("/projects/project-1/evaluations/evaluation-1/cancel") && init?.method === "POST") {
+        if (failGroupCancel) {
+          failGroupCancel = false;
+          return response({}, 409);
+        }
+        groupedRun = { ...groupedRun, status: "cancelled" };
+        return response(groupedRun);
+      }
+      if (url.endsWith("/projects/project-1/evaluations/dry-run") && init?.method === "POST") {
+        if (failEstimate) {
+          failEstimate = false;
+          return response({}, 409);
+        }
+        return response({ cost_estimate_usd: "0.04", estimate_kind: "conservative_context_window_upper_bound", manifest_digest: "d".repeat(64) });
+      }
+      if (url.endsWith("/projects/project-1/evaluations")) return response({ runs: groupedRun ? [groupedRun] : [] });
+      if (url.endsWith("/projects/project-1/models/budget")) return response(budget);
       if (url.endsWith("/harness-experiments/experiment-1/cancel") && init?.method === "POST") {
         experiment = { ...experiment, status: "cancelled" };
         return response(experiment);
@@ -282,25 +310,52 @@ describe("workspace routes and task board", () => {
 
     render(<Workspace section="evals" />);
     fireEvent.change(await screen.findByRole("combobox", { name: "Evaluation task" }), { target: { value: probeTask.id } });
-    expect(await screen.findByText(/Maximum authorized spend ceiling: \$0.10000000.*Per-run ceiling \$0.05.*expected-cost estimate is unavailable/)).toBeTruthy();
-    await waitFor(() => expect((screen.getByRole("button", { name: "Queue bounded comparison" }) as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: "Queue bounded comparison" }));
-    expect(await screen.findByText(/Evaluation queued with the project/)).toBeTruthy();
+    expect(await screen.findByText(/The estimate assumes the full route context window and configured retry bound/)).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Estimate evaluation cost" }) as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 });
+    fireEvent.click(screen.getByRole("button", { name: "Estimate evaluation cost" }));
+    expect(await screen.findByText(/Configure the selected probe route and a finite project\/run budget/)).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Estimate evaluation cost" }) as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 });
+    fireEvent.click(screen.getByRole("button", { name: "Estimate evaluation cost" }));
+    expect(await screen.findByText(/Conservative maximum estimate: \$0.04/)).toBeTruthy();
+    fireEvent.change(screen.getByRole("combobox", { name: "Comparison mode" }), { target: { value: "parallel" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Candidate sample size" }), { target: { value: "2" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Evaluation route alias" }), { target: { value: "coding" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Comparison mode" }), { target: { value: "both" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Candidate sample size" }), { target: { value: "1" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Evaluation route alias" }), { target: { value: "harnessa-deepseek-flash" } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Queue immutable evaluation" }) as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Estimate evaluation cost" }));
+    expect(await screen.findByText(/Conservative maximum estimate: \$0.04/)).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Queue immutable evaluation" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Queue immutable evaluation" }));
+    expect(await screen.findByText(/task must have a frozen READY specification and be in Harness probe/)).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Queue immutable evaluation" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Queue immutable evaluation" }));
+    expect(await screen.findByText(/Immutable evaluation evaluation-1 queued/)).toBeTruthy();
+    expect(await screen.findByText(/0\/6 rollout records · 6 missing/)).toBeTruthy();
+    expect(screen.getByText(/Delivery 0\/0 · uncertainty unavailable/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel grouped evaluation" }));
+    expect(await screen.findByText(/evaluation state or frozen inputs no longer allow this operation/)).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Cancel grouped evaluation" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel grouped evaluation" }));
+    expect(await screen.findByText(/cancellation was recorded across queued and active children/)).toBeTruthy();
+    await waitFor(() => expect(groupedRun?.status).toBe("cancelled"));
     expect(await screen.findByText(/Experiment experiment-1/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel evaluation" })).toBeTruthy();
     expect(screen.getByText(/Sample size 2 · failed rollouts 1 · delivery 1\/2 · 95% Wilson interval/)).toBeTruthy();
     expect(screen.getByText(/Latency p50\/p95 100\/200 ms · all-in recorded cost \$0.06000000/)).toBeTruthy();
-    const createCall = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).endsWith("/harness-experiments") && init?.method === "POST");
+    const createCall = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).endsWith("/evaluations") && init?.method === "POST");
     expect(createCall?.[1]?.body).toContain('"mode":"both"');
     expect(createCall?.[1]?.body).toContain('"k":1');
     fireEvent.click(screen.getByRole("button", { name: "Cancel evaluation" }));
     expect(await screen.findByText(/Cancellation was recorded/)).toBeTruthy();
-    await waitFor(() => expect(screen.getByText("cancelled")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("cancelled").length).toBeGreaterThan(0));
   });
 
   it("resumes a failed evaluation only through its existing manifest", async () => {
     const failed = { id: "experiment-1", task_id: task.id, status: "failed", mode: "both", k: 1, base_sha: "b".repeat(40), specification_hash: "c".repeat(64), policy_revision: 1, upstream_revision: "a".repeat(40), result: { route_alias: "harnessa-deepseek-flash" } };
     let experiment: Record<string, unknown> = failed;
+    let rejectResume = true;
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/projects")) return response([project]);
@@ -309,6 +364,10 @@ describe("workspace routes and task board", () => {
       if (url.endsWith("/projects/project-1/harness")) return response({ experiments: [experiment] });
       if (url.endsWith("/projects/project-1/models/budget")) return response({ project_limit_usd: "1", task_limit_usd: "1", run_limit_usd: "1", max_steps: 2, max_attempts: 1 });
       if (url.endsWith("/harness-experiments/experiment-1/resume") && init?.method === "POST") {
+        if (rejectResume) {
+          rejectResume = false;
+          return response({}, 409);
+        }
         experiment = { ...experiment, status: "queued", result: { ...failed.result, resume_count: 1 } };
         return response(experiment, 202);
       }
@@ -317,9 +376,42 @@ describe("workspace routes and task board", () => {
     render(<Workspace section="evals" />);
     expect(await screen.findByText(/Experiment experiment-1/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Resume same manifest" }));
+    expect(await screen.findByText(/Frozen inputs or policy changed, or the two-resume limit was reached/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Resume same manifest" }));
     expect(await screen.findByText(/same frozen manifest was requeued/)).toBeTruthy();
     expect(await screen.findByText("queued")).toBeTruthy();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/harness-experiments/experiment-1/resume"))).toBe(true);
+  });
+
+  it("resumes a failed grouped evaluation against its frozen manifest", async () => {
+    let groupedRun: Record<string, unknown> = {
+      id: "evaluation-1", stable_key: "stable-1", status: "failed",
+      manifest: { suite: "harness2-local", estimate_usd: "0.04" },
+      manifest_digest: "d".repeat(64), sample_size: 6, completed_samples: 2,
+      failed_samples: 1, cancelled_samples: 0, unknown_samples: 0,
+      missing_samples: 4, delivery_samples: 2, delivery_successes: 1,
+      delivery_wilson_95: [0.1, 0.9], cost_usd: "0.03",
+      p50_latency_ms: 100, p95_latency_ms: 200, experiment_ids: ["experiment-1"],
+    };
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/projects")) return response([project]);
+      if (url.includes("/events/stream")) return response({}, 403);
+      if (url.endsWith("/tasks?limit=100")) return response([]);
+      if (url.endsWith("/projects/project-1/harness")) return response({ experiments: [], probes: [] });
+      if (url.endsWith("/projects/project-1/evaluations/evaluation-1/resume") && init?.method === "POST") {
+        groupedRun = { ...groupedRun, status: "queued" };
+        return response(groupedRun, 202);
+      }
+      if (url.endsWith("/projects/project-1/evaluations")) return response({ runs: [groupedRun] });
+      return response({}, 404);
+    });
+    render(<Workspace section="evals" />);
+    expect(await screen.findByText(/95% Wilson interval 10\.0–90\.0%/)).toBeTruthy();
+    expect(screen.getByText(/2\/6 rollout records · 4 missing · 1 failed/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Resume failed children" }));
+    expect(await screen.findByText(/Failed children were requeued against the same frozen manifest/)).toBeTruthy();
+    await waitFor(() => expect(groupedRun.status).toBe("queued"));
   });
 
   it("projects Harness Studio history and sends reviewed promotion and rollback decisions", async () => {

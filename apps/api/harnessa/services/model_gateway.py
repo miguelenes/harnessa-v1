@@ -443,12 +443,19 @@ async def _reserve(
             "model_request_replayed", 409, f"Idempotency-Key was {status}; request was not repeated"
         )
 
-    # The project policy lock serializes all scopes for this project, including parallel probes.
-    limits = {
-        "project": (Decimal(policy.project_limit_usd), policy.project_token_limit),
-        "task": (Decimal(policy.task_limit_usd), policy.task_token_limit),
-        "run": (Decimal(policy.run_limit_usd), policy.run_token_limit),
-    }
+    # The policy row serializes scope counters while retaining separate interactive/probe ceilings.
+    if pool.kind == "interactive":
+        limits = {
+            "project": (Decimal(policy.project_limit_usd), policy.project_token_limit),
+            "task": (Decimal(policy.task_limit_usd), policy.task_token_limit),
+            "run": (Decimal(policy.run_limit_usd), policy.run_token_limit),
+        }
+    else:
+        limits = {
+            "project": (Decimal(policy.probe_project_limit_usd), policy.probe_project_token_limit),
+            "task": (Decimal(policy.probe_task_limit_usd), policy.probe_task_token_limit),
+            "run": (Decimal(policy.probe_run_limit_usd), policy.probe_run_token_limit),
+        }
     counters: list[ModelBudgetCounter] = []
     for scope, scope_id, counter_task_id, counter_run_id in _scope_values(
         project_id, task_id, run_id
@@ -459,6 +466,7 @@ async def _reserve(
                     select(ModelBudgetCounter)
                     .where(
                         ModelBudgetCounter.project_id == project_id,
+                        ModelBudgetCounter.workload == pool.kind,
                         ModelBudgetCounter.scope == scope,
                         ModelBudgetCounter.scope_id == scope_id,
                     )
@@ -476,6 +484,7 @@ async def _reserve(
                 task_id=counter_task_id,
                 run_id=counter_run_id,
                 scope=scope,
+                workload=pool.kind,
                 scope_id=scope_id,
                 reserved_usd=_ZERO,
                 billed_usd=_ZERO,
@@ -957,6 +966,7 @@ async def _settle(
                     select(ModelBudgetCounter)
                     .where(
                         ModelBudgetCounter.project_id == reservation.project_id,
+                        ModelBudgetCounter.workload == reservation.workload,
                         ModelBudgetCounter.scope == scope,
                         ModelBudgetCounter.scope_id == scope_id,
                     )
@@ -1799,7 +1809,10 @@ async def reconcile_stale_model_reservations(
                 (
                     await db.execute(
                         select(ModelBudgetCounter)
-                        .where(ModelBudgetCounter.project_id == reservation.project_id)
+                        .where(
+                            ModelBudgetCounter.project_id == reservation.project_id,
+                            ModelBudgetCounter.workload == reservation.workload,
+                        )
                         .with_for_update()
                         .execution_options(populate_existing=True)
                     )
