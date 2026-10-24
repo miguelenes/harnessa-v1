@@ -27,7 +27,7 @@ if "${compose[@]}" exec -T api python -c 'import os,sys; sys.exit(0 if os.enviro
 else
   printf 'WARN bootstrap or signing secret is missing from the API container; do not use this configuration for production\n'
 fi
-if "${compose[@]}" exec -T api python -c 'import os,sys; sys.exit(0 if os.environ.get("COOKIE_SECURE", "false").lower() == "true" else 1)' >/dev/null 2>&1; then
+if "${compose[@]}" exec -T api python -c 'import sys; from harnessa.config import settings; sys.exit(0 if settings.cookie_secure else 1)' >/dev/null 2>&1; then
   printf 'PASS secure session cookies enabled\n'
 else
   printf 'WARN secure session cookies are disabled or unavailable; configure TLS before production use\n'
