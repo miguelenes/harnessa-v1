@@ -71,17 +71,17 @@ Tracing follow-up PR [#47](https://github.com/miguelenes/harnessa-v1/pull/47) wa
 | Backup/restore | Backed up the isolated instance with a synthetic project/task/run record and a 55-byte CAS artifact linked by a `RunArtifact` row, plus a separate temporary Git repository. Every `SHA256SUMS` entry passed. Restored into a second fresh Compose project and Git staging directory; API readiness returned 200; restored counts were one project, task, run, and artifact; CAS verification returned `verified`; the Git commit and file content matched. | Non-empty database/provenance/artifact/Git restore verified. The fixture was synthetic and does not claim a real agent lifecycle. |
 | Provider cost | No LiteLLM completion or external benchmark submission was made in this acceptance work. | €0 this run; cumulative remaining-milestone spend remains capped at €20. |
 
-### Remaining external release blockers
+### Current release blockers (2026-10-25)
 
-The following dated snapshots are superseded by the 2026-10-25 live acceptance evidence below: the App/repository setup and provider-key rotation were then pending; Chrome had not yet attached through Browser Harness; and no real issue workflow had been attempted.
+The live issue-to-interview-to-READY-to-agent-to-PR-merge-to-archive/cleanup flow passed for issue #4. Duplicate redelivery retained one task. Browser layout/accessibility checks and synthetic fresh-instance restore passed. These are completed scenarios and must not be repeated as pending work.
 
-- **Provider-backed isolated execution and resilience:** the current route metadata and authenticated gateway are ready, but the worker used for acceptance has no Podman executable or sandbox socket. Run through the supported isolated host runner, exercise the real agent, 429 failover, and primary/probe contention, and verify no budget escape within the remaining €20 aggregate ceiling.
-- **GitHub branch/PR/archive lifecycle:** the issue-to-interview path is verified; task readiness, real branch/PR creation, review, merge, archive, and cleanup remain unverified because execution is blocked.
-- **Independent confidential holdout:** Scale or another holdout owner must grant an account/endpoint and authorize access to a private subset. Public development results cannot substitute for this evidence.
-- **Browser acceptance:** Browser Harness is now attached to local Chrome, and the Harnessa workspace is visible. Responsive/keyboard/contrast/reduced-motion review and browser stream reconnect still need evidence.
-- **Recovery and replay:** webhook redelivery recovered the failed issue delivery, but duplicate-effect/idempotency acceptance and a fresh-instance restore are still required.
+- **Harness² evaluation:** a live bounded probe and primary/probe contention run remain unverified. The optional learning step for the completed task was skipped because there was no completed Harness² experiment; no learning candidate, promotion, or rollback exists.
+- **Live resilience:** provider 429 failover, worker crash recovery with an in-flight task, and automatic event-stream reconnect after a mid-stream network failure remain unverified. Reload/resume from durable cursor 259 was observed, but this is not a substitute for a mid-stream reconnect test.
+- **Independent evaluator:** the Scale private subset has no public enrollment/task-feed path for this project. Harbor's no-model Oracle smoke used the public SWE-bench Pro V2 split and is not confidential holdout evidence or a Harnessa-backed paid evaluation. A separately permissioned evaluator account/task feed is not available. WorkBuddy-Bench is blocked by its EU-use restriction; JobBench and Harvey LAB lack Harnessa-integrated isolated, metered judges.
+- **External tracing:** OTLP delivery to a production collector has not been configured or verified; loopback export is only test evidence.
 
-The offline implementation and deterministic tests remain distinct from these live integrations. No benchmark score or complete end-to-end external lifecycle is claimed.
+The synthetic fresh-instance database/provenance/artifact/Git restore, browser accessibility checks, real agent PR lifecycle, and duplicate webhook test are complete as recorded in the current acceptance section below. No unavailable evaluator result or benchmark score is claimed. M13 remains active while its remaining required lifecycle/resilience evidence and external evaluator access are unresolved.
+
 
 ### Operator recovery CLI follow-up PR #51
 
@@ -99,19 +99,19 @@ The existing persisted M13 acceptance database was started and upgraded from Ale
 
 This was the intermediate startup-only status before the later 2026-10-25 acceptance steps below: App registration/install, issue workflow, and Browser Harness attachment were still pending at that point. Those setup gates were subsequently completed and are recorded below. The remaining-milestone spend ceiling remains €20; no provider request was made during this startup-only step.
 
-### GitHub issue-to-interview acceptance on 2026-10-25
+### Historical issue-to-interview progress snapshot (issues #1–#3, before issue #4)
 
 The authorized private disposable repository `miguelenes/harnessa-m13-acceptance-20261024` now has a least-privilege GitHub App installed with selected-repository access only. Its webhook was accepted by the loopback-only Harnessa API through a temporary Cloudflare quick tunnel, and the installation, repository link, mapped owner actor, and webhook health were read back in Harnessa. The repository has a `harnessa` issue label, a default-branch README, and a small PR check workflow. An issue labeled for Harnessa was delivered to the app and created task `8f489ec7-874f-4941-a426-e8fa74932330` and specification interview `1b875f00-af38-566d-80b1-8ed569b39391` against base `8da42dad77c99011bd95449b1a270d483bac4097`. The first delivery attempt failed because the acceptance Compose instance had no mapped source checkout; PR #63 adds explicit source/workspace mounts and configuration. After the source was seeded and the failed GitHub delivery redelivered, Harnessa processed it, persisted the interview, and accepted the administrator's README-only answer as interview revision 2. OpenSpec structural validation passed, but readiness is `NOT_READY` because no compatible execution route is configured. The worker container has neither Podman nor a sandbox socket, so no real agent execution or provider request was attempted. The current readiness result does not prove readiness for execution.
 
 The local Harnessa admin account had been provisioned for acceptance without a known password. At the user's direction to sign in, its sole disposable acceptance account password was reset after a mode-0600 PostgreSQL backup was saved. Generated login credentials remain in mode-0600 local temporary files and were not sent to any service. The local acceptance project is usable in the open browser session. This is test-instance access recovery, not production account setup evidence.
 
-The temporary webhook tunnel remains in use while acceptance is active and must be stopped after M13 live webhook checks. Current remaining live gates include execution through the supported isolated runner, readiness/sign-off and exact-head verification, real agent-to-PR lifecycle, browser acceptance coverage, webhook replay/idempotency proof, and restore into a fresh instance. Provider spend remains within the authorized €20 aggregate ceiling; this issue/interview flow sent no provider request.
+The temporary webhook tunnel used for these earlier issue deliveries was stopped after the issue #4 duplicate-replay check. Issues #1–#3 were superseded; their stale readiness/run status does not describe the completed issue #4 lifecycle below.
 
-### Model gateway configuration read-back on 2026-10-25
+### Historical model gateway configuration read-back (before task #4)
 
 The local model doctor now reports the authenticated LiteLLM gateway ready and one DeepSeek deployment/alias routed to both `interactive/primary` and `probe/batch`. The deployment uses the rotated `DEEPSEEK_API_KEY` secret reference, a pinned local price revision of $0.30/$1.20 per million input/output tokens, chat-completions with tools and usage reporting, and concurrency 2. The doctor explicitly reports `provider_credentials_checked=false` and `live_request_sent=false`; this metadata/setup read-back made no provider call. The ACP adapter is enabled in the API configuration. The separately managed rootless host worker is currently stopped while the advisory-lock fix is being deployed; no provider request or real agent run has occurred.
 
-### Manifest-gated runner preparation on 2026-10-25
+### Historical manifest-gated runner preparation snapshot (issues #1–#3)
 
 The disposable repository default branch advanced to `3adf0776c53cd090c5938170804a66418af115f4` to add `.harnessa/verification.json`. The manifest was validated against Harnessa's schema and approved from that exact revision as manifest `7c45f43b-3432-4e6c-af09-617cb54b4640` (digest `bb13305383ca1248f73a031f1375b38a7e528fc6406069010e1cb077dc80c3a9`). Its required verifier uses an already present, digest-pinned Python image and checks only that README.md describes the disposable acceptance repository. Because the first issue's interview was pinned to the prior source SHA, task `8f489ec7-874f-4941-a426-e8fa74932330` was rejected as stale and issue #1 closed with the reason recorded there. A replacement issue #2 targets the current source head; its opened webhook was still processing when this report update began.
 
