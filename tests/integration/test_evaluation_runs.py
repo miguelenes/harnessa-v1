@@ -179,3 +179,66 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
             HarnessPolicy.project_id == fixture["project_id"]
         ))
         assert policy is not None
+
+
+@pytest.mark.anyio
+async def test_failed_evaluation_resumes_from_child_state_when_parent_row_is_queued() -> None:
+    fixture = await gateway_fixture()
+    async with SessionLocal() as db:
+        task = await db.get(Task, fixture["task_id"])
+        assert task is not None
+        task.stage = "HARNESS_PROBE"
+
+        repository = Repository(
+            project_id=fixture["project_id"], target_id="repo/evaluation-resume-fixture",
+            display_name="Evaluation resume fixture",
+        )
+        db.add(repository)
+        await db.flush()
+        interview = SpecificationInterview(
+            organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+            task_id=task.id, repository_id=repository.id, created_by=fixture["user_id"],
+            topic="Resume a failed bounded evaluation", change_id="evaluation-resume-fixture",
+            base_sha="a" * 40, head_sha="a" * 40,
+            idempotency_key="evaluation-resume-fixture", request_hash="c" * 64,
+            artifact_hash="b" * 64, readiness_state="READY", revision=2,
+        )
+        policy = HarnessPolicy(
+            organization_id=fixture["organization_id"], project_id=fixture["project_id"]
+        )
+        db.add_all([interview, policy])
+        await db.flush()
+        manifest_task = {
+            "task_id": str(task.id), "base_sha": interview.base_sha,
+            "specification_hash": interview.artifact_hash,
+            "specification_revision": interview.revision, "policy_revision": policy.revision,
+        }
+        child = HarnessExperiment(
+            organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+            task_id=task.id, created_by=fixture["user_id"], stable_key="resume-child-fixture",
+            mode="parallel", k=1, status="failed", phase="failed", attempts=1,
+            base_sha=interview.base_sha, specification_hash=interview.artifact_hash,
+            specification_revision=interview.revision, policy_revision=policy.revision,
+            harness2_revision="fixture", result={"route_alias": "coding", "resume_count": 0},
+        )
+        db.add(child)
+        await db.flush()
+        run = EvaluationRun(
+            organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+            created_by=fixture["user_id"], stable_key="resume-evaluation-fixture",
+            status="queued",
+            manifest={"mode": "parallel", "k": 1, "task_inputs": [manifest_task]},
+            manifest_digest="d" * 64, experiment_ids=[str(child.id)], max_cost_usd="0.01",
+        )
+        db.add(run)
+        await db.commit()
+        actor = await db.get(evaluation_routes.User, fixture["user_id"])
+        assert actor is not None
+
+        resumed = await evaluation_routes.resume_evaluation_run(
+            fixture["project_id"], run.id, actor, db
+        )
+
+        assert resumed.status == "queued"
+        assert child.status == "queued"
+        assert child.result["resume_count"] == 1

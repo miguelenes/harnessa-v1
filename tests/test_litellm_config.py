@@ -26,6 +26,13 @@ def test_litellm_routes_pin_providers_and_disable_proxy_fallbacks():
         "timeout": 60,
         "provider": {"order": ["deepseek"], "allow_fallbacks": False},
     }
+    assert deployments["harnessa-openrouter-gpt-oss-20b"] == {
+        "model": "openrouter/openai/gpt-oss-20b",
+        "api_base": "https://openrouter.ai/api/v1",
+        "api_key": "os.environ/OPENROUTER_API_KEY",
+        "timeout": 60,
+        "provider": {"order": ["Darkbloom"], "allow_fallbacks": False},
+    }
     assert config["router_settings"]["num_retries"] == 0
     assert config["router_settings"]["max_fallbacks"] == 0
 

@@ -59,6 +59,7 @@ _TRANSITIONS: dict[TaskStage, frozenset[TaskStage]] = {
     ),
     TaskStage.HUMAN_REVIEW: frozenset(
         {
+            TaskStage.HARNESS_PROBE,
             TaskStage.LEARNING,
             TaskStage.IN_PROGRESS,
             TaskStage.READY,
@@ -71,7 +72,9 @@ _TRANSITIONS: dict[TaskStage, frozenset[TaskStage]] = {
     TaskStage.CLARIFYING: frozenset(
         {TaskStage.SPECIFYING, TaskStage.READY, TaskStage.IN_PROGRESS, TaskStage.CANCELLED}
     ),
-    TaskStage.HARNESS_PROBE: frozenset({TaskStage.IN_PROGRESS, TaskStage.CANCELLED}),
+    TaskStage.HARNESS_PROBE: frozenset(
+        {TaskStage.HUMAN_REVIEW, TaskStage.IN_PROGRESS, TaskStage.CANCELLED}
+    ),
     TaskStage.RETRY_EXHAUSTED: frozenset(
         {TaskStage.READY, TaskStage.REJECTED, TaskStage.CANCELLED}
     ),

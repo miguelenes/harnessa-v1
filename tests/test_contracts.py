@@ -18,6 +18,7 @@ from harnessa.contracts import (
 from harnessa.domain.lifecycle import (
     InvalidTaskTransition,
     TaskVersionConflict,
+    TransitionGuardFailed,
     assert_transition,
 )
 from pydantic import ValidationError
@@ -54,6 +55,34 @@ def test_task_transition_guard_checks_version_and_lifecycle():
             current_version=2,
             reason="stale",
             return_stage=None,
+        )
+
+
+def test_harness_probe_can_branch_from_and_return_to_human_review():
+    assert_transition(
+        TaskStage.HUMAN_REVIEW,
+        TaskStage.HARNESS_PROBE,
+        expected_version=7,
+        current_version=7,
+        reason="Run a bounded Harness² evaluation",
+        return_stage=TaskStage.HUMAN_REVIEW,
+    )
+    assert_transition(
+        TaskStage.HARNESS_PROBE,
+        TaskStage.HUMAN_REVIEW,
+        expected_version=8,
+        current_version=8,
+        reason="Return to human review after the probe",
+        return_stage=TaskStage.HUMAN_REVIEW,
+    )
+    with pytest.raises(TransitionGuardFailed):
+        assert_transition(
+            TaskStage.HUMAN_REVIEW,
+            TaskStage.HARNESS_PROBE,
+            expected_version=7,
+            current_version=7,
+            reason="Use a mismatched return stage",
+            return_stage=TaskStage.READY,
         )
     with pytest.raises(InvalidTaskTransition):
         assert_transition(

@@ -18,6 +18,18 @@ model_list:
         order: [deepseek]
         allow_fallbacks: false
 
+  # Higher-context finite-cost probe route. Provider pinning keeps OpenRouter
+  # from silently routing this evaluation to a different provider.
+  - model_name: harnessa-openrouter-gpt-oss-20b
+    litellm_params:
+      model: openrouter/openai/gpt-oss-20b
+      api_base: https://openrouter.ai/api/v1
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 60
+      provider:
+        order: [Darkbloom]
+        allow_fallbacks: false
+
 router_settings:
   num_retries: 0
   max_fallbacks: 0

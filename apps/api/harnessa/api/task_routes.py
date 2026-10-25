@@ -84,7 +84,7 @@ def _allowed_transitions(
     if current == TaskStage.IN_PROGRESS:
         candidates -= {TaskStage.READY}  # checkpoint recovery is a command path
     if run_status != "SUCCEEDED":
-        candidates -= {TaskStage.VERIFYING, TaskStage.LEARNING}
+        candidates -= {TaskStage.VERIFYING, TaskStage.LEARNING, TaskStage.HARNESS_PROBE}
     if role == Role.ADMINISTRATOR:
         return candidates
     if role == Role.REVIEWER:
