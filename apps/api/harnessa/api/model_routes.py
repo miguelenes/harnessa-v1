@@ -281,20 +281,36 @@ async def _doctor(organization_id: UUID, db: AsyncSession) -> ModelDoctorRead:
         select(func.count()).select_from(ModelAlias).where(ModelAlias.organization_id == organization_id)
     )
     gateway_ready = False
-    if settings.model_gateway_url:
+    gateway_key = (
+        settings.model_gateway_api_key.get_secret_value()
+        if settings.model_gateway_api_key is not None
+        else ""
+    )
+    findings: list[str] = []
+    if settings.model_gateway_url and gateway_key:
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:
-                response = await client.get(
+                readiness = await client.get(
                     f"{settings.model_gateway_url.rstrip('/')}/health/readiness"
                 )
-                gateway_ready = response.is_success
+                if readiness.is_success:
+                    models = await client.get(
+                        f"{settings.model_gateway_url.rstrip('/')}/v1/models",
+                        headers={"Authorization": f"Bearer {gateway_key}"},
+                    )
+                    gateway_ready = models.is_success
+                    if not gateway_ready:
+                        findings.append(
+                            "LiteLLM rejected MODEL_GATEWAY_API_KEY; verify the virtual key and allowed model aliases."
+                        )
         except httpx.HTTPError:
             gateway_ready = False
-    findings: list[str] = []
     if not settings.model_gateway_url:
         findings.append("Set MODEL_GATEWAY_URL to the internal LiteLLM Proxy URL.")
-    elif not gateway_ready:
-        findings.append("LiteLLM Proxy readiness endpoint did not return success.")
+    elif not gateway_key:
+        findings.append("Set MODEL_GATEWAY_API_KEY to a scoped LiteLLM virtual key.")
+    elif not gateway_ready and not any("rejected MODEL_GATEWAY_API_KEY" in item for item in findings):
+        findings.append("LiteLLM readiness or authenticated model-list check did not return success.")
     if not deployment_count:
         findings.append("Register at least one LiteLLM deployment with an explicit secret reference and price revision.")
     if not alias_count:
@@ -302,7 +318,15 @@ async def _doctor(organization_id: UUID, db: AsyncSession) -> ModelDoctorRead:
     if not pools:
         findings.append("Create the default interactive/primary and probe/batch pools by bootstrapping the administrator.")
     return ModelDoctorRead(
-        status="ready" if gateway_ready and deployment_count and alias_count and pools else "setup_required",
+        status=(
+            "ready"
+            if gateway_ready
+            and bool(gateway_key)
+            and deployment_count
+            and alias_count
+            and pools
+            else "setup_required"
+        ),
         gateway_ready=gateway_ready,
         configured_accounts=int(account_count or 0),
         configured_deployments=int(deployment_count or 0),

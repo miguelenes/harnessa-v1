@@ -24,6 +24,7 @@ from harnessa.db.model_gateway import (
 from harnessa.db.models import Membership, Organization, ProjectMembership, User
 from harnessa.db.session import SessionLocal
 from harnessa.services.model_gateway import ModelGatewayError
+from pydantic import SecretStr
 from sqlalchemy import select
 
 from tests.integration.test_model_gateway import gateway_fixture, model_request
@@ -476,25 +477,38 @@ async def test_model_route_conflicts_authorization_and_doctor_readiness(
             async def __aexit__(self, *_args) -> None:
                 return None
 
-            async def get(self, url: str):
-                assert url == "http://gateway.internal/health/readiness"
+            async def get(self, url: str, *, headers: dict[str, str] | None = None):
+                if url == "http://gateway.internal/health/readiness":
+                    assert headers is None
+                    return ReadyResponse()
+                assert url == "http://gateway.internal/v1/models"
+                assert headers == {"Authorization": "Bearer sk-fixture-virtual-key"}
                 return ReadyResponse()
 
         monkeypatch.setattr(model_routes.settings, "model_gateway_url", "http://gateway.internal/")
         monkeypatch.setattr(model_routes.httpx, "AsyncClient", ReadyClient)
+        monkeypatch.setattr(model_routes.settings, "model_gateway_api_key", None)
+        missing_key = await model_routes._doctor(data["organization_id"], db)
+        assert missing_key.status == "setup_required"
+        assert any("MODEL_GATEWAY_API_KEY" in item for item in missing_key.findings)
+        monkeypatch.setattr(
+            model_routes.settings,
+            "model_gateway_api_key",
+            SecretStr("sk-fixture-virtual-key"),
+        )
         ready = await model_routes._doctor(data["organization_id"], db)
         assert ready.status == "ready"
         assert ready.gateway_ready is True
         assert ready.findings == []
 
         class UnavailableClient(ReadyClient):
-            async def get(self, _url: str):
+            async def get(self, _url: str, *, headers: dict[str, str] | None = None):
                 raise model_routes.httpx.ConnectError("offline fixture")
 
         monkeypatch.setattr(model_routes.httpx, "AsyncClient", UnavailableClient)
         unavailable = await model_routes._doctor(data["organization_id"], db)
         assert unavailable.gateway_ready is False
-        assert "readiness endpoint" in unavailable.findings[0]
+        assert "authenticated model-list check" in unavailable.findings[0]
 
         reader = User(
             email=f"model-reader-{uuid4().hex[:8]}@example.test",

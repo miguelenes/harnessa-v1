@@ -2,7 +2,13 @@
 
 Harnessa's LiteLLM Proxy is the only service that receives provider credentials.
 The Compose network keeps it internal; the default configuration does not publish
-port 4000 on the host. `infra/litellm/config.yaml` exposes two explicit model names:
+port 4000 on the host. LiteLLM requires a master key, which Compose passes only to
+the proxy. Use that credential only to administer LiteLLM and create a virtual key
+restricted to the exact Harnessa model aliases. Compose passes the virtual key to
+the API and worker; requests use it as a bearer token and fail closed when it is
+missing. Do not pass the master key to Harnessa. The model doctor checks process
+readiness and authenticates a non-billed `/v1/models` request; it does not call a
+provider. `infra/litellm/config.yaml` exposes two explicit model names:
 
 | LiteLLM model name | Provider model | Environment key |
 | --- | --- | --- |
@@ -44,8 +50,17 @@ When configuring the independent holdout evaluator, also set a positive
 the same lifetime ledger before dispatch and retains it after timeouts or
 failures, when billing may be unknown. Keep other separately billed judge
 services unavailable unless their maximum cost is also booked against the
-shared ledger. LiteLLM only records spend; Harnessa's scheduler owns budget
-enforcement.
+shared ledger. LiteLLM records provider spend, and Harnessa's scheduler owns its
+cross-project budget enforcement.
+
+Set `LITELLM_MASTER_KEY` to a random value prefixed with `sk-`, and create a
+separate LiteLLM virtual key for Harnessa with only the aliases in the table
+above. Set that virtual key as `MODEL_GATEWAY_API_KEY` in the operator's secret
+source. Apply a finite LiteLLM `max_budget` as an additional provider-side
+ceiling; it must not exceed the remaining shared milestone allowance. Keep both
+values out of source control. LiteLLM documents the master key and virtual-key
+setup in its [production guide](https://docs.litellm.ai/docs/proxy/prod) and
+[virtual-key guide](https://docs.litellm.ai/docs/proxy/virtual_keys).
 
 ```sh
 zsh -lic 'export DEEPSEEK_API_KEY OPENROUTER_API_KEY; podman compose --env-file .env -f infra/compose.yaml up -d litellm'
