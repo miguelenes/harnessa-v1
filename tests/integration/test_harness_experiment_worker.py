@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from harness2.substrate.opencode import OpencodeSubstrate
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.api import harness_routes
 from harnessa.contracts import TaskStage
 from harnessa.db.harness import HarnessExperience, HarnessExperiment, HarnessPolicy, HarnessProbeRun
@@ -197,6 +199,9 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
             assert isinstance(artifacts, list) and artifacts
             assert artifacts[0]["trace"]["sha256"]
             assert artifacts[0]["artifacts"][0]["media_type"] == "text/plain"
+            candidate_artifact = candidate["candidate"]
+            assert isinstance(candidate_artifact, dict)
+            assert candidate_artifact["sha256"]
             return {
                 "status": "passed",
                 "manifest_digest": str(candidate["digest"]),
@@ -272,11 +277,44 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
         },
     )()
     adapter.base_harness = lambda: base_harness
-    result = {"comparison_successful": True, "composed_successful": True}
+    candidate_bytes = b'{"schema_version":1,"components":{"systemprompt.md":"review me"}}'
+    candidate_stored = LocalArtifactStore(tmp_path).put_bytes(
+        candidate_bytes,
+        media_type="application/vnd.harnessa.harness-candidate+json",
+    )
+    candidate_ref = {
+        "sha256": candidate_stored.digest,
+        "storage_key": candidate_stored.storage_key,
+        "size_bytes": candidate_stored.size_bytes,
+        "media_type": candidate_stored.media_type,
+    }
+    result = {
+        "comparison_successful": True,
+        "composed_successful": True,
+        "cost_gate": {"status": "passed"},
+        "experience_candidate": {
+            "cue": "fixture cue",
+            "lesson": "fixture lesson",
+            "repository_scope": scope,
+            "domain_scope": "repository",
+            "component_digest": candidate_stored.digest,
+            "component_artifact": candidate_ref,
+            "changed_components": ["systemprompt.md"],
+        },
+    }
     await worker._persist(frozen, adapter, result)  # type: ignore[arg-type]
     holdout = await worker._grade_holdout(frozen, result)
     assert holdout["status"] == "passed"
     assert "private_feedback" not in holdout
+    assert result["promotion_gates"]["candidate_digest"] == (
+        result["experience_candidate"]["candidate_digest"]
+    )
+    assert result["promotion_gates"]["regression"] == "passed"
+    assert result["promotion_gates"]["security"] == "passed"
+    assert result["promotion_gates"]["cost"] == "blocked"
+    assert not harness_routes._promotion_gates_passed(
+        result, result["experience_candidate"]["candidate_digest"]
+    )
 
     async with SessionLocal() as db:
         probe = await db.scalar(select(HarnessProbeRun).where(
@@ -290,6 +328,24 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
         assert persisted.result_digest
         assert persisted.result["holdout_evaluation"]["judge_revision"] == "offline-holdout-fixture-v1"
         assert "private_feedback" not in persisted.result["holdout_evaluation"]
+        assert persisted.result["experience_candidate"]["evidence_refs"]
+        assert persisted.result["holdout_manifest"]["candidate_digest"] == (
+            persisted.result["experience_candidate"]["candidate_digest"]
+        )
+        candidate_metadata_ref = persisted.result["holdout_manifest"]["candidate_metadata"]
+        assert candidate_metadata_ref == persisted.result["experience_candidate"]["manifest_artifact"]
+        assert LocalArtifactStore(tmp_path).verify_reference(
+            candidate_metadata_ref["storage_key"],
+            expected_digest=candidate_metadata_ref["sha256"],
+            expected_size=candidate_metadata_ref["size_bytes"],
+        ) == "verified"
+        candidate_metadata = json.loads(
+            (tmp_path / candidate_metadata_ref["storage_key"]).read_bytes()
+        )
+        assert candidate_metadata["candidate_digest"] == (
+            persisted.result["experience_candidate"]["candidate_digest"]
+        )
+        assert candidate_metadata["evidence_refs"]
         assert persisted.result["holdout_manifest"]["artifacts"][0]["artifacts"][0]["sha256"]
         assert "storage_key" not in persisted.result["holdout_manifest"]["artifacts"][0]["artifacts"][0]
 

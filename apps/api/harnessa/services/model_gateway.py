@@ -123,6 +123,7 @@ def _supports(capabilities: dict[str, Any], requirements: RouteRequirements) -> 
         requirements.protocol.value in protocol_names
         and (not requirements.streaming or capabilities.get("streaming") is True)
         and (not requirements.tools or capabilities.get("tools") is True)
+        and (not requirements.json_mode or capabilities.get("json_mode") is True)
         and (not requirements.usage_reporting or capabilities.get("usage_reporting") is True)
         and (not requirements.cancellation or capabilities.get("cancellation") is True)
     )
@@ -1200,6 +1201,7 @@ class LiteLLMModelRouter:
         request: ModelRouteRequest,
         idempotency_key: str,
         tool_choice: str | dict[str, Any] | None = None,
+        response_format: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         if self.client is None and self.client_factory is None and not settings.model_gateway_url:
             raise ModelGatewayError(
@@ -1208,6 +1210,17 @@ class LiteLLMModelRouter:
         if request.stream:
             raise ModelGatewayError(
                 "stream_endpoint_required", 400, "Use the streaming route for stream requests"
+            )
+        if response_format is not None and (
+            request.requirements.protocol != ModelProtocol.CHAT_COMPLETIONS
+            or request.stream
+            or not request.requirements.json_mode
+            or response_format != {"type": "json_object"}
+        ):
+            raise ModelGatewayError(
+                "route_requirements_mismatch",
+                422,
+                "Only non-streaming chat completions support JSON object response format",
             )
         if request.tools and not request.requirements.tools:
             raise ModelGatewayError(
@@ -1291,6 +1304,7 @@ class LiteLLMModelRouter:
                     payload = request.to_provider_payload(
                         candidate.deployment.proxy_model,
                         tool_choice=tool_choice,
+                        response_format=response_format,
                     )
                     headers = self._request_headers(call_id, request.requirements.protocol)
                     started = asyncio.get_running_loop().time()

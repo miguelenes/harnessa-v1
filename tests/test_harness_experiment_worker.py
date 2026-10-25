@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from harness2.core.schedule import Namespace
 from harness2.substrate.opencode import OpencodeSubstrate
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.async_bridge import call_on_event_loop
 from harnessa.adapters.execution import TaskInput
 from harnessa.services.harness_adaptation import FrozenExperiment
@@ -19,9 +20,85 @@ from harnessa.services.harness_experiments import (
     HarnessExperimentWorker,
     _assert_holdout_free_tree,
     _exception_type_chain,
+    _experience_candidate_draft,
     _matched_comparison,
     _probe_label,
 )
+
+
+def test_experience_candidate_is_review_only_and_content_addressed(tmp_path: Path) -> None:
+    base_tree = {"systemprompt.md": "base prompt\n"}
+    candidate_tree = {"systemprompt.md": "bounded candidate prompt\n"}
+    result = {
+        "selections": {"agg": {"chosen_label": "agg1"}},
+        "modes": {"agg": {"stages": [{"label": "agg1", "notes": "Use the verified repository check."}]}},
+    }
+    candidate = _experience_candidate_draft(
+        result,
+        [{
+            "phase": "candidate",
+            "source_run_id": "agg1",
+            "status": "succeeded",
+            "delivered": True,
+            "tree": candidate_tree,
+        }],
+        base_tree=base_tree,
+        task_title="Verified task title",
+        repository_scope="owner/repo",
+        artifact_store=LocalArtifactStore(tmp_path),
+    )
+
+    assert candidate is not None
+    assert candidate["cue"] == "Verified task title"
+    assert candidate["lesson"] == "Use the verified repository check."
+    assert candidate["review_required"] is True
+    assert candidate["automatically_activated"] is False
+    artifact = candidate["component_artifact"]
+    assert LocalArtifactStore(tmp_path).verify_reference(
+        artifact["storage_key"],
+        expected_digest=artifact["sha256"],
+        expected_size=artifact["size_bytes"],
+    ) == "verified"
+
+
+def test_experience_candidate_is_not_created_for_unchanged_harness(tmp_path: Path) -> None:
+    tree = {"systemprompt.md": "base prompt\n"}
+    candidate = _experience_candidate_draft(
+        {"selections": {"agg": {"chosen_label": "agg1"}}},
+        [{
+            "phase": "candidate",
+            "source_run_id": "agg1",
+            "status": "succeeded",
+            "delivered": True,
+            "tree": tree,
+        }],
+        base_tree=tree,
+        task_title="Verified task title",
+        repository_scope="owner/repo",
+        artifact_store=LocalArtifactStore(tmp_path),
+    )
+
+    assert candidate is None
+
+
+def test_failed_candidate_is_never_captured_as_experience(tmp_path: Path) -> None:
+    base_tree = {"systemprompt.md": "base prompt\n"}
+    candidate = _experience_candidate_draft(
+        {"selections": {"agg": {"chosen_label": "agg1"}}},
+        [{
+            "phase": "candidate",
+            "source_run_id": "agg1",
+            "status": "failed",
+            "delivered": False,
+            "tree": {"systemprompt.md": "unverified candidate\n"},
+        }],
+        base_tree=base_tree,
+        task_title="Verified task title",
+        repository_scope="owner/repo",
+        artifact_store=LocalArtifactStore(tmp_path),
+    )
+
+    assert candidate is None
 
 
 def test_exception_chain_records_numeric_rpc_code_without_error_message() -> None:

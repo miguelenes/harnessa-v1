@@ -106,6 +106,7 @@ class RouteRequirements(BaseModel):
     protocol: ModelProtocol
     streaming: bool = False
     tools: bool = False
+    json_mode: bool = False
     minimum_context: int = Field(default=1, ge=1, le=2_000_000)
     usage_reporting: bool = True
     cancellation: bool = False
@@ -142,6 +143,8 @@ class ModelRouteRequest(BaseModel):
             raise ValueError("Chat and Anthropic Messages APIs require at least one message")
         if self.stream and not self.requirements.streaming:
             raise ValueError("Streaming requests must require streaming capability")
+        if self.stream and self.requirements.json_mode:
+            raise ValueError("JSON object response format is available only for non-streaming requests")
         if self.tools and not self.requirements.tools:
             raise ValueError("Tool requests must require tool capability")
         return self
@@ -151,7 +154,15 @@ class ModelRouteRequest(BaseModel):
         model: str,
         *,
         tool_choice: str | dict[str, Any] | None = None,
+        response_format: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        if response_format is not None and (
+            response_format != {"type": "json_object"}
+            or self.requirements.protocol != ModelProtocol.CHAT_COMPLETIONS
+            or self.stream
+            or not self.requirements.json_mode
+        ):
+            raise ValueError("JSON object response format requires non-streaming chat completions")
         if tool_choice is not None and (
             not self.tools or self.requirements.protocol != ModelProtocol.CHAT_COMPLETIONS
         ):
@@ -167,6 +178,8 @@ class ModelRouteRequest(BaseModel):
             }
             if self.stream:
                 payload["stream_options"] = {"include_usage": True}
+            if response_format is not None:
+                payload["response_format"] = response_format
         elif self.requirements.protocol == ModelProtocol.RESPONSES:
             if self.input is None:
                 raise ValueError("Responses API requires an input")
@@ -212,6 +225,7 @@ class ModelDeploymentCapabilities(BaseModel):
     protocols: list[ModelProtocol] = Field(min_length=1)
     streaming: bool = False
     tools: bool = False
+    json_mode: bool = False
     usage_reporting: bool = False
     cancellation: bool = False
 

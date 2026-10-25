@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid5
@@ -29,7 +30,7 @@ from harnessa.adapters.specification_workspace import SpecificationWorkspaceErro
 from harnessa.config import settings
 from harnessa.contracts import ModelPoolKind
 from harnessa.db.harness import HarnessExperience, HarnessExperiment, HarnessPolicy, HarnessProbeRun
-from harnessa.db.model_gateway import ModelRequestLedger
+from harnessa.db.model_gateway import ModelBudgetPolicy, ModelRequestLedger
 from harnessa.db.models import Project, Repository, Task
 from harnessa.db.orchestration import Run, RunArtifact, RunCheckpoint
 from harnessa.db.session import SessionLocal
@@ -40,6 +41,10 @@ from harnessa.services.harness_adaptation import (
     HarnessAdaptationError,
     _is_holdout_path,
     run_upstream_task,
+)
+from harnessa.services.harness_experience import (
+    canonical_experience_evidence_refs,
+    experience_candidate_digest,
 )
 from harnessa.services.specifications import specification_workspace_manager
 from sqlalchemy import func, or_, select
@@ -63,6 +68,94 @@ _BENCH_SPEC = BenchSpec(
     },
     allow_subagents=False,
 )
+
+
+def _experience_candidate_draft(
+    result: dict[str, Any],
+    records: list[dict[str, Any]],
+    *,
+    base_tree: dict[str, str],
+    task_title: str,
+    repository_scope: str,
+    artifact_store: LocalArtifactStore,
+) -> dict[str, Any] | None:
+    """Capture one selected, changed candidate as review-only CAS evidence."""
+    selections = result.get("selections")
+    if not isinstance(selections, dict):
+        return None
+    for mode, selection in selections.items():
+        if not isinstance(selection, dict):
+            continue
+        chosen = selection.get("chosen_label")
+        if not isinstance(chosen, str) or not chosen:
+            continue
+        record = next(
+            (
+                item
+                for item in records
+                if item.get("phase") == "candidate"
+                and item.get("status") == "succeeded"
+                and item.get("delivered") is True
+                and item.get("source_run_id") == chosen
+                and isinstance(item.get("tree"), dict)
+            ),
+            None,
+        )
+        if record is None:
+            continue
+        tree = record["tree"]
+        changed_paths = sorted(
+            path
+            for path in set(base_tree) | set(tree)
+            if base_tree.get(path) != tree.get(path)
+        )
+        if not changed_paths:
+            continue
+        stage_rows = (result.get("modes", {}).get(mode, {}) or {}).get("stages", [])
+        note = next(
+            (
+                stage.get("notes", "").strip()
+                for stage in stage_rows
+                if isinstance(stage, dict)
+                and stage.get("label") == chosen
+                and isinstance(stage.get("notes"), str)
+                and stage["notes"].strip()
+            ),
+            "",
+        )
+        lesson = note[:2000] if note else (
+            "Review the selected Harness² component changes in "
+            + ", ".join(changed_paths[:20])
+            + ". This candidate remains inactive until independent evaluation and operator review."
+        )
+        component_bytes = json.dumps(
+            {"schema_version": 1, "components": tree},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        stored = artifact_store.put_bytes(
+            component_bytes,
+            media_type="application/vnd.harnessa.harness-candidate+json",
+        )
+        conflict_material = f"{repository_scope}:{task_title.strip().casefold()}"
+        return {
+            "cue": task_title[:1000],
+            "lesson": lesson,
+            "repository_scope": repository_scope,
+            "domain_scope": "repository",
+            "conflict_key": hashlib.sha256(conflict_material.encode()).hexdigest()[:32],
+            "component_digest": stored.digest,
+            "component_artifact": {
+                "sha256": stored.digest,
+                "storage_key": stored.storage_key,
+                "size_bytes": stored.size_bytes,
+                "media_type": stored.media_type,
+            },
+            "changed_components": changed_paths[:20],
+            "review_required": True,
+            "automatically_activated": False,
+        }
+    return None
 
 
 def _exception_type_chain(error: BaseException, *, limit: int = 4) -> str:
@@ -520,6 +613,17 @@ class HarnessExperimentWorker:
                 "issues": comparison_issues,
             }
             await self._execute_composed(frozen, adapter, result)
+            result["experience_candidate"] = await asyncio.to_thread(
+                _experience_candidate_draft,
+                result,
+                adapter.records,
+                base_tree=harness_tree.read_tree(
+                    adapter.substrate.surface(), adapter.base_harness()
+                ),
+                task_title=task_input.title,
+                repository_scope=repository_scope,
+                artifact_store=LocalArtifactStore(Path(settings.artifact_root)),
+            )
             await self._persist(frozen, adapter, result)
             holdout = await self._grade_holdout(frozen, result)
             successful = (
@@ -663,6 +767,8 @@ class HarnessExperimentWorker:
                 return
             base_tree = harness_tree.read_tree(adapter.substrate.surface(), adapter.base_harness())
             holdout_artifacts: list[dict[str, Any]] = []
+            probe_cost_total = Decimal(0)
+            probe_cost_known = True
             for record in adapter.records:
                 trace = (Path(record["run_dir"]) / "trajectory.txt").read_bytes()[:200_000]
                 store = LocalArtifactStore(Path(settings.artifact_root))
@@ -675,6 +781,10 @@ class HarnessExperimentWorker:
                 known_tokens = [int(x.input_tokens) + int(x.output_tokens) for x in attempts
                                 if x.usage_known and x.input_tokens is not None and x.output_tokens is not None]
                 known_cost = [(x.billed_usd or 0) + (x.estimated_usd or 0) for x in metrics if x.usage_known]
+                if not metrics or len(known_cost) != len(metrics):
+                    probe_cost_known = False
+                else:
+                    probe_cost_total += sum(known_cost, Decimal(0))
                 run_id = UUID(record["run_uuid"])
                 run_artifacts = list(await db.scalars(select(RunArtifact).where(
                     RunArtifact.run_id == run_id,
@@ -682,6 +792,8 @@ class HarnessExperimentWorker:
                 )))
                 holdout_artifacts.append({
                     "phase": record["phase"],
+                    "label": record["label"][:100],
+                    "status": record["status"],
                     "run_id": str(run_id),
                     "harness_digest": record["harness_digest"],
                     "trace": {
@@ -723,6 +835,17 @@ class HarnessExperimentWorker:
                 ))) if frozen.proposer_run_id else []
                 proposer_metrics = [item for item in proposer_ledger if item.event_type == "settled"]
                 proposer_attempts = [item for item in proposer_ledger if item.event_type == "attempt_succeeded"]
+                known_proposer_usage = bool(proposer_metrics) and all(
+                    item.usage_known for item in proposer_metrics
+                )
+                if not known_proposer_usage:
+                    probe_cost_known = False
+                else:
+                    probe_cost_total += sum(
+                        ((item.billed_usd or 0) + (item.estimated_usd or 0)
+                         for item in proposer_metrics),
+                        Decimal(0),
+                    )
                 known_proposer_tokens = [
                     int(item.input_tokens) + int(item.output_tokens)
                     for item in proposer_attempts
@@ -748,6 +871,83 @@ class HarnessExperimentWorker:
                     and len(known_proposer_tokens) == len(proposer_metrics)
                     and len(known_proposer_cost) == len(proposer_metrics),
                 }
+                budget = await db.scalar(
+                    select(ModelBudgetPolicy).where(
+                        ModelBudgetPolicy.project_id == frozen.project_id
+                    )
+                )
+                probe_task_limit = budget.probe_task_limit_usd if budget else Decimal(0)
+                result["cost_gate"] = {
+                    "status": (
+                        "passed"
+                        if probe_cost_known
+                        and probe_task_limit > 0
+                        and probe_cost_total <= probe_task_limit
+                        else "blocked"
+                    ),
+                    "usage_known": probe_cost_known,
+                    "cost_usd": str(probe_cost_total) if probe_cost_known else None,
+                    "task_limit_usd": str(probe_task_limit) if budget else None,
+                }
+                candidate = result.get("experience_candidate")
+                candidate_metadata_artifact = None
+                base_harness_bytes = json.dumps(
+                    {"schema_version": 1, "components": base_tree},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+                base_harness_artifact = await asyncio.to_thread(
+                    LocalArtifactStore(Path(settings.artifact_root)).put_bytes,
+                    base_harness_bytes,
+                    media_type="application/vnd.harnessa.harness-base+json",
+                )
+                if isinstance(candidate, dict):
+                    evidence_refs = canonical_experience_evidence_refs([
+                        {
+                            "digest": artifact["trace"]["sha256"],
+                            "kind": artifact["phase"],
+                            "label": artifact["label"],
+                        }
+                        for artifact in holdout_artifacts
+                        if artifact.get("phase") in {"baseline", "candidate", "composed"}
+                        and artifact.get("status") == "succeeded"
+                        and isinstance(artifact.get("trace"), dict)
+                    ])
+                    candidate["evidence_refs"] = evidence_refs
+                    candidate["candidate_digest"] = experience_candidate_digest(
+                        cue=candidate["cue"],
+                        lesson=candidate["lesson"],
+                        evidence_refs=evidence_refs,
+                        repository_scope=candidate["repository_scope"],
+                        domain_scope=candidate["domain_scope"],
+                    )
+                    candidate_metadata_bytes = json.dumps(
+                        {
+                            "schema_version": 1,
+                            "cue": candidate["cue"],
+                            "lesson": candidate["lesson"],
+                            "repository_scope": candidate["repository_scope"],
+                            "domain_scope": candidate["domain_scope"],
+                            "evidence_refs": evidence_refs,
+                            "candidate_digest": candidate["candidate_digest"],
+                            "component_digest": candidate["component_digest"],
+                            "component_artifact": candidate["component_artifact"],
+                            "changed_components": candidate["changed_components"],
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                    candidate_metadata_artifact = await asyncio.to_thread(
+                        LocalArtifactStore(Path(settings.artifact_root)).put_bytes,
+                        candidate_metadata_bytes,
+                        media_type="application/vnd.harnessa.experience-candidate+json",
+                    )
+                    candidate["manifest_artifact"] = {
+                        "sha256": candidate_metadata_artifact.digest,
+                        "storage_key": candidate_metadata_artifact.storage_key,
+                        "size_bytes": candidate_metadata_artifact.size_bytes,
+                        "media_type": candidate_metadata_artifact.media_type,
+                    }
                 manifest = {
                     "schema_version": 1,
                     "experiment_id": str(frozen.experiment_id),
@@ -764,7 +964,17 @@ class HarnessExperimentWorker:
                     "route_alias": frozen.route_alias,
                     "image_revision": frozen.image_revision,
                     "artifacts": holdout_artifacts,
+                    "base_harness": {
+                        "sha256": base_harness_artifact.digest,
+                        "storage_key": base_harness_artifact.storage_key,
+                        "size_bytes": base_harness_artifact.size_bytes,
+                        "media_type": base_harness_artifact.media_type,
+                    },
                 }
+                if isinstance(candidate, dict):
+                    manifest["candidate"] = candidate["component_artifact"]
+                    manifest["candidate_digest"] = candidate["candidate_digest"]
+                    manifest["candidate_metadata"] = candidate["manifest_artifact"]
                 manifest_bytes = json.dumps(
                     manifest, sort_keys=True, separators=(",", ":")
                 ).encode()
@@ -852,6 +1062,61 @@ class HarnessExperimentWorker:
                 safe["status"], safe["reason_code"] = "unknown", "evaluator_timeout"
             except Exception as exc:  # noqa: BLE001 - evaluator outage must not bypass the gate
                 safe["status"], safe["reason_code"] = "unknown", f"evaluator_error_{type(exc).__name__}"
+        candidate = result.get("experience_candidate")
+        if safe.get("status") == "passed" and isinstance(candidate, dict):
+            candidate_ref = candidate.get("component_artifact")
+            candidate_digest = candidate.get("candidate_digest")
+            candidate_ref_shape_valid = (
+                isinstance(candidate_ref, dict)
+                and candidate_ref.get("sha256") == candidate.get("component_digest")
+                and isinstance(candidate_ref.get("storage_key"), str)
+                and isinstance(candidate.get("manifest_artifact"), dict)
+                and isinstance(candidate_digest, str)
+                and isinstance(manifest, dict)
+                and manifest.get("candidate_digest") == candidate_digest
+                and manifest.get("candidate_metadata") == candidate.get("manifest_artifact")
+            )
+            candidate_ref_valid = False
+            if candidate_ref_shape_valid and isinstance(candidate_ref, dict):
+                store = LocalArtifactStore(Path(settings.artifact_root))
+                candidate_ref_valid = (
+                    await asyncio.to_thread(
+                        store.verify_reference,
+                        candidate_ref["storage_key"],
+                        expected_digest=candidate_ref["sha256"],
+                        expected_size=candidate_ref["size_bytes"],
+                        max_bytes=2_000_000,
+                    )
+                    == "verified"
+                )
+                metadata_ref = candidate.get("manifest_artifact")
+                if candidate_ref_valid and isinstance(metadata_ref, dict):
+                    candidate_ref_valid = (
+                        await asyncio.to_thread(
+                            store.verify_reference,
+                            metadata_ref["storage_key"],
+                            expected_digest=metadata_ref["sha256"],
+                            expected_size=metadata_ref["size_bytes"],
+                            max_bytes=256_000,
+                        )
+                        == "verified"
+                    )
+            result["promotion_gates"] = {
+                "candidate_digest": candidate_digest if candidate_ref_valid else "",
+                "regression": (
+                    "passed"
+                    if result.get("comparison_successful") is True
+                    and result.get("composed_successful") is True
+                    else "failed"
+                ),
+                "security": "passed" if candidate_ref_valid else "failed",
+                "cost": (
+                    "passed"
+                    if isinstance(result.get("cost_gate"), dict)
+                    and result["cost_gate"].get("status") == "passed"
+                    else "blocked"
+                ),
+            }
         result["holdout_evaluation"] = safe
         persisted = await self._persist_holdout_evaluation(frozen, result)
         if not persisted:

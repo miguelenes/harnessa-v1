@@ -16,6 +16,7 @@ from harnessa.contracts import (
     ModelRouteRequest,
     RouteRequirements,
 )
+from harnessa.db.harness import EvaluationRun
 from harnessa.db.model_gateway import (
     AliasDeployment,
     ModelAlias,
@@ -31,6 +32,7 @@ from harnessa.db.model_gateway import (
 )
 from harnessa.db.models import Membership, Organization, Project, ProjectMembership, Task, User
 from harnessa.db.orchestration import Run
+from harnessa.db.review import VerificationManifestRevision
 from harnessa.db.session import SessionLocal
 from harnessa.services.model_gateway import (
     LiteLLMModelRouter,
@@ -124,6 +126,7 @@ async def gateway_fixture(
             "protocols": [ModelProtocol.CHAT_COMPLETIONS.value],
             "streaming": True,
             "tools": True,
+            "json_mode": True,
             "usage_reporting": True,
             "cancellation": False,
         }
@@ -198,7 +201,7 @@ async def gateway_fixture(
         }
 
 
-def model_request(data, *, pool=ModelPoolKind.INTERACTIVE, streaming=False):
+def model_request(data, *, pool=ModelPoolKind.INTERACTIVE, streaming=False, json_mode=False):
     return ModelRouteRequest(
         task_id=data["task_id"],
         run_id=data["run_id"],
@@ -208,6 +211,7 @@ def model_request(data, *, pool=ModelPoolKind.INTERACTIVE, streaming=False):
             protocol=ModelProtocol.CHAT_COMPLETIONS,
             streaming=streaming,
             tools=streaming,
+            json_mode=json_mode,
             usage_reporting=True,
             minimum_context=64,
         ),
@@ -281,6 +285,38 @@ async def test_fault_injected_retries_fallback_and_actual_attribution(
             assert success.actual_model == "provider/fallback-model"
             assert success.request_identifier == "call-fixture"
             assert all("fixture request" not in json.dumps(event.details) for event in events)
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.anyio
+async def test_json_object_response_format_is_forwarded_to_litellm(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    assert VerificationManifestRevision.__tablename__ == "verification_manifest_revisions"
+    assert EvaluationRun.__tablename__ == "evaluation_runs"
+    data = await gateway_fixture()
+    monkeypatch.setattr(settings, "model_gateway_api_key", SecretStr("sk-fixture-virtual-key"))
+    seen: list[dict[str, object]] = []
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer sk-fixture-virtual-key"
+        seen.append(json.loads(request.read().decode()))
+        return success_response("gateway-primary")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(provider), base_url="http://litellm")
+    try:
+        async with SessionLocal() as db:
+            await LiteLLMModelRouter(client=client).complete(
+                db,
+                organization_id=data["organization_id"],
+                project_id=data["project_id"],
+                request=model_request(data, json_mode=True),
+                idempotency_key="json-object-forwarding-1",
+                response_format={"type": "json_object"},
+            )
+        assert len(seen) == 1
+        assert seen[0]["response_format"] == {"type": "json_object"}
     finally:
         await client.aclose()
 

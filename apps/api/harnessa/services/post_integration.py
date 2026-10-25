@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -24,6 +23,7 @@ from harnessa.db.review import (
 )
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
+from harnessa.services.harness_experience import experience_candidate_digest
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -208,16 +208,18 @@ async def _execute_step(
                     "status": existing.status,
                     "idempotent_replay": True,
                 }
-            payload = {
-                "cue": cue,
-                "lesson": lesson,
-                "evidence_refs": evidence_refs,
-                "repository_scope": repository.target_id,
-                "domain_scope": str(hook.get("domain_scope", "repository")),
-            }
-            candidate_digest = hashlib.sha256(
-                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
+            domain_scope = str(hook.get("domain_scope", "repository"))
+            candidate_digest = experience_candidate_digest(
+                cue=cue,
+                lesson=lesson,
+                evidence_refs=evidence_refs,
+                repository_scope=repository.target_id,
+                domain_scope=domain_scope,
+            )
+            if hook.get("candidate_digest") != candidate_digest:
+                raise SpecificationWorkspaceError(
+                    "Harness learning candidate digest does not match its evidence"
+                )
             candidate = HarnessExperience(
                 organization_id=integration.organization_id,
                 project_id=integration.project_id,
