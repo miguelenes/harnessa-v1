@@ -16,6 +16,41 @@ from typing import Any, Protocol
 from harnessa.adapters.sandbox_policy import SandboxLimits, SandboxPolicyError
 
 _DIGEST = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
+_COMPILER_TERMINATE_TIMEOUT_SECONDS = 1.0
+
+
+async def _reap_cancelled_compiler(
+    process: asyncio.subprocess.Process, temporary: Path
+) -> None:
+    async def terminate_and_reap() -> None:
+        try:
+            if process.returncode is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(
+                        process.wait(), timeout=_COMPILER_TERMINATE_TIMEOUT_SECONDS
+                    )
+                except TimeoutError:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    await process.wait()
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    cleanup = asyncio.create_task(terminate_and_reap())
+    while True:
+        try:
+            await asyncio.shield(cleanup)
+            return
+        except asyncio.CancelledError:
+            if cleanup.done():
+                cleanup.result()
+                return
 
 
 class SandboxUnavailable(RuntimeError):
@@ -299,7 +334,11 @@ class PodmanSandboxBackend:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await process.communicate()
+            try:
+                stdout, stderr = await process.communicate()
+            except asyncio.CancelledError:
+                await _reap_cancelled_compiler(process, temporary)
+                raise
             if process.returncode != 0:
                 temporary.unlink(missing_ok=True)
                 logger_message = (stderr or stdout).decode("utf-8", errors="replace")[:300]
@@ -334,7 +373,11 @@ class PodmanSandboxBackend:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await process.communicate()
+            try:
+                stdout, stderr = await process.communicate()
+            except asyncio.CancelledError:
+                await _reap_cancelled_compiler(process, temporary)
+                raise
             if process.returncode != 0:
                 temporary.unlink(missing_ok=True)
                 detail = (stderr or stdout).decode("utf-8", errors="replace")[:300]
