@@ -20,6 +20,7 @@ from harnessa.adapters.acp_session import (
     ProtocolLimitExceeded,
 )
 from harnessa.adapters.agent_registry import get_agent
+from harnessa.adapters.safe_diagnostics import safe_exception_type_chain
 from harnessa.adapters.sandbox_policy import (
     SandboxPolicyError,
     permission_allowed,
@@ -43,6 +44,31 @@ class _Writer:
 
     async def wait_closed(self) -> None:
         return None
+
+
+def test_safe_exception_chain_keeps_only_bounded_protocol_metadata() -> None:
+    class RequestError(Exception):
+        def __init__(self) -> None:
+            super().__init__("private provider response and user content")
+            self.code = -32603
+            self.data = {
+                "type": "InternalProviderError",
+                "message": "private response",
+                "status": 502,
+            }
+            self.harnessa_diagnostics = ["provider_unavailable", "private diagnostic"]
+
+    request_error = RequestError()
+    wrapped = RuntimeError("private wrapper content")
+    wrapped.__cause__ = request_error
+
+    diagnostic = safe_exception_type_chain(wrapped)
+
+    assert diagnostic == (
+        "RuntimeError->RequestError[code=-32603,type=InternalProviderError,status=502]"
+        "[stderr=provider_unavailable]"
+    )
+    assert "private" not in diagnostic
 
 
 @pytest.mark.anyio

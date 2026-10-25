@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import stat
@@ -254,6 +255,46 @@ async def test_native_bridge_builds_use_bounded_compiler_arguments_and_atomic_pu
     assert tool.stat().st_mode & 0o777 == 0o700
     assert len(invocations) == 2
     assert all("-Werror" in args and "-static" in args for args in invocations)
+
+
+@pytest.mark.anyio
+async def test_parallel_model_relay_builds_serialize_shared_atomic_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = _backend()
+    destination = tmp_path / "bin" / "model-relay"
+    active = 0
+    maximum_active = 0
+    invocations = 0
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def compile_fixture(*args: object, **_: object) -> Process:
+        nonlocal active, maximum_active, invocations
+        active += 1
+        invocations += 1
+        maximum_active = max(maximum_active, active)
+        await asyncio.sleep(0.02)
+        output = Path(str(args[args.index("-o") + 1]))
+        output.write_bytes(b"offline compiler fixture")
+        active -= 1
+        return Process()
+
+    monkeypatch.setattr("harnessa.adapters.podman_sandbox.shutil.which", lambda _: "/usr/bin/cc")
+    monkeypatch.setattr(
+        "harnessa.adapters.podman_sandbox.asyncio.create_subprocess_exec", compile_fixture
+    )
+    built = await asyncio.gather(*(backend.build_model_relay(destination) for _ in range(6)))
+
+    assert built == [destination] * 6
+    assert destination.read_bytes() == b"offline compiler fixture"
+    assert destination.stat().st_mode & 0o777 == 0o700
+    assert invocations == 6
+    assert maximum_active == 1
 
 
 @pytest.mark.anyio

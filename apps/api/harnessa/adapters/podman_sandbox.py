@@ -99,6 +99,11 @@ class PodmanSandboxBackend:
         self.limits = limits or SandboxLimits()
         self.executable = shutil.which(executable) or executable
         self.platform = platform
+        # Parallel Harness² runs share one backend and the same temporary
+        # compiler destinations. Serialize each helper build so concurrent
+        # replace() calls cannot consume another run's .tmp file.
+        self._model_relay_build_lock = asyncio.Lock()
+        self._orchestrator_tool_build_lock = asyncio.Lock()
 
     async def validate(self) -> None:
         if not shutil.which(self.executable) and not Path(self.executable).is_file():
@@ -271,68 +276,74 @@ class PodmanSandboxBackend:
         return command
 
     async def build_model_relay(self, destination: Path) -> Path:
-        compiler = shutil.which("cc")
-        if compiler is None:
-            raise SandboxUnavailable(
-                "A C compiler is required to build the isolated model socket relay"
+        async with self._model_relay_build_lock:
+            compiler = shutil.which("cc")
+            if compiler is None:
+                raise SandboxUnavailable(
+                    "A C compiler is required to build the isolated model socket relay"
+                )
+            source = Path(__file__).with_name("acp_socket_relay.c")
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            temporary = destination.with_suffix(".tmp")
+            process = await asyncio.create_subprocess_exec(
+                compiler,
+                "-static",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-pthread",
+                str(source),
+                "-o",
+                str(temporary),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        source = Path(__file__).with_name("acp_socket_relay.c")
-        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temporary = destination.with_suffix(".tmp")
-        process = await asyncio.create_subprocess_exec(
-            compiler,
-            "-static",
-            "-O2",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-pthread",
-            str(source),
-            "-o",
-            str(temporary),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        if process.returncode != 0:
-            temporary.unlink(missing_ok=True)
-            logger_message = (stderr or stdout).decode("utf-8", errors="replace")[:300]
-            raise SandboxUnavailable(f"Could not build the model socket relay: {logger_message}")
-        temporary.chmod(0o700)
-        temporary.replace(destination)
-        return destination
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                temporary.unlink(missing_ok=True)
+                logger_message = (stderr or stdout).decode("utf-8", errors="replace")[:300]
+                raise SandboxUnavailable(
+                    f"Could not build the model socket relay: {logger_message}"
+                )
+            temporary.chmod(0o700)
+            temporary.replace(destination)
+            return destination
 
     async def build_orchestrator_tool(self, destination: Path) -> Path:
-        compiler = shutil.which("cc")
-        if compiler is None:
-            raise SandboxUnavailable(
-                "A C compiler is required to build the isolated orchestrator tool"
+        async with self._orchestrator_tool_build_lock:
+            compiler = shutil.which("cc")
+            if compiler is None:
+                raise SandboxUnavailable(
+                    "A C compiler is required to build the isolated orchestrator tool"
+                )
+            source = Path(__file__).with_name("acp_orchestrator_mcp.c")
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            temporary = destination.with_suffix(".tmp")
+            process = await asyncio.create_subprocess_exec(
+                compiler,
+                "-static",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-std=c11",
+                str(source),
+                "-o",
+                str(temporary),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        source = Path(__file__).with_name("acp_orchestrator_mcp.c")
-        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temporary = destination.with_suffix(".tmp")
-        process = await asyncio.create_subprocess_exec(
-            compiler,
-            "-static",
-            "-O2",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-std=c11",
-            str(source),
-            "-o",
-            str(temporary),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        if process.returncode != 0:
-            temporary.unlink(missing_ok=True)
-            detail = (stderr or stdout).decode("utf-8", errors="replace")[:300]
-            raise SandboxUnavailable(f"Could not build the orchestrator MCP tool: {detail}")
-        temporary.chmod(0o700)
-        temporary.replace(destination)
-        return destination
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                temporary.unlink(missing_ok=True)
+                detail = (stderr or stdout).decode("utf-8", errors="replace")[:300]
+                raise SandboxUnavailable(
+                    f"Could not build the orchestrator MCP tool: {detail}"
+                )
+            temporary.chmod(0o700)
+            temporary.replace(destination)
+            return destination
 
     async def launch(
         self,

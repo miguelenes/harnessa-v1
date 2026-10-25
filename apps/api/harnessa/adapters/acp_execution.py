@@ -41,6 +41,7 @@ from harnessa.adapters.podman_sandbox import (
     SandboxUnavailable,
 )
 from harnessa.adapters.protocols import ModelRouter
+from harnessa.adapters.safe_diagnostics import safe_exception_type_chain
 from harnessa.adapters.sandbox_policy import SandboxLimits
 from harnessa.adapters.specification_workspace import (
     SpecificationWorkspaceError,
@@ -343,7 +344,7 @@ class ACPExecutionAdapter:
                         raise ExecutionFailure(
                             "permanent",
                             "specification_context_unavailable",
-                            str(exc)[:300],
+                            safe_exception_type_chain(exc),
                         ) from exc
 
             workspace = await self.workspaces.provision(
@@ -618,7 +619,11 @@ class ACPExecutionAdapter:
                 "transient", "acp_timeout", "ACP execution exceeded a time bound"
             ) from exc
         except (ACPProtocolError, WorkspaceError, SandboxUnavailable) as exc:
-            raise ExecutionFailure("permanent", "acp_execution_rejected", str(exc)[:300]) from exc
+            raise ExecutionFailure(
+                "permanent",
+                "acp_execution_rejected",
+                safe_exception_type_chain(exc),
+            ) from exc
         finally:
             if broker is not None:
                 await broker.close()
