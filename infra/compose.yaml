@@ -13,7 +13,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-harnessa}
     networks: [app_internal]
     ports:
-      - "${POSTGRES_PORT:-5433}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -60,7 +60,7 @@ services:
       retries: 20
     networks: [app_internal]
     ports:
-      - "${REDIS_PORT:-6380}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
   api:
     build:
       context: ..
@@ -108,7 +108,7 @@ services:
       GITHUB_HTTP_TIMEOUT_SECONDS: ${GITHUB_HTTP_TIMEOUT_SECONDS:-10}
       GITHUB_WEBHOOK_MAX_BYTES: ${GITHUB_WEBHOOK_MAX_BYTES:-262144}
       GITHUB_WEBHOOK_MAX_ATTEMPTS: ${GITHUB_WEBHOOK_MAX_ATTEMPTS:-12}
-    networks: [app_internal]
+    networks: [app_internal, github_egress]
     restart: unless-stopped
     stop_grace_period: 45s
     mem_limit: 2g
@@ -118,7 +118,7 @@ services:
       - artifacts:/var/lib/harnessa/artifacts
     command: ["sh", "-c", "cd apps/api && uv run --no-sync alembic upgrade head && uv run --no-sync uvicorn harnessa.main:app --host 0.0.0.0 --port 8000"]
     ports:
-      - "${API_PORT:-8010}:8000"
+      - "127.0.0.1:${API_PORT:-8010}:8000"
     healthcheck:
       test: ["CMD", "python", "-m", "harnessa.healthcheck"]
       interval: 5s
@@ -140,7 +140,7 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8010}
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
     restart: unless-stopped
     stop_grace_period: 20s
     mem_limit: 1g
@@ -196,7 +196,7 @@ services:
       GITHUB_HTTP_TIMEOUT_SECONDS: ${GITHUB_HTTP_TIMEOUT_SECONDS:-10}
       GITHUB_WEBHOOK_MAX_BYTES: ${GITHUB_WEBHOOK_MAX_BYTES:-262144}
       GITHUB_WEBHOOK_MAX_ATTEMPTS: ${GITHUB_WEBHOOK_MAX_ATTEMPTS:-12}
-    networks: [app_internal]
+    networks: [app_internal, github_egress]
     restart: unless-stopped
     stop_grace_period: 60s
     mem_limit: 4g
@@ -264,4 +264,5 @@ volumes:
 networks:
   app_internal:
     internal: true
+  github_egress: {}
   provider_egress: {}

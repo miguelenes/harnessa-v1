@@ -50,3 +50,15 @@ def test_compose_passes_provider_keys_database_url_and_master_key():
     }
     assert "${LITELLM_POSTGRES_PASSWORD:" in environment["LITELLM_DATABASE_URL"]
     assert "${LITELLM_MASTER_KEY:" in environment["LITELLM_MASTER_KEY"]
+
+
+def test_compose_binds_operator_ports_to_loopback():
+    compose_path = Path(__file__).parents[1] / "infra" / "compose.yaml"
+    compose = yaml.safe_load(compose_path.read_text())
+
+    for service in ("db", "redis", "api", "web"):
+        assert all(port.startswith("127.0.0.1:") for port in compose["services"][service]["ports"])
+
+    assert set(compose["services"]["api"]["networks"]) == {"app_internal", "github_egress"}
+    assert set(compose["services"]["worker"]["networks"]) == {"app_internal", "github_egress"}
+    assert set(compose["services"]["litellm"]["networks"]) == {"app_internal", "provider_egress"}
