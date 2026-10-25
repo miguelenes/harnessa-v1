@@ -75,6 +75,9 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       REPOSITORY_TARGETS: ${REPOSITORY_TARGETS:-}
+      OPENSPEC_REPOSITORY_SOURCES_JSON: "${OPENSPEC_REPOSITORY_SOURCES_JSON:-{}}"
+      OPENSPEC_WORKSPACE_ROOT: ${OPENSPEC_WORKSPACE_ROOT:-/var/lib/harnessa/specifications}
+      ACP_REPOSITORY_SOURCES_JSON: "${ACP_REPOSITORY_SOURCES_JSON:-{}}"
       MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-4}
       RUN_LEASE_SECONDS: ${RUN_LEASE_SECONDS:-30}
       RUN_HEARTBEAT_SECONDS: ${RUN_HEARTBEAT_SECONDS:-10}
@@ -116,6 +119,8 @@ services:
     pids_limit: 256
     volumes:
       - artifacts:/var/lib/harnessa/artifacts
+      - repository_sources:/var/lib/harnessa/repositories
+      - specification_workspaces:/var/lib/harnessa/specifications
     command: ["sh", "-c", "cd apps/api && uv run --no-sync alembic upgrade head && uv run --no-sync uvicorn harnessa.main:app --host 0.0.0.0 --port 8000"]
     ports:
       - "127.0.0.1:${API_PORT:-8010}:8000"
@@ -162,6 +167,9 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       REPOSITORY_TARGETS: ${REPOSITORY_TARGETS:-}
+      OPENSPEC_REPOSITORY_SOURCES_JSON: "${OPENSPEC_REPOSITORY_SOURCES_JSON:-{}}"
+      OPENSPEC_WORKSPACE_ROOT: ${OPENSPEC_WORKSPACE_ROOT:-/var/lib/harnessa/specifications}
+      ACP_REPOSITORY_SOURCES_JSON: "${ACP_REPOSITORY_SOURCES_JSON:-{}}"
       MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-4}
       RUN_LEASE_SECONDS: ${RUN_LEASE_SECONDS:-30}
       RUN_HEARTBEAT_SECONDS: ${RUN_HEARTBEAT_SECONDS:-10}
@@ -204,6 +212,8 @@ services:
     pids_limit: 256
     volumes:
       - artifacts:/var/lib/harnessa/artifacts
+      - repository_sources:/var/lib/harnessa/repositories
+      - specification_workspaces:/var/lib/harnessa/specifications
     command: ["uv", "run", "--no-sync", "python", "-m", "harnessa.worker"]
     depends_on:
       api:
@@ -260,6 +270,8 @@ services:
 volumes:
   pgdata: {}
   artifacts: {}
+  repository_sources: {}
+  specification_workspaces: {}
   qdrantdata: {}
 networks:
   app_internal:

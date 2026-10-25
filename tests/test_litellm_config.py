@@ -62,3 +62,19 @@ def test_compose_binds_operator_ports_to_loopback():
     assert set(compose["services"]["api"]["networks"]) == {"app_internal", "github_egress"}
     assert set(compose["services"]["worker"]["networks"]) == {"app_internal", "github_egress"}
     assert set(compose["services"]["litellm"]["networks"]) == {"app_internal", "provider_egress"}
+
+
+def test_compose_shares_repository_sources_and_specification_workspaces():
+    compose_path = Path(__file__).parents[1] / "infra" / "compose.yaml"
+    compose = yaml.safe_load(compose_path.read_text())
+    required_mounts = {
+        "repository_sources:/var/lib/harnessa/repositories",
+        "specification_workspaces:/var/lib/harnessa/specifications",
+    }
+
+    for service in ("api", "worker"):
+        assert required_mounts.issubset(set(compose["services"][service]["volumes"]))
+        environment = compose["services"][service]["environment"]
+        assert "OPENSPEC_REPOSITORY_SOURCES_JSON" in environment
+        assert "OPENSPEC_WORKSPACE_ROOT" in environment
+        assert "ACP_REPOSITORY_SOURCES_JSON" in environment
