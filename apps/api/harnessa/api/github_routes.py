@@ -49,6 +49,7 @@ from harnessa.db.orchestration import EffectIntent
 from harnessa.db.review import ReviewBundle
 from harnessa.db.session import get_db
 from harnessa.services.authorization import require_membership
+from harnessa.services.review_decisions import has_current_review_approval
 from harnessa.tracing import current_traceparent
 from sqlalchemy import false, func, select
 from sqlalchemy.exc import IntegrityError
@@ -649,7 +650,13 @@ async def queue_github_review_publication(
     )
     if bundle is None:
         raise HTTPException(404, "No review bundle is available")
-    if bundle.status != "prepared" or task.stage != "HUMAN_REVIEW":
+    approved_published_bundle = (
+        bundle.status == "published" and await has_current_review_approval(db, bundle)
+    )
+    if (
+        (bundle.status != "prepared" and not approved_published_bundle)
+        or task.stage != "HUMAN_REVIEW"
+    ):
         raise HTTPException(409, "Only the current prepared review bundle can be published")
     from harnessa.api.review_routes import _bundle_stale_reason
 

@@ -50,6 +50,7 @@ from harnessa.services.github_processor import GitHubWebhookProcessor
 from harnessa.services.github_webhooks import DeliveryEnvelope, process_github_webhook_outbox
 from harnessa.services.model_gateway import budget_policy_digest
 from harnessa.services.post_integration import process_post_integration_steps
+from harnessa.services.review_decisions import has_current_review_approval
 from sqlalchemy import select
 
 from tests.integration.test_specifications import (
@@ -1061,6 +1062,68 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
             db,
         )
         assert publication.queued is True
+        first_intent = await db.scalar(
+            select(EffectIntent).where(
+                EffectIntent.stable_key == f"github-review-publish:{bundle.id}"
+            )
+        )
+        assert first_intent is not None
+        await db.delete(first_intent)
+        bundle.status = "published"
+        db.add_all(
+            [
+                ReviewDecision(
+                    organization_id=interview.organization_id,
+                    project_id=project_id,
+                    task_id=task_id,
+                    bundle_id=bundle.id,
+                    actor_id=actor.id,
+                    decision="approve",
+                    rationale="A mismatched bundle digest must not authorize publication.",
+                    idempotency_key="github-acceptance-wrong-digest",
+                    bundle_digest=hashlib.sha256(b"different bundle").hexdigest(),
+                    head_sha=bundle.head_sha,
+                ),
+                ReviewDecision(
+                    organization_id=interview.organization_id,
+                    project_id=project_id,
+                    task_id=task_id,
+                    bundle_id=bundle.id,
+                    actor_id=actor.id,
+                    decision="approve",
+                    rationale="A mismatched head must not authorize publication.",
+                    idempotency_key="github-acceptance-wrong-head",
+                    bundle_digest=bundle.bundle_digest,
+                    head_sha="e" * 40,
+                ),
+            ]
+        )
+        await db.flush()
+        assert await has_current_review_approval(db, bundle) is False
+        db.add(
+            ReviewDecision(
+                organization_id=interview.organization_id,
+                project_id=project_id,
+                task_id=task_id,
+                bundle_id=bundle.id,
+                actor_id=actor.id,
+                decision="approve",
+                rationale="The exact verified bundle is ready for GitHub publication.",
+                idempotency_key="github-acceptance-review-approval",
+                bundle_digest=bundle.bundle_digest,
+                head_sha=bundle.head_sha,
+            )
+        )
+        await db.flush()
+        assert await has_current_review_approval(db, bundle) is True
+        await db.commit()
+        publication = await github_routes.queue_github_review_publication(
+            task_id,
+            GitHubPublishRequest(idempotency_key="github-acceptance-publish-after-approval"),
+            actor,
+            db,
+        )
+        assert publication.queued is True
         bundle_id = bundle.id
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -1373,7 +1436,7 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
         assert review_sync is not None and review_sync.head_sha == review_branch_sha, [
             intent.result for intent in effect_intents
         ]
-        assert published_bundle is not None and published_bundle.status == "prepared"
+        assert published_bundle is not None and published_bundle.status == "published"
     processor = GitHubWebhookProcessor()
     assert await processor.reconcile_tracked_pull_requests() == 1
     stale_pr = await processor.process(

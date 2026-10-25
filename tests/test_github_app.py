@@ -1380,6 +1380,8 @@ async def test_review_publication_rejects_stale_or_unavailable_inputs(
                     return None
                 if self.scenario == "changed_bundle":
                     return SimpleNamespace(**{**bundle.__dict__, "repository_id": uuid4()})
+                if self.scenario in {"approved_published", "unapproved_published"}:
+                    return SimpleNamespace(**{**bundle.__dict__, "status": "published"})
                 return bundle
             if model is GitHubRepositoryLink:
                 return None if self.scenario == "missing_link" else link
@@ -1401,7 +1403,11 @@ async def test_review_publication_rejects_stale_or_unavailable_inputs(
     async def stale_bundle(db: object, _bundle: object) -> str | None:
         return "stale" if getattr(db, "scenario", "") == "stale" else None
 
+    async def approved_bundle(db: object, _bundle: object) -> bool:
+        return getattr(db, "scenario", "") == "approved_published"
+
     monkeypatch.setattr(review_routes, "_bundle_stale_reason", stale_bundle)
+    monkeypatch.setattr(github_effects, "has_current_review_approval", approved_bundle)
     cases = {
         "missing_bundle": "bundle_or_repository_not_publishable",
         "missing_link": "bundle_or_repository_not_publishable",
@@ -1409,6 +1415,8 @@ async def test_review_publication_rejects_stale_or_unavailable_inputs(
         "stale": "review_bundle_became_stale",
         "inactive": "installation_unavailable",
         "head_missing": "review_head_not_available_locally",
+        "unapproved_published": "bundle_or_repository_changed",
+        "approved_published": "review_head_not_available_locally",
     }
     for scenario, reason in cases.items():
         reconciler = GitHubEffectReconciler(
