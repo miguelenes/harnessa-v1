@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from harnessa.config import settings
 from harnessa.contracts import (
     ModelMessage,
     ModelPoolKind,
@@ -38,6 +39,7 @@ from harnessa.services.model_gateway import (
 )
 from harnessa.services.spend_budget import GlobalSpendBudgetError, record_external_spend_estimate
 from pwdlib import PasswordHash
+from pydantic import SecretStr
 from sqlalchemy import select, text
 
 pytestmark = pytest.mark.integration
@@ -231,11 +233,15 @@ def success_response(model: str = "gateway-fallback") -> httpx.Response:
 
 
 @pytest.mark.anyio
-async def test_fault_injected_retries_fallback_and_actual_attribution():
+async def test_fault_injected_retries_fallback_and_actual_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+):
     data = await gateway_fixture()
+    monkeypatch.setattr(settings, "model_gateway_api_key", SecretStr("sk-fixture-virtual-key"))
     seen: list[str] = []
 
     async def provider(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer sk-fixture-virtual-key"
         model = request.read().decode()
         assert "fixture request" in model
         route = json.loads(model)["model"]

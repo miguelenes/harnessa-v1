@@ -4,14 +4,43 @@ import json
 
 import httpx
 import pytest
+from harnessa.config import settings
 from harnessa.contracts import ModelProtocol
 from harnessa.services.model_gateway import (
+    LiteLLMModelRouter,
+    ModelGatewayError,
     _error_code,
     _extract_usage,
     _retry_after,
     _stream_contains_tool_call,
     _stream_usage,
 )
+from pydantic import SecretStr
+
+
+def test_litellm_request_headers_use_the_scoped_gateway_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "model_gateway_api_key", SecretStr("sk-test-virtual-key"))
+
+    headers = LiteLLMModelRouter._request_headers("request-123", ModelProtocol.ANTHROPIC_MESSAGES)
+
+    assert headers == {
+        "X-Request-ID": "request-123",
+        "Authorization": "Bearer sk-test-virtual-key",
+        "anthropic-version": "2023-06-01",
+    }
+
+
+@pytest.mark.anyio
+async def test_network_gateway_client_fails_closed_without_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "model_gateway_url", "http://litellm:4000")
+    monkeypatch.setattr(settings, "model_gateway_api_key", None)
+
+    with pytest.raises(ModelGatewayError, match="credential is not configured") as raised:
+        await LiteLLMModelRouter()._get_client()
+
+    assert raised.value.code == "model_gateway_credentials_missing"
 
 
 @pytest.mark.parametrize(

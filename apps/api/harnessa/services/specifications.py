@@ -30,7 +30,7 @@ from harnessa.db.model_gateway import ModelBudgetPolicy
 from harnessa.db.models import Membership, Project, ProjectMembership, Repository, Task, User
 from harnessa.db.orchestration import Run, TaskLease, TaskTransition
 from harnessa.db.retrieval import VerificationEvidence
-from harnessa.db.session import SessionLocal
+from harnessa.db.session import SessionLocal, engine
 from harnessa.db.specification import (
     SpecificationAnswer,
     SpecificationArtifactRevision,
@@ -560,8 +560,16 @@ async def create_interview(
         raise HTTPException(409, str(exc)) from exc
 
     lock_key = f"specification-interview:{project_id}:{idempotency_key}"
-    await db.execute(text("SELECT pg_advisory_lock(hashtextextended(:key, 0))"), {"key": lock_key})
+    # create_task commits inside this operation, so keep the idempotency lock on a
+    # dedicated connection until the matching unlock.
+    lock_connection = await engine.connect()
+    lock_acquired = False
     try:
+        await lock_connection.execute(
+            text("SELECT pg_advisory_lock(hashtextextended(:key, 0))"),
+            {"key": lock_key},
+        )
+        lock_acquired = True
         existing = await db.scalar(
             select(SpecificationInterview).where(
                 SpecificationInterview.project_id == project_id,
@@ -708,9 +716,15 @@ async def create_interview(
         await db.rollback()
         raise
     finally:
-        await db.execute(
-            text("SELECT pg_advisory_unlock(hashtextextended(:key, 0))"), {"key": lock_key}
-        )
+        try:
+            if lock_acquired:
+                await lock_connection.execute(
+                    text("SELECT pg_advisory_unlock(hashtextextended(:key, 0))"),
+                    {"key": lock_key},
+                )
+                await lock_connection.commit()
+        finally:
+            await lock_connection.close()
 
 
 async def search_repository(
@@ -1479,7 +1493,10 @@ async def evaluate_readiness(
             expected_version=task.version,
             reason="Specification readiness gates evaluated",
             return_stage=None,
-            command_key=f"spec-readiness:{interview.id}:{interview.revision}:{interview.artifact_hash}",
+            command_key=(
+                f"spec-readiness:{interview.id}:{interview.revision}:"
+                f"{interview.artifact_hash}:{task.version}:{target.value}"
+            ),
             run_status=RunStatus.QUEUED if target == TaskStage.READY else None,
         )
     await db.commit()

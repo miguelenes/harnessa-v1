@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     event_replay_limit: int = 500
     redis_stream_maxlen: int = 10000
     model_gateway_url: str = ""
+    model_gateway_api_key: SecretStr | None = None
     mcp_servers_json: str = "{}"
     mcp_read_only_tools_json: str = "{}"
     mcp_secret_references_json: str = "{}"

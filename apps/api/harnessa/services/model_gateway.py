@@ -1167,7 +1167,24 @@ class LiteLLMModelRouter:
             raise ModelGatewayError(
                 "model_gateway_unavailable", 503, "LiteLLM gateway URL is not configured"
             )
+        if settings.model_gateway_api_key is None or not settings.model_gateway_api_key.get_secret_value():
+            raise ModelGatewayError(
+                "model_gateway_credentials_missing",
+                503,
+                "LiteLLM gateway credential is not configured",
+            )
         return httpx.AsyncClient(timeout=settings.model_http_timeout_seconds), True
+
+    @staticmethod
+    def _request_headers(call_id: str, protocol: ModelProtocol) -> dict[str, str]:
+        headers = {"X-Request-ID": call_id}
+        if settings.model_gateway_api_key is not None:
+            headers["Authorization"] = (
+                f"Bearer {settings.model_gateway_api_key.get_secret_value()}"
+            )
+        if protocol == ModelProtocol.ANTHROPIC_MESSAGES:
+            headers["anthropic-version"] = "2023-06-01"
+        return headers
 
     @traced_async(
         "harnessa.model.complete",
@@ -1275,9 +1292,7 @@ class LiteLLMModelRouter:
                         candidate.deployment.proxy_model,
                         tool_choice=tool_choice,
                     )
-                    headers = {"X-Request-ID": call_id}
-                    if request.requirements.protocol == ModelProtocol.ANTHROPIC_MESSAGES:
-                        headers["anthropic-version"] = "2023-06-01"
+                    headers = self._request_headers(call_id, request.requirements.protocol)
                     started = asyncio.get_running_loop().time()
                     response: httpx.Response | None = None
                     transport_error: BaseException | None = None
@@ -1593,9 +1608,7 @@ class LiteLLMModelRouter:
                     route_decision=decisions[-1],
                     request_identifier=call_id,
                 )
-                headers = {"X-Request-ID": call_id}
-                if request.requirements.protocol == ModelProtocol.ANTHROPIC_MESSAGES:
-                    headers["anthropic-version"] = "2023-06-01"
+                headers = self._request_headers(call_id, request.requirements.protocol)
                 started = asyncio.get_running_loop().time()
                 response_context = client.stream(
                     "POST",

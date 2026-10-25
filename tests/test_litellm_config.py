@@ -37,7 +37,7 @@ def test_litellm_does_not_log_messages():
     assert config["litellm_settings"]["turn_off_message_logging"] is True
 
 
-def test_compose_passes_provider_keys_and_litellm_database_url():
+def test_compose_passes_provider_keys_database_url_and_master_key():
     compose_path = Path(__file__).parents[1] / "infra" / "compose.yaml"
     compose = yaml.safe_load(compose_path.read_text())
     environment = compose["services"]["litellm"]["environment"]
@@ -45,6 +45,42 @@ def test_compose_passes_provider_keys_and_litellm_database_url():
     assert set(environment) == {
         "DEEPSEEK_API_KEY",
         "LITELLM_DATABASE_URL",
+        "LITELLM_MASTER_KEY",
         "OPENROUTER_API_KEY",
     }
     assert "${LITELLM_POSTGRES_PASSWORD:" in environment["LITELLM_DATABASE_URL"]
+    assert "${LITELLM_MASTER_KEY:" in environment["LITELLM_MASTER_KEY"]
+
+
+def test_compose_binds_operator_ports_to_loopback():
+    compose_path = Path(__file__).parents[1] / "infra" / "compose.yaml"
+    compose = yaml.safe_load(compose_path.read_text())
+
+    for service in ("db", "redis", "api", "web"):
+        assert all(port.startswith("127.0.0.1:") for port in compose["services"][service]["ports"])
+
+    assert set(compose["services"]["api"]["networks"]) == {"app_internal", "github_egress"}
+    assert set(compose["services"]["worker"]["networks"]) == {"app_internal", "github_egress"}
+    assert set(compose["services"]["litellm"]["networks"]) == {"app_internal", "provider_egress"}
+
+
+def test_compose_shares_repository_sources_and_specification_workspaces():
+    compose_path = Path(__file__).parents[1] / "infra" / "compose.yaml"
+    compose = yaml.safe_load(compose_path.read_text())
+    required_mounts = {
+        "repository_sources:/var/lib/harnessa/repositories",
+        "specification_workspaces:/var/lib/harnessa/specifications",
+    }
+
+    for service in ("api", "worker"):
+        assert required_mounts.issubset(set(compose["services"][service]["volumes"]))
+        environment = compose["services"][service]["environment"]
+        assert "OPENSPEC_REPOSITORY_SOURCES_JSON" in environment
+        assert "OPENSPEC_WORKSPACE_ROOT" in environment
+        assert "ACP_REPOSITORY_SOURCES_JSON" in environment
+        assert "ACP_EXECUTION_ENABLED" in environment
+        assert "ACP_WORKSPACE_ROOT" in environment
+        assert "ACP_RUNNER_STATE_ROOT" in environment
+        assert "ACP_AGENT_IMAGE" in environment
+        assert "ACP_MODEL_BROKER_ENABLED" in environment
+        assert "ACP_MODEL_ALIAS" in environment
