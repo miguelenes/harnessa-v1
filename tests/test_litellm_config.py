@@ -37,7 +37,7 @@ def test_litellm_does_not_log_messages():
     assert config["litellm_settings"]["turn_off_message_logging"] is True
 
 
-def test_compose_passes_provider_keys_and_litellm_database_url():
+def test_compose_passes_provider_keys_database_url_and_master_key():
     compose_path = Path(__file__).parents[1] / "infra" / "compose.yaml"
     compose = yaml.safe_load(compose_path.read_text())
     environment = compose["services"]["litellm"]["environment"]
@@ -45,6 +45,8 @@ def test_compose_passes_provider_keys_and_litellm_database_url():
     assert set(environment) == {
         "DEEPSEEK_API_KEY",
         "LITELLM_DATABASE_URL",
+        "LITELLM_MASTER_KEY",
         "OPENROUTER_API_KEY",
     }
     assert "${LITELLM_POSTGRES_PASSWORD:" in environment["LITELLM_DATABASE_URL"]
+    assert "${LITELLM_MASTER_KEY:" in environment["LITELLM_MASTER_KEY"]
