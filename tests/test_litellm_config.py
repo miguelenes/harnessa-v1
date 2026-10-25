@@ -78,3 +78,9 @@ def test_compose_shares_repository_sources_and_specification_workspaces():
         assert "OPENSPEC_REPOSITORY_SOURCES_JSON" in environment
         assert "OPENSPEC_WORKSPACE_ROOT" in environment
         assert "ACP_REPOSITORY_SOURCES_JSON" in environment
+        assert "ACP_EXECUTION_ENABLED" in environment
+        assert "ACP_WORKSPACE_ROOT" in environment
+        assert "ACP_RUNNER_STATE_ROOT" in environment
+        assert "ACP_AGENT_IMAGE" in environment
+        assert "ACP_MODEL_BROKER_ENABLED" in environment
+        assert "ACP_MODEL_ALIAS" in environment

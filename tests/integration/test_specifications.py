@@ -398,6 +398,68 @@ async def test_readiness_stays_in_specifying_when_required_model_route_is_unavai
 
 
 @pytest.mark.anyio
+async def test_concurrent_interview_replay_uses_transaction_scoped_idempotency_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, _, _ = await _specification_fixture(tmp_path, monkeypatch)
+
+    async def start() -> tuple[SpecificationInterview, bool]:
+        async with SessionLocal() as db:
+            return await create_interview(
+                db,
+                project_id=project_id,
+                repository_id=repository_id,
+                actor=actor,
+                topic="Create one interview under concurrent replay",
+                idempotency_key="concurrent-specification-interview",
+            )
+
+    first, second = await asyncio.gather(start(), start())
+
+    assert first[0].id == second[0].id
+    assert sorted((first[1], second[1])) == [False, True]
+
+
+@pytest.mark.anyio
+async def test_readiness_transition_can_recover_after_runtime_route_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, _, _ = await _specification_fixture(tmp_path, monkeypatch)
+    await _configure_acp_route(project_id)
+    async with SessionLocal() as db:
+        interview, replayed = await create_interview(
+            db,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor=actor,
+            topic="Create a task whose route becomes available",
+            idempotency_key="route-recovery-readiness",
+        )
+        assert replayed is False
+
+        interview, evaluation = await evaluate_readiness(
+            db, interview_id=interview.id, actor=actor
+        )
+        task = await db.get(Task, interview.task_id, populate_existing=True)
+        assert evaluation.state == "READY"
+        assert task is not None and task.stage == TaskStage.READY.value
+
+        monkeypatch.setattr(settings, "acp_model_broker_enabled", False)
+        interview, evaluation = await evaluate_readiness(
+            db, interview_id=interview.id, actor=actor
+        )
+        task = await db.get(Task, interview.task_id, populate_existing=True)
+        assert evaluation.state == "NOT_READY"
+        assert task is not None and task.stage == TaskStage.SPECIFYING.value
+
+        monkeypatch.setattr(settings, "acp_model_broker_enabled", True)
+        _, evaluation = await evaluate_readiness(db, interview_id=interview.id, actor=actor)
+        task = await db.get(Task, interview.task_id, populate_existing=True)
+        assert evaluation.state == "READY"
+        assert task is not None and task.stage == TaskStage.READY.value
+
+
+@pytest.mark.anyio
 async def test_readiness_stays_in_specifying_without_an_interactive_model_pool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
