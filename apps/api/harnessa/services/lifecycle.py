@@ -342,6 +342,8 @@ async def transition_task(
         )
         if target == TaskStage.LEARNING and task.run_status != RunStatus.SUCCEEDED.value:
             raise TransitionGuardFailed("Learning requires a successful execution run")
+        if target == TaskStage.HARNESS_PROBE and task.run_status != RunStatus.SUCCEEDED.value:
+            raise TransitionGuardFailed("Harness probing requires a successful execution run")
         if target == TaskStage.VERIFYING and task.run_status != RunStatus.SUCCEEDED.value:
             raise TransitionGuardFailed("Verification requires a successful execution run")
         if target == TaskStage.DONE and current != TaskStage.LEARNING:

@@ -404,7 +404,11 @@ async def resume_evaluation_run(
         raise HTTPException(404, "Evaluation run not found")
     if run.cancel_requested_at is not None:
         raise HTTPException(409, "A cancelled evaluation cannot be resumed")
-    if run.status not in {"failed", "blocked"}:
+    # The API derives terminal status from child experiments. The stored parent
+    # row can still say "queued" after all children have failed, so use that
+    # authoritative summary before deciding whether a resume is valid.
+    summary = await _read_run(db, run)
+    if summary.status not in {"failed", "blocked"}:
         raise HTTPException(409, "Only failed evaluation runs can be resumed")
     policy = await db.scalar(select(HarnessPolicy).where(HarnessPolicy.project_id == project_id))
     children = list(await db.scalars(select(HarnessExperiment).where(

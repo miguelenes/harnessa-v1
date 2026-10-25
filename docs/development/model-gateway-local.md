@@ -8,17 +8,19 @@ restricted to the exact Harnessa model aliases. Compose passes the virtual key t
 the API and worker; requests use it as a bearer token and fail closed when it is
 missing. Do not pass the master key to Harnessa. The model doctor checks process
 readiness and authenticates a non-billed `/v1/models` request; it does not call a
-provider. `infra/litellm/config.yaml` exposes two explicit model names:
+provider. `infra/litellm/config.yaml` exposes three explicit model names:
 
 | LiteLLM model name | Provider model | Environment key |
 | --- | --- | --- |
 | `harnessa-deepseek-flash` | DeepSeek `deepseek-flash` | `DEEPSEEK_API_KEY` |
 | `harnessa-openrouter-deepseek-flash` | OpenRouter `deepseek/deepseek-v4.1-flash-1017` | `OPENROUTER_API_KEY` |
+| `harnessa-openrouter-gpt-oss-20b` | OpenRouter `openai/gpt-oss-20b`, pinned to Darkbloom | `OPENROUTER_API_KEY` |
 
 The OpenRouter deployment pins its provider to DeepSeek and disables provider
-fallbacks. LiteLLM retries and fallback deployments are also disabled. The two
-model names are independent routes; Harnessa does not automatically switch from
-one to the other.
+fallbacks. LiteLLM retries and fallback deployments are also disabled. The
+model names are independent routes; Harnessa does not automatically switch
+between providers. Check live provider pricing and context before registering
+an alias, and preserve the exact price revision in Harnessa.
 
 ## Start and inspect
 

@@ -21,6 +21,11 @@ def test_in_progress_recovery_is_not_advertised_as_a_transition() -> None:
 def test_learning_and_verification_require_successful_run() -> None:
     failed = _allowed_transitions(TaskStage.HUMAN_REVIEW, Role.REVIEWER, "FAILED")
     succeeded = _allowed_transitions(TaskStage.HUMAN_REVIEW, Role.REVIEWER, "SUCCEEDED")
+    administrator = _allowed_transitions(
+        TaskStage.HUMAN_REVIEW, Role.ADMINISTRATOR, "SUCCEEDED"
+    )
 
     assert TaskStage.LEARNING not in failed
     assert TaskStage.LEARNING in succeeded
+    assert TaskStage.HARNESS_PROBE not in failed
+    assert TaskStage.HARNESS_PROBE in administrator
