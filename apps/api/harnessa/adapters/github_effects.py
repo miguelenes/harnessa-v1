@@ -29,6 +29,7 @@ from harnessa.db.models import Repository, Task
 from harnessa.db.review import ReviewBundle
 from harnessa.db.session import SessionLocal
 from harnessa.services.effects import EffectResult, ReconcileOutcome
+from harnessa.services.review_decisions import has_current_review_approval
 from harnessa.tracing import traced_async
 
 _PUBLISH_KIND = "github.review_bundle.publish"
@@ -361,7 +362,12 @@ class GitHubEffectReconciler:
                     "applied",
                     {"state": "rejected", "reason": "bundle_or_repository_not_publishable"},
                 )
-            if bundle.repository_id != link.repository_id or bundle.status != "prepared":
+            approved_published_bundle = (
+                bundle.status == "published" and await has_current_review_approval(db, bundle)
+            )
+            if bundle.repository_id != link.repository_id or (
+                bundle.status != "prepared" and not approved_published_bundle
+            ):
                 return EffectResult(
                     "applied", {"state": "rejected", "reason": "bundle_or_repository_changed"}
                 )
