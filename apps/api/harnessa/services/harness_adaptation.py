@@ -39,7 +39,9 @@ from harnessa.contracts import (
 from harnessa.db.session import SessionLocal
 from harnessa.services.model_gateway import LiteLLMModelRouter, ModelGatewayError
 
-_MAX_CONTEXT_BYTES = 500_000
+# Bound the serialized context to keep the broker's conservative token estimate
+# compatible with smaller explicitly configured probe models and output budgets.
+_MAX_CONTEXT_BYTES = 128_000
 _MAX_CONTEXT_FILES = 500
 _HOLDOUT_PARTS = frozenset(
     {"answer", "answers", "grader", "graders", "rubric", "rubrics", "holdout", "hidden"}
@@ -130,8 +132,16 @@ def _extract_chat_text(response: dict[str, Any]) -> str:
 
 
 def _parse_edit_response(text: str) -> tuple[dict[str, str], list[str], str]:
+    normalized = text.strip()
+    fenced = re.fullmatch(
+        r"```(?:json)?[ \t]*\r?\n(?P<body>.*?)\r?\n?```",
+        normalized,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if fenced is not None:
+        normalized = fenced.group("body").strip()
     try:
-        payload = json.loads(text)
+        payload = json.loads(normalized)
     except json.JSONDecodeError as exc:
         raise HarnessAdaptationError(
             "Harness² editor must return the required JSON edit object"
@@ -152,6 +162,22 @@ def _parse_edit_response(text: str) -> tuple[dict[str, str], list[str], str]:
     ):
         raise HarnessAdaptationError("Harness² editor returned an invalid files/delete/notes shape")
     return files, delete, notes[:4_000]
+
+
+def _candidate_validation_code(error: BaseException) -> str:
+    """Return a fixed, non-content-bearing reason for rejected candidate output."""
+    if isinstance(error, json.JSONDecodeError) or "required JSON edit object" in str(error):
+        return "invalid_json"
+    message = str(error)
+    if "unsupported edit fields" in message:
+        return "unsupported_fields"
+    if "invalid files/delete/notes shape" in message:
+        return "invalid_shape"
+    if "outside the product manifest" in message:
+        return "manifest_path_rejected"
+    if "path escape" in message or "symlink" in message:
+        return "path_escape_rejected"
+    return "host_validation_rejected"
 
 
 def apply_candidate_edits(context_dir: Path | str, text: str) -> tuple[dict[str, Any], str]:
@@ -294,7 +320,8 @@ class GatewayHarness2Proposer:
                 _, text = apply_candidate_edits(context_dir, text)
             except (ValueError, TypeError, HarnessAdaptationError) as exc:
                 raise ProposerError(
-                    "Harness² proposal failed manifest or holdout validation"
+                    "Harness² proposal failed host validation "
+                    f"({_candidate_validation_code(exc)})"
                 ) from exc
             workspace = Path(context_dir).resolve() / "harness"
         elapsed = time.monotonic() - started
@@ -318,6 +345,7 @@ class GatewayHarness2Proposer:
             model_alias=self.experiment.route_alias,
             requirements=RouteRequirements(
                 protocol=ModelProtocol.CHAT_COMPLETIONS,
+                json_mode=True,
                 minimum_context=max(1, input_tokens + self.max_output_tokens),
                 usage_reporting=True,
             ),
@@ -335,6 +363,7 @@ class GatewayHarness2Proposer:
                 project_id=self.experiment.project_id,
                 request=request,
                 idempotency_key=key,
+                response_format={"type": "json_object"},
             )
         return cast(dict[str, Any], result["response"])
 

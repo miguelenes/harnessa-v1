@@ -36,6 +36,10 @@ from harnessa.db.review import (
 )
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
+from harnessa.services.harness_experience import (
+    canonical_experience_evidence_refs,
+    experience_candidate_digest,
+)
 from harnessa.services.lifecycle import _record_event
 from harnessa.services.specifications import specification_workspace_manager
 from sqlalchemy import func, select
@@ -86,22 +90,38 @@ def _harness_learning_hook(
             "experiment_id": str(experiment.id),
             "reason": "no_evidence_backed_experience_candidate",
         }
-    evidence_refs = [
+    evidence_refs = canonical_experience_evidence_refs([
         {"digest": probe.trace_digest, "kind": probe.phase, "label": probe.label}
         for probe in probes
         if probe.status == "succeeded" and probe.trace_digest
-    ]
+    ])
     if not evidence_refs:
         return {**empty, "experiment_id": str(experiment.id), "reason": "probe_traces_unavailable"}
+    repository_scope = str(candidate.get("repository_scope", ""))
+    domain_scope = str(candidate.get("domain_scope", "repository"))[:120]
+    candidate_digest = experience_candidate_digest(
+        cue=candidate["cue"],
+        lesson=candidate["lesson"],
+        evidence_refs=evidence_refs,
+        repository_scope=repository_scope,
+        domain_scope=domain_scope,
+    )
+    if candidate.get("candidate_digest") != candidate_digest:
+        return {
+            **empty,
+            "experiment_id": str(experiment.id),
+            "reason": "experience_candidate_digest_mismatch",
+        }
     return {
         "reserved_for": "M12",
         "triggered": True,
         "experiment_id": str(experiment.id),
         "cue": candidate["cue"],
         "lesson": candidate["lesson"],
-        "domain_scope": str(candidate.get("domain_scope", "repository"))[:120],
+        "domain_scope": domain_scope,
         "conflict_key": str(candidate.get("conflict_key", experiment.id))[:120],
         "evidence_refs": evidence_refs,
+        "candidate_digest": candidate_digest,
         "probe_outcome": "baseline_candidate_composed_succeeded",
     }
 

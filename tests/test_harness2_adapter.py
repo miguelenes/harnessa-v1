@@ -25,12 +25,14 @@ from harnessa.services.harness_adaptation import (
     FrozenExperiment,
     GatewayHarness2Proposer,
     HarnessAdaptationError,
+    _candidate_validation_code,
     _context_payload,
     _extract_chat_text,
     _parse_edit_response,
     apply_candidate_edits,
     run_upstream_task,
 )
+from harnessa.services.harness_experience import experience_candidate_digest
 from harnessa.services.verification_workflow import _harness_learning_hook
 
 
@@ -84,6 +86,9 @@ def test_context_payload_bounds_and_redacts_visible_files(tmp_path) -> None:
     (tmp_path / "nested").mkdir()
     (tmp_path / "nested" / "binary.bin").write_bytes(b"\xff")
     assert "binary.bin" not in _context_payload(tmp_path)
+    (tmp_path / "oversized.md").write_text("x" * 128_001, encoding="utf-8")
+    with pytest.raises(HarnessAdaptationError, match="byte bound"):
+        _context_payload(tmp_path)
 
 
 def test_chat_response_requires_text_content() -> None:
@@ -103,8 +108,27 @@ def test_candidate_edits_reject_invalid_json_and_escape_notes(tmp_path) -> None:
         '{"files":{"systemprompt.md":"candidate"},"notes":"</notes><unsafe>"}',
     )
     assert "&lt;/notes" in note
+    fenced, _ = apply_candidate_edits(
+        workspace,
+        '```json\n{"files":{"systemprompt.md":"fenced candidate"}}\n```',
+    )
+    assert fenced["systemprompt.md"] == "fenced candidate"
+    fenced, _ = apply_candidate_edits(
+        workspace,
+        '```JSON\n{"files":{"systemprompt.md":"uppercase fence"}}\n```',
+    )
+    assert fenced["systemprompt.md"] == "uppercase fence"
+    fenced, _ = apply_candidate_edits(
+        workspace,
+        '```\n{"files":{"systemprompt.md":"plain fence"}}\n```',
+    )
+    assert fenced["systemprompt.md"] == "plain fence"
     with pytest.raises(HarnessAdaptationError):
         apply_candidate_edits(workspace, '{"delete":["harnessa_policy.py"]}')
+    assert _candidate_validation_code(HarnessAdaptationError("bad shape")) == "host_validation_rejected"
+    assert _candidate_validation_code(HarnessAdaptationError(
+        "Harness² editor must return the required JSON edit object"
+    )) == "invalid_json"
 
 
 def test_proposer_dispatches_bounded_requests_and_validates_editor_output(tmp_path) -> None:
@@ -187,9 +211,11 @@ async def test_proposer_builds_probe_pool_request_with_stable_identity(monkeypat
     assert response["choices"][0]["message"]["content"] == "ok"
     request = seen["request"]
     assert request.model_alias == "probe"
+    assert request.requirements.json_mode is True
     assert request.max_output_tokens == 128
     assert request.estimated_input_tokens == 5
     assert seen["idempotency_key"] == "stable-key"
+    assert seen["response_format"] == {"type": "json_object"}
 
 
 def test_upstream_runner_uses_only_pinned_schedule_modes(tmp_path, monkeypatch) -> None:
@@ -288,6 +314,27 @@ def test_promotion_requires_exact_candidate_and_all_fixed_gates() -> None:
 
 
 def test_learning_hook_requires_successful_matched_probe_evidence() -> None:
+    probes = [
+        SimpleNamespace(phase=phase, status="succeeded", trace_digest=str(index) * 64, label=phase)
+        for index, phase in enumerate(("baseline", "candidate", "composed"), 1)
+    ]
+    evidence_refs = [
+        {"digest": probe.trace_digest, "kind": probe.phase, "label": probe.label}
+        for probe in probes
+    ]
+    candidate = {
+        "cue": "specific cue",
+        "lesson": "bounded lesson",
+        "repository_scope": "owner/repo",
+        "domain_scope": "repository",
+    }
+    candidate["candidate_digest"] = experience_candidate_digest(
+        cue=candidate["cue"],
+        lesson=candidate["lesson"],
+        evidence_refs=evidence_refs,
+        repository_scope=candidate["repository_scope"],
+        domain_scope=candidate["domain_scope"],
+    )
     experiment = SimpleNamespace(
         id=uuid4(),
         status="succeeded",
@@ -295,12 +342,8 @@ def test_learning_hook_requires_successful_matched_probe_evidence() -> None:
         specification_hash="b" * 64,
         specification_revision=4,
         policy_revision=3,
-        result={"experience_candidate": {"cue": "specific cue", "lesson": "bounded lesson"}},
+        result={"experience_candidate": candidate},
     )
-    probes = [
-        SimpleNamespace(phase=phase, status="succeeded", trace_digest=str(index) * 64, label=phase)
-        for index, phase in enumerate(("baseline", "candidate", "composed"), 1)
-    ]
     identity = {
         "base_sha": experiment.base_sha,
         "specification_hash": experiment.specification_hash,
@@ -314,6 +357,17 @@ def test_learning_hook_requires_successful_matched_probe_evidence() -> None:
     assert _harness_learning_hook(
         experiment, probes, **{**identity, "specification_revision": 5}
     )["reason"] == "frozen_experiment_identity_mismatch"
+    tampered = SimpleNamespace(
+        **{
+            **experiment.__dict__,
+            "result": {
+                "experience_candidate": {**candidate, "candidate_digest": "f" * 64}
+            },
+        }
+    )
+    assert _harness_learning_hook(tampered, probes, **identity)["reason"] == (
+        "experience_candidate_digest_mismatch"
+    )
 
 
 def test_reviewed_rollback_restores_previous_version_and_supersedes_current() -> None:
