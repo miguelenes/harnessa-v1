@@ -324,15 +324,23 @@ async def test_wall_time_limit_stops_retry_and_creates_dead_letter(tmp_path, mon
             {"started": datetime.now(UTC) - timedelta(seconds=5), "run_id": job.run_id},
         )
         await db.commit()
-    await scheduler.fail(
-        job, ExecutionFailure("transient", "slow_run", "Injected over-time failure")
-    )
+    secret_detail = "Injected over-time failure with provider-secret-value"
+    failure = ExecutionFailure("transient", "slow_run", "over-time failure")
+    failure.__cause__ = RuntimeError(secret_detail)
+    await scheduler.fail(job, failure)
     async with SessionLocal() as db:
         task = await db.get(Task, task_id)
+        run = await db.get(Run, job.run_id)
         dead = await db.scalar(select(DeadLetter).where(DeadLetter.task_id == task_id))
+        transitions = list(
+            await db.scalars(select(TaskTransition).where(TaskTransition.task_id == task_id))
+        )
         assert task.stage == TaskStage.RETRY_EXHAUSTED.value
         assert task.blocked_reason == "wall_time_limit_exhausted"
         assert dead.kind == "slow_run"
+        assert run.error_message == "ExecutionFailure->RuntimeError"
+        assert dead.reason == "ExecutionFailure->RuntimeError"
+        assert all(secret_detail not in transition.reason for transition in transitions)
 
 
 @pytest.mark.anyio

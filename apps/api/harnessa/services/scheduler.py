@@ -21,6 +21,7 @@ from harnessa.adapters.execution import (
     StaleLease,
     TaskInput,
 )
+from harnessa.adapters.safe_diagnostics import safe_exception_type_chain
 from harnessa.adapters.specification_workspace import (
     SpecificationWorkspaceError,
 )
@@ -956,7 +957,7 @@ class Scheduler:
                 run.status = RunStatus.FAILED.value
                 run.retry_class = failure.retry_class
                 run.error_code = failure.code
-                run.error_message = str(failure)
+                run.error_message = safe_exception_type_chain(failure)
                 run.finished_at = now
                 lease.owner_id = None
                 lease.expires_at = now
@@ -1002,7 +1003,7 @@ class Scheduler:
                                 to_stage=task.stage,
                                 from_run_status=RunStatus.RUNNING.value,
                                 to_run_status=RunStatus.FAILED.value,
-                                reason=str(failure),
+                                reason=safe_exception_type_chain(failure),
                                 command="run_failed",
                                 version_before=task.version - 1,
                                 version_after=task.version,
@@ -1026,7 +1027,7 @@ class Scheduler:
                             task_id=task.id,
                             run_id=run.id,
                             kind=failure.code,
-                            reason=str(failure),
+                            reason=safe_exception_type_chain(failure),
                             payload={"retry_class": failure.retry_class, "attempt": job.attempt},
                         )
                     )
@@ -1356,9 +1357,15 @@ class Scheduler:
             # The new lease owner is authoritative; stale worker output is discarded.
             return
         except Exception as exc:  # noqa: BLE001 - adapters are isolated behind this failure boundary.
+            safe_failure = ExecutionFailure(
+                RetryClass.TRANSIENT.value,
+                "adapter_error",
+                safe_exception_type_chain(exc),
+            )
+            safe_failure.__cause__ = exc
             await self.fail(
                 job,
-                ExecutionFailure(RetryClass.TRANSIENT.value, "adapter_error", str(exc)),
+                safe_failure,
             )
         finally:
             heartbeat_task.cancel()

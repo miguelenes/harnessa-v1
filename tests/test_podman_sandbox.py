@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import stat
@@ -254,6 +255,93 @@ async def test_native_bridge_builds_use_bounded_compiler_arguments_and_atomic_pu
     assert tool.stat().st_mode & 0o777 == 0o700
     assert len(invocations) == 2
     assert all("-Werror" in args and "-static" in args for args in invocations)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("build_name", "destination_name"),
+    [
+        ("build_model_relay", "model-relay"),
+        ("build_orchestrator_tool", "orchestrator-mcp"),
+    ],
+)
+async def test_cancelled_native_build_reaps_compiler_before_releasing_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, build_name: str, destination_name: str
+) -> None:
+    backend = _backend()
+    build = getattr(backend, build_name)
+    destination = tmp_path / "bin" / destination_name
+    active = 0
+    maximum_active = 0
+    invocations = 0
+    first_started = asyncio.Event()
+    first_waiting = asyncio.Event()
+    permit_reap = asyncio.Event()
+
+    class Process:
+        def __init__(self, *, blocked: bool) -> None:
+            self.returncode: int | None = None
+            self.blocked = blocked
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            if self.blocked:
+                first_started.set()
+                await asyncio.Event().wait()
+            output = Path(str(arguments[arguments.index("-o") + 1]))
+            output.write_bytes(b"offline compiler fixture")
+            self.returncode = 0
+            nonlocal active
+            active -= 1
+            return b"", b""
+
+        def terminate(self) -> None:
+            pass
+
+        async def wait(self) -> int:
+            nonlocal active
+            first_waiting.set()
+            await permit_reap.wait()
+            self.returncode = -15
+            active -= 1
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    async def compile_fixture(*args: object, **_: object) -> Process:
+        nonlocal active, maximum_active, invocations
+        active += 1
+        invocations += 1
+        maximum_active = max(maximum_active, active)
+        nonlocal arguments
+        arguments = args
+        return Process(blocked=invocations == 1)
+
+    arguments: tuple[object, ...] = ()
+
+    monkeypatch.setattr("harnessa.adapters.podman_sandbox.shutil.which", lambda _: "/usr/bin/cc")
+    monkeypatch.setattr(
+        "harnessa.adapters.podman_sandbox.asyncio.create_subprocess_exec", compile_fixture
+    )
+    cancelled = asyncio.create_task(build(destination))
+    await first_started.wait()
+    cancelled.cancel()
+    await first_waiting.wait()
+    queued = asyncio.create_task(build(destination))
+    await asyncio.sleep(0)
+    assert invocations == 1
+    assert active == 1
+    permit_reap.set()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    built = await queued
+
+    assert built == destination
+    assert destination.read_bytes() == b"offline compiler fixture"
+    assert destination.stat().st_mode & 0o777 == 0o700
+    assert not destination.with_suffix(".tmp").exists()
+    assert invocations == 2
+    assert maximum_active == 1
 
 
 @pytest.mark.anyio
