@@ -19,8 +19,9 @@ from harnessa.holdout_evaluator import (
 )
 
 
-def _write_source_archive(path: Path) -> str:
-    content = b"Synthetic acceptance fixture.\n"
+def _write_source_archive(
+    path: Path, content: bytes = b"Synthetic acceptance fixture.\n"
+) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(path, "w") as archive:
         info = tarfile.TarInfo("README.md")
@@ -204,13 +205,7 @@ async def test_evaluator_rejects_bad_token_and_tampered_manifest(tmp_path: Path)
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "asset_state",
-    [
-        "missing_archive",
-        "missing_verifier",
-        "archive_checksum_mismatch",
-        "removed_after_start",
-        "changed_after_start",
-    ],
+    ["missing_archive", "missing_verifier", "archive_checksum_mismatch"],
 )
 async def test_readiness_requires_valid_case_assets(tmp_path: Path, asset_state: str) -> None:
     task_id, project_id = str(uuid4()), str(uuid4())
@@ -247,17 +242,109 @@ async def test_readiness_requires_valid_case_assets(tmp_path: Path, asset_state:
     app = create_app(EvaluatorConfig("token", suite_path, base_dir, artifact_root))
 
     async with await _client(app) as client:
-        if asset_state in {"removed_after_start", "changed_after_start"}:
-            before = await client.get("/health/ready")
-            assert before.status_code == 200
-            if asset_state == "removed_after_start":
-                verifier.unlink()
-            else:
-                verifier.write_text("raise SystemExit(0)\n# changed\n", encoding="utf-8")
         response = await client.get("/health/ready")
 
     assert response.status_code == 503
     assert response.json() == {"status": "unavailable"}
+
+
+def _snapshot_case(
+    tmp_path: Path, verifier_source: str
+) -> tuple[str, str, Path, Path, EvaluatorConfig]:
+    task_id, project_id = str(uuid4()), str(uuid4())
+    base_dir = tmp_path / "private"
+    archive = base_dir / "bases" / "base.tar"
+    archive_digest = _write_source_archive(archive)
+    verifier = base_dir / "verifiers" / "case-v1.py"
+    verifier.parent.mkdir(parents=True, exist_ok=True)
+    verifier.write_text(verifier_source, encoding="utf-8")
+    suite_path = base_dir / "suite.json"
+    suite_path.write_text(json.dumps({
+        "schema_version": 1,
+        "dataset_id": "m13-acceptance-holdout",
+        "dataset_revision": "1",
+        "dataset_license": "MIT",
+        "cases": [{
+            "task_id": task_id,
+            "project_id": project_id,
+            "base_sha": "a" * 40,
+            "source_archive": "bases/base.tar",
+            "source_archive_sha256": archive_digest,
+            "verifier_id": "case-v1",
+        }],
+    }), encoding="utf-8")
+    artifact_root = tmp_path / "cas"
+    artifact_root.mkdir()
+    return task_id, project_id, archive, verifier, EvaluatorConfig(
+        "token", suite_path, base_dir, artifact_root
+    )
+
+
+@pytest.mark.anyio
+async def test_evaluation_uses_archived_snapshot_after_host_assets_change(tmp_path: Path) -> None:
+    verifier_source = (
+        "from pathlib import Path\nimport sys\n"
+        "assert (Path(sys.argv[1]) / 'README.md').read_text() == "
+        "'Synthetic acceptance fixture.\\nThe data is synthetic.\\n'\n"
+    )
+    task_id, project_id, archive, verifier, config = _snapshot_case(tmp_path, verifier_source)
+    app = create_app(config)
+    changed_archive = tmp_path / "changed.tar"
+    _write_source_archive(changed_archive, b"Changed host archive.\n")
+    changed_archive.replace(archive)
+    verifier.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    patch = (
+        b"diff --git a/README.md b/README.md\n"
+        b"--- a/README.md\n+++ b/README.md\n"
+        b"@@ -1 +1,2 @@\n Synthetic acceptance fixture.\n"
+        b"+The data is synthetic.\n"
+    )
+    LocalArtifactStore(config.artifact_root).put_bytes(
+        patch, media_type="application/vnd.git-patch"
+    )
+
+    async with await _client(app) as client:
+        ready = await client.get("/health/ready")
+        response = await client.post(
+            "/evaluate",
+            json=_manifest(task_id, project_id, patch),
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert ready.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["status"] == "passed"
+
+
+@pytest.mark.anyio
+async def test_evaluation_does_not_reopen_changed_verifier_path(tmp_path: Path) -> None:
+    verifier_source = (
+        "from pathlib import Path\nimport sys\n"
+        "assert (Path(sys.argv[1]) / 'README.md').read_text() == "
+        "'Synthetic acceptance fixture.\\nThe data is synthetic.\\n'\n"
+    )
+    task_id, project_id, _archive, verifier, config = _snapshot_case(tmp_path, verifier_source)
+    app = create_app(config)
+    verifier.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    patch = (
+        b"diff --git a/README.md b/README.md\n"
+        b"--- a/README.md\n+++ b/README.md\n"
+        b"@@ -1 +1,2 @@\n Synthetic acceptance fixture.\n"
+        b"+The data is wrong.\n"
+    )
+    LocalArtifactStore(config.artifact_root).put_bytes(
+        patch, media_type="application/vnd.git-patch"
+    )
+
+    async with await _client(app) as client:
+        response = await client.post(
+            "/evaluate",
+            json=_manifest(task_id, project_id, patch),
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
 
 
 def test_private_suite_rejects_traversal_and_duplicate_task_ids(tmp_path: Path) -> None:

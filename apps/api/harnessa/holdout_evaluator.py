@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import io
 import json
 import logging
 import os
@@ -19,7 +20,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import UUID
@@ -62,6 +63,8 @@ class HoldoutCase:
     source_archive_sha256: str
     verifier_id: str
     verifier_sha256: str = ""
+    source_archive_bytes: bytes = field(default=b"", repr=False, compare=False)
+    verifier_bytes: bytes = field(default=b"", repr=False, compare=False)
 
 
 def _read_private_json(path: Path, *, max_bytes: int) -> dict[str, Any]:
@@ -160,12 +163,11 @@ def _safe_child(root: Path, relative: str) -> Path:
 
 def _validate_case_assets(
     *, base_dir: Path, cases: dict[str, HoldoutCase]
-) -> tuple[dict[str, HoldoutCase], str, dict[str, tuple[int, int, int, int]]]:
-    """Validate and fingerprint every immutable input before reporting readiness."""
+) -> tuple[dict[str, HoldoutCase], str]:
+    """Validate and snapshot every immutable input before reporting readiness."""
 
     validated: dict[str, HoldoutCase] = {}
     fingerprints: list[str] = []
-    metadata: dict[str, tuple[int, int, int, int]] = {}
     total_bytes = 0
     for task_id, case in sorted(cases.items()):
         archive = _safe_child(base_dir, case.source_archive)
@@ -182,10 +184,12 @@ def _validate_case_assets(
             or total_bytes > _MAX_CASE_ASSET_BYTES
         ):
             raise ValueError("configured evaluator case assets exceed their size limits")
-        archive_digest = _sha256_file(archive)
+        archive_bytes = archive.read_bytes()
+        archive_digest = hashlib.sha256(archive_bytes).hexdigest()
         if not hmac.compare_digest(archive_digest, case.source_archive_sha256):
             raise ValueError("configured evaluator source archive checksum is invalid")
-        verifier_digest = _sha256_file(verifier)
+        verifier_bytes = verifier.read_bytes()
+        verifier_digest = hashlib.sha256(verifier_bytes).hexdigest()
         validated[task_id] = HoldoutCase(
             task_id=case.task_id,
             project_id=case.project_id,
@@ -194,47 +198,12 @@ def _validate_case_assets(
             source_archive_sha256=case.source_archive_sha256,
             verifier_id=case.verifier_id,
             verifier_sha256=verifier_digest,
+            source_archive_bytes=archive_bytes,
+            verifier_bytes=verifier_bytes,
         )
         fingerprints.append(f"{task_id}:{archive_digest}:{verifier_digest}")
-        for path, key in ((archive, f"{task_id}:archive"), (verifier, f"{task_id}:verifier")):
-            stat = path.stat()
-            metadata[key] = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
     asset_digest = hashlib.sha256("\n".join(fingerprints).encode("ascii")).hexdigest()
-    return validated, asset_digest, metadata
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _case_assets_unchanged(
-    *,
-    base_dir: Path,
-    cases: dict[str, HoldoutCase],
-    metadata: dict[str, tuple[int, int, int, int]],
-) -> bool:
-    for task_id, case in cases.items():
-        for relative, key in (
-            (case.source_archive, f"{task_id}:archive"),
-            (f"verifiers/{case.verifier_id}.py", f"{task_id}:verifier"),
-        ):
-            try:
-                path = _safe_child(base_dir, relative)
-                stat = path.stat()
-            except (OSError, ValueError):
-                return False
-            if not path.is_file() or metadata.get(key) != (
-                stat.st_dev,
-                stat.st_ino,
-                stat.st_size,
-                stat.st_mtime_ns,
-            ):
-                return False
-    return True
+    return validated, asset_digest
 
 
 def _verify_cas_artifact(root: Path, digest: str, size_bytes: int) -> bytes:
@@ -276,12 +245,12 @@ def _verify_manifest(manifest: dict[str, Any]) -> str:
     return digest
 
 
-def _extract_archive(archive: Path, destination: Path) -> None:
-    if archive.stat().st_size > _MAX_ARCHIVE_BYTES:
+def _extract_archive(archive_bytes: bytes, destination: Path) -> None:
+    if len(archive_bytes) > _MAX_ARCHIVE_BYTES:
         raise ValueError("source archive exceeds its size limit")
     total_bytes = 0
     entries = 0
-    with tarfile.open(archive, mode="r:*") as bundle:
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:*") as bundle:
         for member in bundle:
             entries += 1
             path = PurePosixPath(member.name)
@@ -319,16 +288,12 @@ def _run_verifier(
     case: HoldoutCase,
     patches: list[bytes],
 ) -> bool:
-    archive = _safe_child(config.base_dir, case.source_archive)
-    archive_bytes = archive.read_bytes()
     if not hmac.compare_digest(
-        hashlib.sha256(archive_bytes).hexdigest(), case.source_archive_sha256
+        hashlib.sha256(case.source_archive_bytes).hexdigest(), case.source_archive_sha256
     ):
         raise ValueError("source archive integrity check failed")
-    verifier = _safe_child(config.base_dir, f"verifiers/{case.verifier_id}.py")
-    verifier_bytes = verifier.read_bytes()
     if not hmac.compare_digest(
-        hashlib.sha256(verifier_bytes).hexdigest(), case.verifier_sha256
+        hashlib.sha256(case.verifier_bytes).hexdigest(), case.verifier_sha256
     ):
         raise ValueError("configured evaluator verifier checksum changed")
     scratch_root = Path("/tmp")
@@ -336,7 +301,7 @@ def _run_verifier(
         work = Path(temp)
         repo = work / "repo"
         repo.mkdir(mode=0o700)
-        _extract_archive(archive, repo)
+        _extract_archive(case.source_archive_bytes, repo)
         for index, patch in enumerate(patches):
             patch_path = work / f"candidate-{index}.patch"
             patch_path.write_bytes(patch)
@@ -372,6 +337,9 @@ def _run_verifier(
             if apply.returncode != 0:
                 return False
         try:
+            verifier = work / "verifier.py"
+            verifier.write_bytes(case.verifier_bytes)
+            verifier.chmod(0o600)
             result = subprocess.run(
                 [sys.executable, "-I", str(verifier), str(repo)],
                 cwd=repo,
@@ -401,11 +369,10 @@ def create_app(config: EvaluatorConfig | None = None) -> FastAPI:
     if config is None:
         app.state.cases = None
         app.state.suite_digest = None
-        app.state.asset_metadata = {}
     else:
         try:
             cases, judge_revision = _load_cases(config.suite_path)
-            cases, asset_digest, asset_metadata = _validate_case_assets(
+            cases, asset_digest = _validate_case_assets(
                 base_dir=config.base_dir, cases=cases
             )
         except (OSError, TypeError, ValueError) as exc:
@@ -413,12 +380,10 @@ def create_app(config: EvaluatorConfig | None = None) -> FastAPI:
             app.state.cases = None
             app.state.judge_revision = None
             app.state.suite_digest = None
-            app.state.asset_metadata = {}
         else:
             app.state.cases = cases
             app.state.judge_revision = f"{judge_revision}:{asset_digest[:16]}"
             app.state.suite_digest = asset_digest
-            app.state.asset_metadata = asset_metadata
     app.state.lock = asyncio.Semaphore(1)
 
     @app.get("/health/ready")
@@ -428,11 +393,6 @@ def create_app(config: EvaluatorConfig | None = None) -> FastAPI:
             and app.state.cases
             and app.state.suite_digest
             and app.state.config.artifact_root.is_dir()
-            and _case_assets_unchanged(
-                base_dir=app.state.config.base_dir,
-                cases=app.state.cases,
-                metadata=app.state.asset_metadata,
-            )
         )
         return JSONResponse(
             {"status": "ready" if ready else "unavailable"}, status_code=200 if ready else 503
