@@ -284,3 +284,10 @@ reserved. Unknown-usage estimates remain conservatively included. The €20
 aggregate ceiling remains active, and the current route check does not verify
 provider-generated 429 handling, live primary/probe contention, or the
 independent holdout evaluator.
+
+
+### Subsequent GitHub App key rotation and revocation blocker (2026-10-26)
+
+A local container-environment inspection command inadvertently emitted continuation lines from the configured multiline GitHub App private key. The key was treated as compromised. A new GitHub App key was generated and its downloaded PEM is stored with mode `0600` under the operator's private Harnessa configuration. Its public fingerprint matches the GitHub key row and the recreated M13 API configuration. Only the API service was recreated; the existing webhook secret and other API settings were preserved. API readiness returned HTTP 200, and the authenticated Harnessa GitHub view reports the App, installation, and opted-in disposable repository ready. No provider request or benchmark/evaluator submission was made for this rotation.
+
+The prior API key fingerprint `SHA256:RbDdzydq51YJkm/yMIee30rXvbhT+1GhpGQ2lbDTseo=` remains present in GitHub's key list. GitHub currently disables Delete controls on every key row, including the exposed key and one unused extra key created during the download investigation. Those rows have not been removed; key revocation is therefore incomplete. The latest configured key fingerprint is `SHA256:xr3hD0rEoY7T6eiq1WerB20aDROX25WVf+FNPqoQsag=`. Keep the remaining pre-existing key rows untouched.
