@@ -46,7 +46,8 @@
   "pnpm": {
     "overrides": {
       "dompurify": "3.4.17",
-      "undici@7": "7.30.1"
+      "undici@7": "7.30.1",
+      "zod": "4.6.7"
     }
   }
 }
