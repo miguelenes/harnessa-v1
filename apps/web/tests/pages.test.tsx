@@ -134,7 +134,7 @@ describe("web application pages", () => {
     const call = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/models/live-check"));
     expect(call?.[1]?.method).toBe("POST");
     expect(call?.[1]?.body).toContain('"authorize_paid_request":true');
-    expect(call?.[1]?.body).toContain('"alias":"harnessa-deepseek-flash"');
+    expect(call?.[1]?.body).toContain('"alias":"deepseek-flash"');
   });
 
   it("fails closed when setup identity, route, and runtime checks are unavailable", async () => {

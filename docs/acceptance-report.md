@@ -1,6 +1,6 @@
 # M13 release acceptance report
 
-**Status:** M13 remains active. Deterministic offline acceptance and live scenarios pass, including a real isolated-agent issue-to-PR merge, archive/cleanup, duplicate webhook idempotency, browser accessibility checks, synthetic fresh-instance restore, worker crash/restart recovery, and automatic stream reconnect after an API restart. Offline fault-injection tests cover 429 fallback, primary/probe capacity, and promotion/rollback; they do not establish provider-generated rate limiting or live contention. A real task-derived learning candidate/rollback and independent holdout result remain open. No unavailable benchmark or external integration is represented as a score or a pass.
+**Status:** M13 remains active. Deterministic offline acceptance and live scenarios pass, including a real isolated-agent issue-to-PR merge, archive/cleanup, duplicate webhook idempotency, browser accessibility checks, synthetic fresh-instance restore, worker crash/restart recovery, and automatic stream reconnect after an API restart. Offline fault-injection tests cover 429 fallback, primary/probe capacity, and promotion/rollback; they do not establish provider-generated rate limiting or live contention. A real task-derived learning candidate/rollback and independent holdout result remain open. The 2026-10-26 bounded live Harness² experiment failed its private evaluator gate and lacked complete usage accounting; it produced no candidate or promotion. No unavailable benchmark or external integration is represented as a score or a pass.
 
 ## Deterministic, offline evidence
 
@@ -177,6 +177,63 @@ The prior key-pairs page readback was stale: a subsequent authorized refresh sho
 
 ### Credential and exception-redaction follow-up (2026-10-25)
 
-After deleting the previously exposed GitHub App key, the local acceptance `.env` and API container were found to still contain that revoked key. The local `.env` was updated to the verified replacement PEM; a mode-0600 backup was written with the private-key assignment redacted. The Compose-resolved API environment and recreated API container both matched the replacement key without printing key material. API readiness returned HTTP 200, and the authenticated Harnessa GitHub view reported App status `ready`, the `miguelenes` installation active, and the opted-in disposable acceptance repository ready. The revoked key's local PEM file was removed. Five key rows remain in GitHub, including the configured replacement; the other four were not individually matched to active configuration and were left untouched. The webhook secret had already been rotated. No provider request or evaluator call was sent in this follow-up.
+Earlier verification recorded deleting the exposed GitHub App key, updating the local acceptance `.env` and API container to the replacement PEM, and rotating the webhook secret. That historical deletion claim is no longer current: on 2026-10-26 the refreshed GitHub key-pairs page showed six rows and all six Delete controls disabled. No fresh Confirm access prompt was visible at the time of inspection. I cannot currently verify that the exposed key is revoked, so the old-key revocation remains a security prerequisite for live GitHub acceptance. Do not rely on the earlier five-row snapshot as current. The previously verified replacement-key fingerprint and App readiness are historical evidence only; no private key material was displayed. No provider request or evaluator call was sent during this refresh.
 
 M13 PR [#68](https://github.com/miguelenes/harnessa-v1/pull/68) closes raw adapter-exception persistence in scheduler failure rows, dead letters, task transitions, and ACP execution failures. Persisted diagnostics retain bounded exception-type/protocol metadata without exception text. Parallel native helper builds serialize access to their shared atomic temporary destinations; cancellation terminates and reaps the compiler and removes the temporary file before unlocking. Verification: 23 focused ACP/Podman unit tests passed, including cancellation/serialization for both native builders; the scheduler redaction integration regression passed (1) against a fresh disposable PostgreSQL 16.13 and Redis 8.10.2 project; Ruff passed for the affected API/test paths; strict API mypy passed (62 source files); and `git diff --check` passed. An independent review found no actionable issues at exact head `934ac163fa1f162f865cfd8da2c3bed96ac7937d`; hosted required checks are still running. No provider spend occurred. The independent evaluator/holdout, task-derived learning rollback, and remaining live resilience evidence still keep M13 active.
+
+### Private holdout evaluator setup (2026-10-26)
+
+The optional evaluator now runs as a separate rootless Podman container on an
+internal-only network, bound to `127.0.0.1:19094`. Its root filesystem and both
+the private dataset and Harnessa CAS mounts are read-only; all Linux capabilities
+are dropped, `no-new-privileges` is set, and temporary storage, CPU, memory, and
+process counts are bounded. The evaluator container is not attached to the app,
+provider, GitHub, or general-purpose egress networks. Readiness returned HTTP
+200. The evaluator image was built locally from the pinned M13 API image inputs;
+its local image ID is recorded in the operator's container inventory.
+
+The owner-authored private suite is outside Git at
+`/home/menes/.local/share/harnessa/m13-holdout`, mode `0700`; the suite, verifier,
+and source archive are mode `0600`. Dataset `m13-acceptance-holdout` uses
+`LicenseRef-Harnessa-Private-OwnerAuthored`. Revision `1` contained the first
+inert README case; its direct evaluator exercise accepted the patch extracted
+from the actual merged private-repository PR #5. Receipt status was `passed`,
+judge revision `private:m13-acceptance-holdout@1:10c9c4638230d903`, and receipt
+manifest digest
+`06a33501cfa19a99412185ff0e758785f8c19c9125578f33030d2c9c7685227f`. That was a
+local, zero-provider-cost evaluator call, not an Harnessa experiment receipt.
+
+Revision `2` added a second case for the bounded probe task and has canonical
+suite digest
+`0cf1a3570efbf765f1de12d693086b42dd35cebfc2ce5ec2dfb528ec4487f1b3`. The
+current suite therefore contains two owner-authored private fixtures. It remains
+a local synthetic evaluator, not an independent benchmark, third-party
+evaluation, or broad performance measure.
+
+Focused evaluator unit tests, Ruff, and strict mypy pass, including malformed
+manifest, identity, token, path, symlink, boolean-size, and hidden-feedback
+checks. The evaluator service and receipt were exercised directly against the
+actual merged task patch. The live Harnessa experiment result below persisted
+its own failed receipt; no successful experiment receipt or promotable
+task-derived candidate has been produced. Reviewed promotion and rollback
+remain outstanding.
+
+### Bounded live experiment through the evaluator (2026-10-26)
+
+One `k=1` experiment, `b7ca0c1b-68e5-4707-b0e9-2570a524dcd5`, was dispatched
+through the Harnessa worker and the scoped local LiteLLM route under the existing
+project/task/run limits. The worker produced one baseline, three candidate
+probe rows, and one composed row, all with delivered artifacts. The private
+evaluator returned a durable `failed` receipt for the composed manifest. This
+is a real rejection, not an evaluator pass or a benchmark score; the private
+owner-authored suite remains a single-case fixture and is not independent.
+
+The Harnessa cost gate remained `blocked`: two delivered probe rows had no
+token or cost usage, so known cost could not authorize promotion. The experiment
+is terminal `failed`; there is no task-derived candidate, promotion, or rollback.
+The global Harnessa spend ledger read `$0.00284065` billed, `$0.82009662`
+estimated, and `$0.00076514` reserved against its `$20` lifetime ceiling. Some
+task reservations remain `unknown` pending provider reconciliation; those are
+included conservatively in estimated spend, and no further live model run should
+be queued until accounting and route capacity are understood. The authorized
+€20 cap remains in force.

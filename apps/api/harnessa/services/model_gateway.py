@@ -451,10 +451,6 @@ async def _reserve(
         task = await db.get(Task, task_id)
         if task is None or task.project_id != project_id:
             raise ModelGatewayError("task_not_found", 404, "Task is not in this project")
-        if (datetime.now(UTC) - task.created_at).total_seconds() > policy.max_wall_seconds:
-            raise ModelGatewayError(
-                "task_time_limit_exceeded", 409, "Task has reached its wall-time limit"
-            )
     run: Run | None = None
     evaluation_run_id: UUID | None = None
     evaluation_cost_limit: Decimal | None = None

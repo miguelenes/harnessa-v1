@@ -82,6 +82,15 @@ _BENCH_SPEC = BenchSpec(
 )
 
 
+def _frozen_route_alias(result: Mapping[str, Any]) -> str:
+    """Resolve the immutable route when resuming pre-route-persistence experiments."""
+    route = result.get("route_alias")
+    if not isinstance(route, str) or not route.strip():
+        usage = result.get("adaptation_usage")
+        route = usage.get("route_alias") if isinstance(usage, Mapping) else None
+    return route.strip() if isinstance(route, str) else ""
+
+
 def _experience_candidate_draft(
     result: dict[str, Any],
     records: list[dict[str, Any]],
@@ -721,7 +730,7 @@ class HarnessExperimentWorker:
             base_harness = root / "base-harness"
             base_harness.mkdir(mode=0o700, parents=True, exist_ok=True)
             (base_harness / "systemprompt.md").write_bytes(context)
-            route = str(exp.result.get("route_alias", ""))
+            route = _frozen_route_alias(exp.result)
             if not route:
                 raise HarnessAdaptationError("Frozen probe route is missing")
             try:
@@ -1289,6 +1298,8 @@ class HarnessExperimentWorker:
                             "derived" if result["skill_candidates"] else "no_changed_skill"
                         )
                 exp.baseline_digest = next((r["harness_digest"] for r in adapter.records if r["phase"] == "baseline"), None)
+                # The resume API rebuilds the frozen route from persisted results.
+                result["route_alias"] = frozen.route_alias
                 exp.result = result
                 result_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
                 stored_result = await asyncio.to_thread(LocalArtifactStore(Path(settings.artifact_root)).put_bytes, result_bytes, media_type="application/vnd.harnessa.harness-experiment+json")
