@@ -376,9 +376,12 @@ reserved dollars or tokens. These figures are Harnessa's ledger, not a
 provider-account-wide cost total. The €20 aggregate authorization remains the
 spend ceiling.
 
-PR #70 remains open and draft at `b131639568b0fea3273412b187d135c2b78a9bfd`.
-The latest observed hosted checks still cannot start because GitHub reports an
-account billing lock. M13 remains incomplete: sandbox execution, an
+PR #70 remains open and draft at `b407256d2a041424a0adff464d1bf2f351d8de76`.
+Both Local CI checks (`121709746503`, `121709776807`), CodeQL Python and
+JavaScript/TypeScript (`121709761110`, `121709761159`), and Documentation
+(`121709760132`) failed before execution; the Local CI annotation says the
+account is locked due to a billing issue. Deployment (`121709788518`) was
+skipped. M13 remains incomplete: sandbox execution, an
 independently administered hidden holdout, task-derived learning and rollback,
 provider-generated 429 handling, live primary/probe contention, exposed-key
 revocation, and successful required hosted checks remain unresolved. No
