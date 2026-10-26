@@ -177,7 +177,7 @@ The prior key-pairs page readback was stale: a subsequent authorized refresh sho
 
 ### Credential and exception-redaction follow-up (2026-10-25)
 
-Earlier verification recorded deleting the exposed GitHub App key, updating the local acceptance `.env` and API container to the replacement PEM, and rotating the webhook secret. That historical deletion claim is no longer current: on 2026-10-26 the refreshed GitHub key-pairs page showed six rows and all six Delete controls disabled. No fresh Confirm access prompt was visible at the time of inspection. I cannot currently verify that the exposed key is revoked, so the old-key revocation remains a security prerequisite for live GitHub acceptance. Do not rely on the earlier five-row snapshot as current. The previously verified replacement-key fingerprint and App readiness are historical evidence only; no private key material was displayed. No provider request or evaluator call was sent during this refresh.
+At this 2026-10-26 inspection point, the GitHub key-pairs page showed six rows with all Delete controls disabled and no Confirm access prompt. That was an interim observation; the latest credential state is recorded in the 2026-10-26 refresh below.
 
 M13 PR [#68](https://github.com/miguelenes/harnessa-v1/pull/68) closes raw adapter-exception persistence in scheduler failure rows, dead letters, task transitions, and ACP execution failures. Persisted diagnostics retain bounded exception-type/protocol metadata without exception text. Parallel native helper builds serialize access to their shared atomic temporary destinations; cancellation terminates and reaps the compiler and removes the temporary file before unlocking. Verification: 23 focused ACP/Podman unit tests passed, including cancellation/serialization for both native builders; the scheduler redaction integration regression passed (1) against a fresh disposable PostgreSQL 16.13 and Redis 8.10.2 project; Ruff passed for the affected API/test paths; strict API mypy passed (62 source files); and `git diff --check` passed. An independent review found no actionable issues at exact head `934ac163fa1f162f865cfd8da2c3bed96ac7937d`; hosted required checks are still running. No provider spend occurred. The independent evaluator/holdout, task-derived learning rollback, and remaining live resilience evidence still keep M13 active.
 
@@ -228,12 +228,40 @@ evaluator returned a durable `failed` receipt for the composed manifest. This
 is a real rejection, not an evaluator pass or a benchmark score; the private
 owner-authored suite remains a single-case fixture and is not independent.
 
-The Harnessa cost gate remained `blocked`: two delivered probe rows had no
-token or cost usage, so known cost could not authorize promotion. The experiment
-is terminal `failed`; there is no task-derived candidate, promotion, or rollback.
+The Harnessa cost gate remained `blocked`: two delivered probe rows had unknown
+token usage and no provider-reported cost, so known total cost could not
+authorize promotion. Their exact LiteLLM spend-log rows report status `failure`,
+zero gateway spend, and zero tokens. Harnessa now records those gateway-side
+observations as `usage_reconciled` with null token/provider fields; the original
+per-attempt estimates remain. Four transport-error request IDs had no LiteLLM
+spend-log rows and remain unknown. The experiment is terminal `failed`; there
+is no task-derived candidate, promotion, or rollback.
 The global Harnessa spend ledger read `$0.00284065` billed, `$0.82009662`
 estimated, and `$0.00076514` reserved against its `$20` lifetime ceiling. Some
-task reservations remain `unknown` pending provider reconciliation; those are
-included conservatively in estimated spend, and no further live model run should
-be queued until accounting and route capacity are understood. The authorized
-€20 cap remains in force.
+Task reservations remain `unknown` and are included conservatively in the
+estimated spend.
+The authorized €20 cap remains in force.
+
+### Credential and usage refresh (2026-10-26)
+
+A stale local PEM at `/tmp/harnessa-m13-private-key.pem` returned HTTP 401
+when used to sign a GitHub App JWT, and that file was removed. The exact key
+previously configured in the API container is a different, unidentified key; it
+returned HTTP 200 before service recreation. A newly generated App key also
+returned HTTP 200 and is configured in the local API and web services. GitHub
+confirmed the App settings update after the webhook-secret rotation. The API
+readiness endpoint returned HTTP 200. A newly signed synthetic `ping` webhook
+was accepted with HTTP 202, and replaying the same delivery returned HTTP 202
+with `X-Harnessa-Webhook-Duplicate: true`. Six key rows were visible after
+creating the replacement; their Delete controls were disabled, so no GitHub key
+row was deleted. Revocation of the unidentified previously configured key is
+unverified. The replacement key and webhook signing path are verified locally.
+
+The two zero-spend LiteLLM observations were imported into Harnessa with
+`gateway_billed_usd=0` while provider cost and token counts remained unknown;
+the estimates were retained. A read-only [OpenRouter current-key usage
+lookup](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key)
+returned `$0.16753448` month-to-date at 2026-10-26 01:59 UTC. This is key-wide
+usage and cannot be attributed solely to Harnessa, so it is not added to the
+Harnessa ledger. No model-generation request or paid evaluator call was sent
+during this refresh.
