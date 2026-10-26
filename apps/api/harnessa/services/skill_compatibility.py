@@ -52,3 +52,16 @@ async def route_manifest(
 def route_capability_revision(manifest: dict[str, Any]) -> str:
     payload = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def route_snapshot_matches(
+    frozen: object, current: object, expected_alias: object
+) -> bool:
+    """Check the exact alias and deployment/capability/price snapshot for an evaluation."""
+    if not isinstance(frozen, dict) or not isinstance(current, dict):
+        return False
+    if not isinstance(expected_alias, str) or not expected_alias:
+        return False
+    if frozen.get("alias") != expected_alias or current.get("alias") != expected_alias:
+        return False
+    return route_capability_revision(frozen) == route_capability_revision(current)

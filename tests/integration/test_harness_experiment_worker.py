@@ -12,7 +12,7 @@ import pytest
 from fastapi import HTTPException
 from harness2.substrate.opencode import OpencodeSubstrate
 from harnessa.adapters.artifacts import LocalArtifactStore
-from harnessa.api import harness_routes
+from harnessa.api import evaluation_routes, harness_routes
 from harnessa.contracts import TaskStage
 from harnessa.db.harness import (
     EvaluationRun,
@@ -504,6 +504,96 @@ async def test_experiment_route_freezes_inputs_and_enforces_idempotency(
                 body.model_copy(update={"stable_key": "wrong-stage"}), actor, db,
             )
         assert wrong_stage.value.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_grouped_experiment_dispatch_rejects_route_price_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = await gateway_fixture()
+    monkeypatch.setattr(worker_module.settings, "artifact_root", str(tmp_path))
+
+    class SpecificationManager:
+        async def read_file_at_revision(self, *_: object, **__: object) -> bytes:
+            return b"# Frozen base harness\n"
+
+    monkeypatch.setattr(
+        worker_module, "specification_workspace_manager", lambda: SpecificationManager()
+    )
+    async with SessionLocal() as db:
+        task = await db.get(Task, fixture["task_id"])
+        assert task is not None
+        task.stage = TaskStage.HARNESS_PROBE.value
+        repository = Repository(
+            project_id=fixture["project_id"], target_id="repo/evaluation-drift-fixture",
+            display_name="Evaluation drift fixture",
+        )
+        policy = HarnessPolicy(
+            organization_id=fixture["organization_id"],
+            project_id=fixture["project_id"], revision=3,
+        )
+        db.add_all([repository, policy])
+        await db.flush()
+        interview = SpecificationInterview(
+            organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+            task_id=task.id, repository_id=repository.id, created_by=fixture["user_id"],
+            topic="Frozen grouped route", change_id="evaluation-drift-fixture",
+            base_sha="a" * 40, head_sha="a" * 40,
+            idempotency_key="evaluation-drift-fixture", request_hash="c" * 64,
+            artifact_hash="b" * 64, readiness_state="READY", revision=2,
+        )
+        db.add(interview)
+        await db.flush()
+        frozen_route = await route_manifest(db, fixture["organization_id"], "coding")
+        manifest = {
+            "route_alias": "coding", "model_route_policy": frozen_route,
+            "task_inputs": [{"task_id": str(task.id)}],
+        }
+        manifest_digest = evaluation_routes._digest(manifest)
+        evaluation = EvaluationRun(
+            organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+            created_by=fixture["user_id"], stable_key="evaluation-drift-fixture",
+            status="queued", manifest=manifest, manifest_digest=manifest_digest,
+            experiment_ids=[], max_cost_usd="1.00000000",
+        )
+        db.add(evaluation)
+        await db.flush()
+        experiment = HarnessExperiment(
+            organization_id=fixture["organization_id"], project_id=fixture["project_id"],
+            task_id=task.id, evaluation_run_id=evaluation.id, created_by=fixture["user_id"],
+            stable_key="evaluation-drift-child-fixture", mode="parallel", k=1,
+            status="running", phase="queued", attempts=1,
+            base_sha=interview.base_sha, specification_hash=interview.artifact_hash,
+            specification_revision=interview.revision, policy_revision=policy.revision,
+            harness2_revision="d" * 40,
+            result={
+                "route_alias": "coding", "evaluation_manifest_digest": manifest_digest,
+                "route_capability_revision": route_capability_revision(frozen_route),
+            },
+        )
+        db.add(experiment)
+        await db.flush()
+        evaluation.experiment_ids = [str(experiment.id)]
+        deployment = await db.scalar(select(evaluation_routes.ModelDeployment).where(
+            evaluation_routes.ModelDeployment.organization_id == fixture["organization_id"]
+        ))
+        assert deployment is not None
+        deployment.price_revision = "drifted-price-revision"
+        await db.commit()
+        experiment_id = experiment.id
+
+    worker = HarnessExperimentWorker(None)
+    with pytest.raises(
+        worker_module.HarnessAdaptationError,
+        match="route changed since its immutable manifest was frozen",
+    ):
+        await worker._inputs(experiment_id, 1)
+
+    async with SessionLocal() as db:
+        assert await db.scalar(select(Run.id).where(
+            Run.task_id == fixture["task_id"],
+            Run.adapter_name == "harness2-proposer",
+        )) is None
 
 
 @pytest.mark.anyio

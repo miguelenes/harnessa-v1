@@ -256,24 +256,38 @@ async def test_failed_evaluation_resumes_from_child_state_when_parent_row_is_que
             "specification_hash": interview.artifact_hash,
             "specification_revision": interview.revision, "policy_revision": policy.revision,
         }
+        route = await evaluation_routes.route_manifest(
+            db, fixture["organization_id"], "coding"
+        )
+        manifest = {
+            "mode": "parallel", "k": 1, "task_inputs": [manifest_task],
+            "route_alias": "coding", "model_route_policy": route,
+        }
+        manifest_digest = evaluation_routes._digest(manifest)
         child = HarnessExperiment(
             organization_id=fixture["organization_id"], project_id=fixture["project_id"],
             task_id=task.id, created_by=fixture["user_id"], stable_key="resume-child-fixture",
             mode="parallel", k=1, status="failed", phase="failed", attempts=1,
             base_sha=interview.base_sha, specification_hash=interview.artifact_hash,
             specification_revision=interview.revision, policy_revision=policy.revision,
-            harness2_revision="fixture", result={"route_alias": "coding", "resume_count": 0},
+            harness2_revision="fixture",
+            result={
+                "route_alias": "coding", "resume_count": 0,
+                "evaluation_manifest_digest": manifest_digest,
+                "route_capability_revision": evaluation_routes.route_capability_revision(route),
+            },
         )
         db.add(child)
         await db.flush()
         run = EvaluationRun(
             organization_id=fixture["organization_id"], project_id=fixture["project_id"],
             created_by=fixture["user_id"], stable_key="resume-evaluation-fixture",
-            status="queued",
-            manifest={"mode": "parallel", "k": 1, "task_inputs": [manifest_task]},
-            manifest_digest="d" * 64, experiment_ids=[str(child.id)], max_cost_usd="0.01",
+            status="queued", manifest=manifest,
+            manifest_digest=manifest_digest,
+            experiment_ids=[str(child.id)], max_cost_usd="0.01",
         )
         db.add(run)
+        child.evaluation_run_id = run.id
         await db.commit()
         actor = await db.get(evaluation_routes.User, fixture["user_id"])
         assert actor is not None
@@ -285,3 +299,18 @@ async def test_failed_evaluation_resumes_from_child_state_when_parent_row_is_que
         assert resumed.status == "queued"
         assert child.status == "queued"
         assert child.result["resume_count"] == 1
+
+        child.status, child.phase = "failed", "failed"
+        deployment = await db.scalar(select(evaluation_routes.ModelDeployment).where(
+            evaluation_routes.ModelDeployment.organization_id == fixture["organization_id"]
+        ))
+        assert deployment is not None
+        original_price_revision = deployment.price_revision
+        deployment.price_revision = "route-drift-price-revision"
+        await db.flush()
+        with pytest.raises(HTTPException, match="route changed"):
+            await evaluation_routes.resume_evaluation_run(
+                fixture["project_id"], run.id, actor, db
+            )
+        deployment.price_revision = original_price_revision
+        await db.commit()

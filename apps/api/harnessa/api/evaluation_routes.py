@@ -32,7 +32,11 @@ from harnessa.db.session import get_db
 from harnessa.db.specification import SpecificationInterview
 from harnessa.domain.skill_evolution import scopes_overlap, validate_skill_artifact
 from harnessa.services.authorization import require_membership
-from harnessa.services.skill_compatibility import route_capability_revision, route_manifest
+from harnessa.services.skill_compatibility import (
+    route_capability_revision,
+    route_manifest,
+    route_snapshot_matches,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
@@ -530,6 +534,7 @@ async def create_evaluation_run(
             policy_revision=policy_revision, harness2_revision=UPSTREAM_REVISION,
             result={
                 "route_alias": body.route_alias,
+                "route_capability_revision": route_capability_revision(route),
                 "evaluation_manifest_digest": digest,
                 "skill_versions": skills,
             },
@@ -614,6 +619,17 @@ async def resume_evaluation_run(
     summary = await _read_run(db, run)
     if summary.status not in {"failed", "blocked"}:
         raise HTTPException(409, "Only failed evaluation runs can be resumed")
+    manifest = run.manifest
+    route_alias = manifest.get("route_alias") if isinstance(manifest, dict) else None
+    frozen_route = manifest.get("model_route_policy") if isinstance(manifest, dict) else None
+    if not isinstance(route_alias, str) or run.manifest_digest != _digest(manifest):
+        raise HTTPException(409, "The frozen evaluation manifest is invalid; create a new evaluation")
+    try:
+        current_route = await _route_manifest(db, project_id, route_alias)
+    except HTTPException as exc:
+        raise HTTPException(409, "The frozen evaluation route is unavailable; create a new evaluation") from exc
+    if not route_snapshot_matches(frozen_route, current_route, route_alias):
+        raise HTTPException(409, "The evaluation route changed; create a new evaluation manifest")
     policy = await db.scalar(select(HarnessPolicy).where(HarnessPolicy.project_id == project_id))
     children = list(await db.scalars(select(HarnessExperiment).where(
         HarnessExperiment.id.in_([UUID(value) for value in run.experiment_ids])

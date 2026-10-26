@@ -29,7 +29,13 @@ from harnessa.adapters.safe_diagnostics import safe_exception_type_chain
 from harnessa.adapters.specification_workspace import SpecificationWorkspaceError
 from harnessa.config import settings
 from harnessa.contracts import ModelPoolKind
-from harnessa.db.harness import HarnessExperience, HarnessExperiment, HarnessPolicy, HarnessProbeRun
+from harnessa.db.harness import (
+    EvaluationRun,
+    HarnessExperience,
+    HarnessExperiment,
+    HarnessPolicy,
+    HarnessProbeRun,
+)
 from harnessa.db.model_gateway import ModelBudgetPolicy, ModelRequestLedger
 from harnessa.db.models import Project, Repository, Task
 from harnessa.db.orchestration import Run, RunArtifact, RunCheckpoint
@@ -52,7 +58,11 @@ from harnessa.services.harness_experience import (
     canonical_experience_evidence_refs,
     experience_candidate_digest,
 )
-from harnessa.services.skill_compatibility import route_capability_revision, route_manifest
+from harnessa.services.skill_compatibility import (
+    route_capability_revision,
+    route_manifest,
+    route_snapshot_matches,
+)
 from harnessa.services.specifications import specification_workspace_manager
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -715,11 +725,39 @@ class HarnessExperimentWorker:
             if not route:
                 raise HarnessAdaptationError("Frozen probe route is missing")
             try:
-                capability_revision = route_capability_revision(
-                    await route_manifest(db, project.organization_id, route)
-                )
+                current_route = await route_manifest(db, project.organization_id, route)
             except ValueError as exc:
                 raise HarnessAdaptationError("Frozen probe route capabilities are unavailable") from exc
+            capability_revision = route_capability_revision(current_route)
+            if exp.evaluation_run_id is not None:
+                evaluation = await db.get(EvaluationRun, exp.evaluation_run_id)
+                result = exp.result if isinstance(exp.result, dict) else {}
+                frozen_manifest = evaluation.manifest if evaluation is not None else {}
+                frozen_route = (
+                    frozen_manifest.get("model_route_policy")
+                    if isinstance(frozen_manifest, dict) else None
+                )
+                frozen_alias = (
+                    frozen_manifest.get("route_alias")
+                    if isinstance(frozen_manifest, dict) else None
+                )
+                if (
+                    evaluation is None
+                    or not isinstance(frozen_route, dict)
+                    or result.get("evaluation_manifest_digest") != evaluation.manifest_digest
+                    or not isinstance(frozen_alias, str)
+                    or route != frozen_alias
+                    or not route_snapshot_matches(frozen_route, current_route, frozen_alias)
+                ):
+                    raise HarnessAdaptationError(
+                        "Grouped evaluation route changed since its immutable manifest was frozen"
+                    )
+                if result.get("route_capability_revision") != route_capability_revision(
+                    frozen_route
+                ):
+                    raise HarnessAdaptationError(
+                        "Grouped evaluation route capability revision is invalid"
+                    )
             proposer_run_id = uuid5(_RUN_NAMESPACE, f"{exp.id}:{attempt}:proposer")
             proposer_run_attempt = int(await db.scalar(
                 select(func.max(Run.attempt)).where(Run.task_id == task.id)
