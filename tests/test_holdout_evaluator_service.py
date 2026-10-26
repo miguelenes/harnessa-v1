@@ -205,7 +205,12 @@ async def test_evaluator_rejects_bad_token_and_tampered_manifest(tmp_path: Path)
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "asset_state",
-    ["missing_archive", "missing_verifier", "archive_checksum_mismatch"],
+    [
+        "missing_archive",
+        "missing_verifier",
+        "archive_checksum_mismatch",
+        "invalid_verifier_syntax",
+    ],
 )
 async def test_readiness_requires_valid_case_assets(tmp_path: Path, asset_state: str) -> None:
     task_id, project_id = str(uuid4()), str(uuid4())
@@ -221,6 +226,8 @@ async def test_readiness_requires_valid_case_assets(tmp_path: Path, asset_state:
         verifier.unlink()
     elif asset_state == "archive_checksum_mismatch":
         archive.write_bytes(b"changed archive")
+    elif asset_state == "invalid_verifier_syntax":
+        verifier.write_text("def broken(:\n", encoding="utf-8")
 
     suite_path = base_dir / "suite.json"
     suite_path.write_text(json.dumps({

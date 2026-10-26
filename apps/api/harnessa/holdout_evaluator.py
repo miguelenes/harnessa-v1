@@ -7,6 +7,7 @@ read-only; none are added to an agent workspace or returned in the receipt.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import hmac
@@ -189,6 +190,10 @@ def _validate_case_assets(
         if not hmac.compare_digest(archive_digest, case.source_archive_sha256):
             raise ValueError("configured evaluator source archive checksum is invalid")
         verifier_bytes = verifier.read_bytes()
+        try:
+            ast.parse(verifier_bytes.decode("utf-8"), filename=verifier.name)
+        except (SyntaxError, UnicodeDecodeError) as exc:
+            raise ValueError("configured evaluator verifier is invalid") from exc
         verifier_digest = hashlib.sha256(verifier_bytes).hexdigest()
         validated[task_id] = HoldoutCase(
             task_id=case.task_id,
