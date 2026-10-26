@@ -349,3 +349,37 @@ After the user's fresh Confirm access challenge, GitHub's key-pairs page showed 
 ### Post-authentication and exact-head refresh (2026-10-26 16:27 UTC)
 
 After the user completed the latest GitHub Confirm access challenge, I reloaded the App key-pairs page. It showed ten rows, no pending Confirm access prompt, and all ten Delete buttons disabled with “You cannot delete the only private key. Generate a new key first.” No key was deleted. PR #70 remains open and draft at `8a1a1f8d680a0e0dced703a30fa3c588117e266c`. The latest Local CI, CodeQL Python/JavaScript, and Documentation jobs failed before starting; GitHub's check annotation says the account is locked due to a billing issue (for example Local CI check `121698239122`). The authenticated Harnessa browser session had expired and redirected to `/login`; unauthenticated API readiness still returned HTTP 200. No provider request, evaluator request, or task dispatch was made during this refresh. M13 remains active.
+
+### M13 execution-gate refresh (2026-10-26 16:44 UTC)
+
+After the user's latest GitHub Confirm access completion, I reloaded the GitHub
+App key-pairs page. It shows ten key rows, no active Confirm access prompt, and
+all ten Delete controls disabled with “You cannot delete the only private key.
+Generate a new key first.” No key was deleted; the previously exposed keys
+remain unrevoked.
+
+The authenticated app session had expired, so I checked the local acceptance
+database directly. The single experiment created by the prior bounded M13
+request is queued as `01391dd2-9834-4c91-9336-5c9f06b21c31` for task
+`26d01f9b-29d6-472a-85c9-36396da7edd2`, sequential mode, `k=1`, with zero
+attempts. No other experiments are queued or running. A one-shot worker pass
+did not claim it: the acceptance API container has no Podman executable, and
+sandbox validation failed closed with `SandboxUnavailable: Podman executable
+is unavailable`. The stopped worker image also contains no Podman executable.
+The API container has no external holdout evaluator URL configured. Therefore
+no agent sandbox, model request, or evaluator request ran, and this experiment
+has no result.
+
+The live lifetime spend ledger remains `$20.00000000` maximum, `$0.00285205`
+billed, `$0.82087316` estimated, and `$0` reserved. Probe counters have no
+reserved dollars or tokens. These figures are Harnessa's ledger, not a
+provider-account-wide cost total. The €20 aggregate authorization remains the
+spend ceiling.
+
+PR #70 remains open and draft at `b131639568b0fea3273412b187d135c2b78a9bfd`.
+The latest observed hosted checks still cannot start because GitHub reports an
+account billing lock. M13 remains incomplete: sandbox execution, an
+independently administered hidden holdout, task-derived learning and rollback,
+provider-generated 429 handling, live primary/probe contention, exposed-key
+revocation, and successful required hosted checks remain unresolved. No
+protection bypass or self-approval was used.
