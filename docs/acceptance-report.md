@@ -417,3 +417,24 @@ provider/evaluator request or spend occurred. These results do not complete M13;
 required hosted checks, safe agent execution, independent evaluation, task-derived
 promotion/rollback, provider-generated rate limiting, and live primary/probe
 contention remain open.
+
+### Host runner and independent evaluator discovery (2026-10-26)
+
+The API container still lacks Podman. On the host, rootless Podman reports
+`rootless=true` with `crun`, the exact digest-pinned OpenCode 2.0.32 image is
+present, and the existing `PodmanSandboxBackend.validate()` passes without
+starting a task or container. The host worker has not been configured against
+the acceptance database; the queued experiment remains untouched.
+
+Official SWE-bench materials describe private Multimodal test evaluation via
+`sb-cli`; key generation requires email verification, and quota lookup precedes
+submission. Its README has conflicting split wording, while the dedicated
+submission guide and FAQ identify the API route. This remains an unprovisioned
+candidate, not an Harnessa integration or result. `SWEBENCH_API_KEY` is absent
+from the login environment; there was no key request, quota query, submission,
+provider request, or spend. Account access, quota, authorized instances, and a
+bounded Harnessa adapter/receipt mapping remain open. See the official
+[sb-cli README](https://github.com/swe-bench/sb-cli/blob/main/README.md),
+[Multimodal submission guide](https://www.swebench.com/sb-cli/submit-to-leaderboard/),
+[quota guide](https://www.swebench.com/sb-cli/user-guide/get-quotas/), and
+[SWE-bench FAQ](https://www.swebench.com/SWE-bench/faq/).
