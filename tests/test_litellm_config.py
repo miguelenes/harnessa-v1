@@ -71,6 +71,17 @@ def test_compose_binds_operator_ports_to_loopback():
     assert set(compose["services"]["litellm"]["networks"]) == {"app_internal", "provider_egress"}
 
 
+def test_holdout_evaluator_healthcheck_uses_one_python_code_argument():
+    compose_path = Path(__file__).parents[1] / "infra" / "compose.yaml"
+    compose = yaml.safe_load(compose_path.read_text())
+    healthcheck = compose["services"]["holdout-evaluator"]["healthcheck"]["test"]
+
+    assert healthcheck[:3] == ["CMD", "python", "-c"]
+    assert "urlopen(" in healthcheck[3]
+    assert "health/ready" in healthcheck[3]
+    assert " " not in healthcheck[3]
+
+
 def test_compose_shares_repository_sources_and_specification_workspaces():
     compose_path = Path(__file__).parents[1] / "infra" / "compose.yaml"
     compose = yaml.safe_load(compose_path.read_text())
