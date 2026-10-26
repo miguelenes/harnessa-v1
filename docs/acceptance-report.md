@@ -261,3 +261,24 @@ returned `$0.16753448` month-to-date at 2026-10-26 01:59 UTC. This is key-wide
 usage and cannot be attributed solely to Harnessa, so it is not added to the
 Harnessa ledger. No model-generation request or paid evaluator call was sent
 during this refresh.
+
+### Post-rotation DeepSeek route check (2026-10-26 02:42 UTC)
+
+From the original authenticated Harnessa browser session, the administrator
+authorized one bounded route check for the configured `deepseek-flash` alias.
+The request succeeded through deployment `deepseek-flash-primary`. The
+Harnessa request ID was `0880b68e-2d9a-4869-824f-2029a99cfe2b`, with LiteLLM
+call ID `c063c8af-e7a5-491a-842c-8bcb2b5d4cc8`. Harnessa records
+`attempt_succeeded` with HTTP 200; the matched LiteLLM spend log reports
+success. Both report known usage (34 input, 1 output token) and `$0.00001140`
+billed. This was a one-token route check,
+not an agent task, benchmark result, or holdout evaluation. An earlier attempt
+from a duplicate browser tab received HTTP 403 because that tab lacked the
+session CSRF token; it did not dispatch a provider request.
+
+After settlement, the Harnessa lifetime budget row reported `$20.00000000`
+maximum, `$0.00285205` billed, `$0.82010802` estimated, and `$0.00076514`
+reserved. Unknown-usage estimates remain conservatively included. The €20
+aggregate ceiling remains active, and the current route check does not verify
+provider-generated 429 handling, live primary/probe contention, or the
+independent holdout evaluator.
