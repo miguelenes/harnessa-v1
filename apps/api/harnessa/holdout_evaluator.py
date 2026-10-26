@@ -189,6 +189,7 @@ def _validate_case_assets(
         archive_digest = hashlib.sha256(archive_bytes).hexdigest()
         if not hmac.compare_digest(archive_digest, case.source_archive_sha256):
             raise ValueError("configured evaluator source archive checksum is invalid")
+        _preflight_archive(archive_bytes)
         verifier_bytes = verifier.read_bytes()
         try:
             ast.parse(verifier_bytes.decode("utf-8"), filename=verifier.name)
@@ -209,6 +210,55 @@ def _validate_case_assets(
         fingerprints.append(f"{task_id}:{archive_digest}:{verifier_digest}")
     asset_digest = hashlib.sha256("\n".join(fingerprints).encode("ascii")).hexdigest()
     return validated, asset_digest
+
+
+def _preflight_archive(archive_bytes: bytes) -> None:
+    """Validate tar structure and member data without extracting or executing it."""
+
+    if len(archive_bytes) > _MAX_ARCHIVE_BYTES:
+        raise ValueError("source archive exceeds its size limit")
+    total_bytes = 0
+    entries = 0
+    file_paths: set[PurePosixPath] = set()
+    all_paths: set[PurePosixPath] = set()
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:*") as bundle:
+            for member in bundle:
+                entries += 1
+                path = PurePosixPath(member.name)
+                if (
+                    entries > _MAX_ARCHIVE_FILES
+                    or path.is_absolute()
+                    or not path.parts
+                    or ".." in path.parts
+                    or member.issym()
+                    or member.islnk()
+                    or not (member.isdir() or member.isfile())
+                    or path in all_paths
+                ):
+                    raise ValueError("source archive contains an unsafe path")
+                all_paths.add(path)
+                if member.isdir():
+                    continue
+                file_paths.add(path)
+                total_bytes += member.size
+                if total_bytes > _MAX_EXTRACTED_BYTES:
+                    raise ValueError("source archive expands beyond its size limit")
+                source = bundle.extractfile(member)
+                if source is None:
+                    raise ValueError("source archive entry cannot be read")
+                actual_size = 0
+                with source:
+                    while chunk := source.read(1024 * 1024):
+                        actual_size += len(chunk)
+                        if actual_size > member.size:
+                            raise ValueError("source archive entry exceeds its declared size")
+                if actual_size != member.size:
+                    raise ValueError("source archive entry is truncated")
+    except (tarfile.TarError, OSError, EOFError) as exc:
+        raise ValueError("source archive is not a valid tar archive") from exc
+    if any(parent in file_paths for path in file_paths for parent in path.parents):
+        raise ValueError("source archive contains a file/directory path conflict")
 
 
 def _verify_cas_artifact(root: Path, digest: str, size_bytes: int) -> bytes:

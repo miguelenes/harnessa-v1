@@ -210,6 +210,8 @@ async def test_evaluator_rejects_bad_token_and_tampered_manifest(tmp_path: Path)
         "missing_verifier",
         "archive_checksum_mismatch",
         "invalid_verifier_syntax",
+        "malformed_archive",
+        "unsafe_archive_path",
     ],
 )
 async def test_readiness_requires_valid_case_assets(tmp_path: Path, asset_state: str) -> None:
@@ -228,6 +230,16 @@ async def test_readiness_requires_valid_case_assets(tmp_path: Path, asset_state:
         archive.write_bytes(b"changed archive")
     elif asset_state == "invalid_verifier_syntax":
         verifier.write_text("def broken(:\n", encoding="utf-8")
+    elif asset_state == "malformed_archive":
+        archive.write_bytes(b"not a tar archive")
+        archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    elif asset_state == "unsafe_archive_path":
+        content = b"unsafe path fixture\n"
+        with tarfile.open(archive, "w") as bundle:
+            member = tarfile.TarInfo("../escape.txt")
+            member.size = len(content)
+            bundle.addfile(member, io.BytesIO(content))
+        archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 
     suite_path = base_dir / "suite.json"
     suite_path.write_text(json.dumps({
