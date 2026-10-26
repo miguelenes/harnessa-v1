@@ -273,6 +273,10 @@ class HarnessACPTaskAdapter:
     def base_harness(self) -> Path:
         return self._base_harness
 
+    def validate_tree(self, tree: dict[str, str]) -> None:
+        """Enforce Harnessa's editable-surface and holdout boundaries for Harness² trees."""
+        validate_product_tree(tree)
+
     def execute(
         self, task_id: str, harness_dir: Path | None, run_id: str, *, timeout: int | None = None
     ) -> Path:

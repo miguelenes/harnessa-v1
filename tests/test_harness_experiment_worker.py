@@ -28,6 +28,14 @@ from harnessa.services.harness_experiments import (
 )
 
 
+def test_harness_adapter_validates_product_tree_contract() -> None:
+    adapter = HarnessACPTaskAdapter.__new__(HarnessACPTaskAdapter)
+
+    assert adapter.validate_tree({"systemprompt.md": "safe instructions\n"}) is None
+    with pytest.raises(ValueError, match="editable upstream surface"):
+        adapter.validate_tree({"harnessa_policy.py": "cannot override host policy\n"})
+
+
 def test_experience_candidate_is_review_only_and_content_addressed(tmp_path: Path) -> None:
     base_tree = {"systemprompt.md": "base prompt\n"}
     candidate_tree = {"systemprompt.md": "bounded candidate prompt\n"}
