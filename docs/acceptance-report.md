@@ -245,17 +245,9 @@ The authorized €20 cap remains in force.
 ### Credential and usage refresh (2026-10-26)
 
 A stale local PEM at `/tmp/harnessa-m13-private-key.pem` returned HTTP 401
-when used to sign a GitHub App JWT, and that file was removed. The exact key
-previously configured in the API container is a different, unidentified key; it
-returned HTTP 200 before service recreation. A newly generated App key also
-returned HTTP 200 and is configured in the local API and web services. GitHub
-confirmed the App settings update after the webhook-secret rotation. The API
-readiness endpoint returned HTTP 200. A newly signed synthetic `ping` webhook
-was accepted with HTTP 202, and replaying the same delivery returned HTTP 202
-with `X-Harnessa-Webhook-Duplicate: true`. Six key rows were visible after
-creating the replacement; their Delete controls were disabled, so no GitHub key
-row was deleted. Revocation of the unidentified previously configured key is
-unverified. The replacement key and webhook signing path are verified locally.
+when used to sign a GitHub App JWT, and that file was removed. The pre-refresh
+API and retained worker used the same `GITHUB_APP_PRIVATE_KEY` Compose setting.
+The retained worker's key fingerprint was `SHA256:XDPOPfYHeX0uLXgDAhcVwOfE38cAfd5Z4RNLsvwmUWI=`; that fingerprint is absent from the current GitHub key list, and a JWT signed with it now returns HTTP 401. This confirms the previously configured key is no longer active. The replacement key fingerprint `SHA256:RbDdzydq51YJkm/yMIee30rXvbhT+1GhpGQ2lbDTseo=` matches the current GitHub key list, authenticates with HTTP 200, and is configured in the local API and web services. GitHub confirmed the App settings update after the webhook-secret rotation. The API readiness endpoint returned HTTP 200. A newly signed synthetic `ping` webhook was accepted with HTTP 202, and replaying the same delivery returned HTTP 202 with `X-Harnessa-Webhook-Duplicate: true`. Six key rows were visible; their Delete controls were disabled with the message that the only private key cannot be deleted. I did not delete any other key row. The replacement key and webhook signing path are verified locally.
 
 The two zero-spend LiteLLM observations were imported into Harnessa with
 `gateway_billed_usd=0` while provider cost and token counts remained unknown;
