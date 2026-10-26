@@ -278,7 +278,7 @@ services:
     pids_limit: 256
   qdrant:
     profiles: [retrieval]
-    image: docker.io/qdrant/qdrant:v1.19.2@sha256:390ca16351185f9913c23d0c95ded0cdf2ce17e525dd7fbe58d3339c9c80e633
+    image: docker.io/qdrant/qdrant:v1.20.0@sha256:9bfc89f9914fc14876a88c05270685921a55b8877b254a98bcc1cc2f0a424cd2
     restart: unless-stopped
     mem_limit: 1g
     cpus: 1.0
