@@ -42,5 +42,11 @@
   },
   "dependencies": {
     "@fission-ai/openspec": "1.14.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "dompurify": "3.4.17",
+      "undici@7": "7.30.1"
+    }
   }
 }
