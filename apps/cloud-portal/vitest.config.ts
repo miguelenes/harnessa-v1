@@ -32,7 +32,12 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["tests/web/svelte.test.ts"],
-    deps: { optimizer: { client: { enabled: false }, ssr: { enabled: false } } },
+    deps: {
+      optimizer: {
+        client: { enabled: false, exclude: ["svelte"] },
+        ssr: { enabled: false, exclude: ["svelte"] },
+      },
+    },
     coverage: {
       provider: "v8",
       include: [
