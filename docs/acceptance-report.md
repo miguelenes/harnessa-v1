@@ -386,3 +386,34 @@ independently administered hidden holdout, task-derived learning and rollback,
 provider-generated 429 handling, live primary/probe contention, exposed-key
 revocation, and successful required hosted checks remain unresolved. No
 protection bypass or self-approval was used.
+
+### Disposable GitHub App replacement and rebind follow-up (2026-10-26)
+
+The prior disposable M13 App was deleted at the user's direction; its settings
+URL now returns not found, its Harnessa installation is inactive, and its
+`installation.deleted` event was processed. Replacement App `Harnessa M13
+Acceptance 2026-10-26` (App ID `5483288`, hook ID `703498119`) is installed
+selected-only on `miguelenes/harnessa-m13-acceptance-20261024` (installation
+`175538738`). Harnessa's authenticated status reports the replacement ready and
+the existing repository link re-bound to it, preserving the link and GitHub
+repository IDs. The locally active PEM fingerprint matches GitHub; PEM and
+webhook secret files are mode 0600. Local copies belonging to the deleted App
+were removed. GitHub currently lists three key pairs on the replacement App
+but disables every Delete control with “You cannot delete the only private key.
+Generate a new key first”; only the fingerprint-matched key is configured
+locally. One unused key copy was found mode 0644 and removed, but its GitHub row
+remains; a second extra row has no local copy known. A user-authorized attempt to
+delete the replacement App was rejected with “You can’t perform that action at
+this time.” Invalidating those extra replacement-App keys remains open.
+
+A local signed `ping` was accepted and replayed as a duplicate; this is not a
+GitHub-originated delivery. A replacement-installation rebind regression passed
+(1 PostgreSQL integration test), with Ruff, strict mypy, and `git diff --check`
+passing. PR #70 remains open and draft at `4759bcb2d3dd07d8abe638edf2eb091f133a826f`.
+Local CI, CodeQL, and Documentation again failed before job steps due GitHub's
+account billing lock. The queued M13 experiment still has zero attempts because
+the API container lacks Podman; no independent holdout is configured. No
+provider/evaluator request or spend occurred. These results do not complete M13;
+required hosted checks, safe agent execution, independent evaluation, task-derived
+promotion/rollback, provider-generated rate limiting, and live primary/probe
+contention remain open.

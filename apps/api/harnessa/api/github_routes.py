@@ -455,10 +455,7 @@ async def opt_in_github_repository(
         .where(GitHubRepositoryLink.repository_id == repository.id)
         .with_for_update()
     )
-    if row is not None and (
-        row.installation_id != installation.id
-        or row.github_repository_id != body.github_repository_id
-    ):
+    if row is not None and row.github_repository_id != body.github_repository_id:
         raise HTTPException(409, "Repository is already linked to a different GitHub target")
     if row is None:
         row = GitHubRepositoryLink(
@@ -479,6 +476,10 @@ async def opt_in_github_repository(
         )
         db.add(row)
     else:
+        # An explicit operator opt-in may rebind the same verified remote repository to a
+        # replacement installation (for example, after rotating a GitHub App). The remote
+        # repository ID and full name were checked above using the new installation token.
+        row.installation_id = installation.id
         row.owner = target[0]
         row.name = target[1]
         row.full_name = remote["full_name"]
