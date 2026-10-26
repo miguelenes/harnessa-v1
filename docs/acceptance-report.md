@@ -438,3 +438,22 @@ bounded Harnessa adapter/receipt mapping remain open. See the official
 [Multimodal submission guide](https://www.swebench.com/sb-cli/submit-to-leaderboard/),
 [quota guide](https://www.swebench.com/sb-cli/user-guide/get-quotas/), and
 [SWE-bench FAQ](https://www.swebench.com/SWE-bench/faq/).
+
+### GitHub App recreation and live webhook recovery (2026-10-26)
+
+The user authorized deleting and recreating the disposable App. GitHub now lists
+only `Harnessa M13 20261026 R2` (App ID `5485689`) with one key pair, installed
+selected-only on `miguelenes/harnessa-m13-acceptance-20261024` (installation
+`175591814`). The new private key authenticated against GitHub's App API. The
+new webhook secret and key are in protected mode-0600 local files, and the API
+container was recreated to load them; readiness returned HTTP 200.
+
+Harnessa registered the new App and installation, verified required permissions,
+rebound the existing repository link while preserving its link and repository
+IDs, and mapped the `miguelenes` actor on the new installation. The real GitHub
+`installation.created` delivery was redelivered after setup, returned HTTP 202,
+and was processed by the webhook-only outbox pass. The two obsolete Harnessa App
+records and installations were disabled/inactivated after checking GitHub's
+current App inventory. No agent worker or model/evaluator request ran. This
+does not close the independent holdout or M13 execution gates. No provider or
+evaluator spend occurred during this recovery.
