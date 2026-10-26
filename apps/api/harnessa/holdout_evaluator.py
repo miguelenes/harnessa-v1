@@ -257,7 +257,7 @@ def _preflight_archive(archive_bytes: bytes) -> None:
                     raise ValueError("source archive entry is truncated")
     except (tarfile.TarError, OSError, EOFError) as exc:
         raise ValueError("source archive is not a valid tar archive") from exc
-    if any(parent in file_paths for path in file_paths for parent in path.parents):
+    if any(parent in file_paths for path in all_paths for parent in path.parents):
         raise ValueError("source archive contains a file/directory path conflict")
 
 

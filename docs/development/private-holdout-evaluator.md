@@ -54,7 +54,8 @@ The evaluator verifies the canonical manifest digest, exact task/project/base
 identity, archive checksum, content-addressed patch digest, and archive paths.
 It rejects symlinks and path traversal. At startup it verifies each configured
 source archive checksum, requires bounded source and verifier files, preflights
-tar structure, member paths/types, decompressed size, and file data without
+tar structure, member paths/types, file/directory ancestor conflicts,
+decompressed size, and file data without
 executing code, and loads the exact bytes into an immutable in-memory snapshot.
 Readiness is unavailable
 when startup validation fails. Host-side changes after startup do not alter the

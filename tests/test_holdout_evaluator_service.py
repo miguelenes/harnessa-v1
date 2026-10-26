@@ -212,6 +212,8 @@ async def test_evaluator_rejects_bad_token_and_tampered_manifest(tmp_path: Path)
         "invalid_verifier_syntax",
         "malformed_archive",
         "unsafe_archive_path",
+        "file_directory_conflict",
+        "directory_file_conflict",
     ],
 )
 async def test_readiness_requires_valid_case_assets(tmp_path: Path, asset_state: str) -> None:
@@ -239,6 +241,22 @@ async def test_readiness_requires_valid_case_assets(tmp_path: Path, asset_state:
             member = tarfile.TarInfo("../escape.txt")
             member.size = len(content)
             bundle.addfile(member, io.BytesIO(content))
+        archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    elif asset_state in {"file_directory_conflict", "directory_file_conflict"}:
+        members = [("file", "foo"), ("directory", "foo/bar")]
+        if asset_state == "directory_file_conflict":
+            members.reverse()
+        with tarfile.open(archive, "w") as bundle:
+            for kind, name in members:
+                member = tarfile.TarInfo(name)
+                if kind == "directory":
+                    member.type = tarfile.DIRTYPE
+                    member.size = 0
+                    bundle.addfile(member)
+                else:
+                    content = b"file ancestor conflict\n"
+                    member.size = len(content)
+                    bundle.addfile(member, io.BytesIO(content))
         archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 
     suite_path = base_dir / "suite.json"
