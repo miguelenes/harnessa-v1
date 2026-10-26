@@ -52,6 +52,7 @@ from harnessa.services.harness_experience import (
     canonical_experience_evidence_refs,
     experience_candidate_digest,
 )
+from harnessa.services.skill_compatibility import route_capability_revision, route_manifest
 from harnessa.services.specifications import specification_workspace_manager
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -713,6 +714,12 @@ class HarnessExperimentWorker:
             route = str(exp.result.get("route_alias", ""))
             if not route:
                 raise HarnessAdaptationError("Frozen probe route is missing")
+            try:
+                capability_revision = route_capability_revision(
+                    await route_manifest(db, project.organization_id, route)
+                )
+            except ValueError as exc:
+                raise HarnessAdaptationError("Frozen probe route capabilities are unavailable") from exc
             proposer_run_id = uuid5(_RUN_NAMESPACE, f"{exp.id}:{attempt}:proposer")
             proposer_run_attempt = int(await db.scalar(
                 select(func.max(Run.attempt)).where(Run.task_id == task.id)
@@ -822,7 +829,6 @@ class HarnessExperimentWorker:
             ).with_for_update()))
             experiences: list[HarnessExperience] = []
             for experience in scoped_experiences:
-                recorded = experience.compatibility_snapshot
                 compatibility_policy = policy
                 if (
                     experience.scope_type == "organization"
@@ -837,8 +843,8 @@ class HarnessExperimentWorker:
                     policy_revision=(
                         compatibility_policy.revision if compatibility_policy is not None else None
                     ),
-                    model_capability_revision=recorded.get("model_capability_revision"),
-                    route_alias=(route if recorded.get("route_alias") is not None else None),
+                    model_capability_revision=capability_revision,
+                    route_alias=route,
                     executor_image=settings.acp_agent_image,
                     repository=(
                         repo.target_id
@@ -1184,6 +1190,9 @@ class HarnessExperimentWorker:
                     for record in composed_records
                 ]
                 if skill_sets:
+                    capability_revision = route_capability_revision(
+                        await route_manifest(db, frozen.organization_id, frozen.route_alias)
+                    )
                     canonical_sets = [
                         {artifact.path: artifact.digest for artifact in artifacts}
                         for artifacts in skill_sets
@@ -1232,7 +1241,7 @@ class HarnessExperimentWorker:
                                     harness2_revision=UPSTREAM_REVISION,
                                     tool_revision=frozen.tool_revision,
                                     policy_revision=frozen.policy_revision,
-                                    model_capability_revision=None,
+                                    model_capability_revision=capability_revision,
                                     route_alias=frozen.route_alias,
                                     executor_image=frozen.image_revision,
                                     repository=adapter.repository_scope,

@@ -1158,6 +1158,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/harness-experiences/{experience_id}/resolve-conflict": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve Skill Conflict */
+        post: operations["resolve_skill_conflict_projects__project_id__harness_experiences__experience_id__resolve_conflict_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{project_id}/harness-experiences/{experience_id}/artifact": {
         parameters: {
             query?: never;
@@ -1518,6 +1535,13 @@ export interface components {
              * @default Harnessa
              */
             organization_name: string;
+        };
+        /** ConflictResolutionRequest */
+        ConflictResolutionRequest: {
+            /** Stable Key */
+            stable_key: string;
+            /** Rationale */
+            rationale: string;
         };
         /**
          * CoreEvidenceEnvelope
@@ -2578,6 +2602,11 @@ export interface components {
              */
             tools: boolean;
             /**
+             * Json Mode
+             * @default false
+             */
+            json_mode: boolean;
+            /**
              * Usage Reporting
              * @default false
              */
@@ -3430,6 +3459,11 @@ export interface components {
              */
             tools: boolean;
             /**
+             * Json Mode
+             * @default false
+             */
+            json_mode: boolean;
+            /**
              * Minimum Context
              * @default 1
              */
@@ -3554,6 +3588,8 @@ export interface components {
             scope_type: "task" | "repository" | "project" | "organization";
             /** Scope Id */
             scope_id: string;
+            /** Route Alias */
+            route_alias: string;
             /** Skill Path */
             skill_path: string;
             /** Content */
@@ -6922,6 +6958,44 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_skill_conflict_projects__project_id__harness_experiences__experience_id__resolve_conflict_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                experience_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConflictResolutionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

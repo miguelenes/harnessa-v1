@@ -32,6 +32,7 @@ from harnessa.db.session import get_db
 from harnessa.db.specification import SpecificationInterview
 from harnessa.domain.skill_evolution import scopes_overlap, validate_skill_artifact
 from harnessa.services.authorization import require_membership
+from harnessa.services.skill_compatibility import route_capability_revision, route_manifest
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
@@ -149,6 +150,7 @@ async def _frozen_skill_version(
     project_id: UUID,
     experience_id: UUID | None,
     task_inputs: list[dict[str, Any]],
+    route: dict[str, Any],
 ) -> list[dict[str, Any]]:
     if experience_id is None:
         return []
@@ -177,6 +179,15 @@ async def _frozen_skill_version(
         or not experience.artifact_size_bytes
     ):
         raise HTTPException(409, "Evaluation requires one unexpired, non-conflicting skill candidate")
+    compatibility = experience.compatibility_snapshot
+    if (
+        compatibility.get("route_alias") != route.get("alias")
+        or compatibility.get("model_capability_revision") != route_capability_revision(route)
+    ):
+        raise HTTPException(
+            409,
+            "Skill compatibility must match the exact evaluated route and deployment capabilities",
+        )
     competing_candidates = list(await db.scalars(select(HarnessExperience).where(
         HarnessExperience.organization_id == project.organization_id,
         HarnessExperience.conflict_key == experience.conflict_key,
@@ -247,36 +258,10 @@ async def _route_manifest(
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(404, "Project not found")
-    alias = await db.scalar(select(ModelAlias).where(
-        ModelAlias.organization_id == project.organization_id,
-        ModelAlias.name == route_alias,
-        ModelAlias.enabled.is_(True),
-    ))
-    if alias is None:
-        raise HTTPException(409, "The selected model alias is not enabled")
-    deployments = list(await db.execute(
-        select(ModelDeployment, AliasDeployment.priority)
-        .join(AliasDeployment, AliasDeployment.deployment_id == ModelDeployment.id)
-        .where(AliasDeployment.alias_id == alias.id, ModelDeployment.enabled.is_(True))
-        .order_by(AliasDeployment.priority)
-    ))
-    return {
-        "alias": route_alias,
-        "deployments": [
-            {
-                "id": str(deployment.id),
-                "proxy_model": deployment.proxy_model,
-                "actual_model": deployment.actual_model,
-                "priority": priority,
-                "price_revision": deployment.price_revision,
-                "capabilities": deployment.capabilities,
-                "context_window": deployment.context_window,
-                "input_cost_per_million": str(deployment.input_cost_per_million),
-                "output_cost_per_million": str(deployment.output_cost_per_million),
-            }
-            for deployment, priority in deployments
-        ],
-    }
+    try:
+        return await route_manifest(db, project.organization_id, route_alias)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 def _evaluation_manifest(
@@ -447,8 +432,9 @@ async def evaluation_dry_run(
     estimate, budget = await _estimate_cost(
         db, project_id, body.route_alias, task_ids=body.task_ids, mode=body.mode, k=body.k
     )
+    route = await _route_manifest(db, project_id, body.route_alias)
     skills = await _frozen_skill_version(
-        db, project_id, body.skill_experience_id, tasks
+        db, project_id, body.skill_experience_id, tasks, route
     )
     manifest = _evaluation_manifest(
         suite=body.suite,
@@ -456,7 +442,7 @@ async def evaluation_dry_run(
         mode=body.mode,
         k=body.k,
         route_alias=body.route_alias,
-        route=await _route_manifest(db, project_id, body.route_alias),
+        route=route,
         skill_versions=skills,
         policy_revision=policy_revision,
         estimate=estimate,
@@ -485,8 +471,9 @@ async def create_evaluation_run(
     estimate, budget = await _estimate_cost(
         db, project_id, body.route_alias, task_ids=body.task_ids, mode=body.mode, k=body.k
     )
+    route = await _route_manifest(db, project_id, body.route_alias)
     skills = await _frozen_skill_version(
-        db, project_id, body.skill_experience_id, tasks
+        db, project_id, body.skill_experience_id, tasks, route
     )
     manifest = _evaluation_manifest(
         suite=body.suite,
@@ -494,7 +481,7 @@ async def create_evaluation_run(
         mode=body.mode,
         k=body.k,
         route_alias=body.route_alias,
-        route=await _route_manifest(db, project_id, body.route_alias),
+        route=route,
         skill_versions=skills,
         policy_revision=policy_revision,
         estimate=estimate,

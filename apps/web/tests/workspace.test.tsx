@@ -431,6 +431,7 @@ describe("workspace routes and task board", () => {
       experiences: [
         { id: "experience-1", cue: "Use narrow fixtures", lesson: "Keep fixture setup local.", status: "candidate", version: 1, repository_scope: "repo/demo", domain_scope: "testing", conflict_key: "fixture-style", expiry_at: "2026-12-01T00:00:00Z", evidence_refs: [{ digest: "f".repeat(64) }], candidate_digest: "1".repeat(64) },
         { id: "experience-2", cue: "Retain previous rule", lesson: "Restore the reviewed version.", status: "superseded", version: 2, repository_scope: "repo/demo", domain_scope: "testing", conflict_key: "fixture-style", expiry_at: "2026-12-01T00:00:00Z", evidence_refs: [], candidate_digest: "2".repeat(64) },
+        { id: "experience-conflict", cue: "Conflicting guidance", lesson: "Needs an explicit group decision.", status: "candidate", conflict_state: "conflict", version: 1, repository_scope: "repo/demo", domain_scope: "testing", conflict_key: "conflicting-guidance", expiry_at: "2026-12-01T00:00:00Z", evidence_refs: [], candidate_digest: "3".repeat(64) },
       ],
     };
     vi.spyOn(window, "prompt").mockReturnValue("Reviewed exact candidate evidence.");
@@ -452,7 +453,7 @@ describe("workspace routes and task board", () => {
     expect(screen.getByText("Probe comparisons")).toBeTruthy();
     expect(screen.getByText("Use narrow fixtures")).toBeTruthy();
     expect(screen.getByText(/Evidence: .*f{64}/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Review and promote" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Review and promote" })[0]);
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/harness-experiences/experience-1/promote"),
       expect.objectContaining({ method: "POST", body: expect.stringContaining("Reviewed exact candidate evidence.") }),
@@ -462,6 +463,12 @@ describe("workspace routes and task board", () => {
       expect.stringContaining("/harness-experiences/experience-2/rollback"),
       expect.objectContaining({ method: "POST" }),
     ));
+    fireEvent.click(screen.getByRole("button", { name: "Reject conflicting group" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/harness-experiences/experience-conflict/resolve-conflict"),
+      expect.objectContaining({ method: "POST", body: expect.stringContaining("Reviewed exact candidate evidence.") }),
+    ));
+    expect(await screen.findByText(/Conflicting candidates were rejected and audited/)).toBeTruthy();
   });
 
   it("shows authenticated GitHub health and queues an administrator repair", async () => {

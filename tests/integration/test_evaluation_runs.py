@@ -90,7 +90,8 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
             fixture["project_id"],
             harness_routes.SkillImportRequest(
                 source_kind="operator_authored", scope_type="project",
-                scope_id=str(fixture["project_id"]), skill_path="skills/eval-skill/SKILL.md",
+                scope_id=str(fixture["project_id"]), route_alias="coding",
+                skill_path="skills/eval-skill/SKILL.md",
                 content=skill_content,
             ),
             actor,
@@ -101,6 +102,23 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
             task_ids=[task.id], mode="both", k=1, route_alias="coding",
             skill_experience_id=UUID(skill["id"]),
         )
+        candidate = await db.get(harness_routes.HarnessExperience, UUID(skill["id"]))
+        assert candidate is not None
+        original_capabilities = candidate.compatibility_snapshot["model_capability_revision"]
+        deployment = await db.scalar(select(evaluation_routes.ModelDeployment).where(
+            evaluation_routes.ModelDeployment.organization_id == fixture["organization_id"]
+        ))
+        assert deployment is not None
+        previous_capabilities = deployment.capabilities
+        deployment.capabilities = {**previous_capabilities, "tools": False}
+        await db.flush()
+        with pytest.raises(HTTPException, match="exact evaluated route and deployment capabilities"):
+            await evaluation_routes.evaluation_dry_run(
+                fixture["project_id"], body, actor, db
+            )
+        deployment.capabilities = previous_capabilities
+        await db.flush()
+        assert candidate.compatibility_snapshot["model_capability_revision"] == original_capabilities
         estimate = await evaluation_routes.evaluation_dry_run(
             fixture["project_id"], body, actor, db
         )

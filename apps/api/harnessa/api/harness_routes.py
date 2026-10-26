@@ -23,6 +23,7 @@ from harnessa.db.harness import (
     HarnessPolicy,
     HarnessProbeRun,
     HarnessPromotion,
+    SkillConflictResolution,
 )
 from harnessa.db.models import Membership, Project, Repository, Task, User
 from harnessa.db.session import get_db
@@ -34,8 +35,9 @@ from harnessa.domain.skill_evolution import (
     validate_skill_artifact,
 )
 from harnessa.services.authorization import require_membership
+from harnessa.services.skill_compatibility import route_capability_revision, route_manifest
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(tags=["harness learning"])
@@ -74,8 +76,14 @@ class SkillImportRequest(BaseModel):
     source_kind: Literal["imported", "operator_authored"]
     scope_type: Literal["task", "repository", "project", "organization"]
     scope_id: str = Field(min_length=1, max_length=300)
+    route_alias: str = Field(min_length=1, max_length=120)
     skill_path: str = Field(min_length=1, max_length=300)
     content: str = Field(min_length=1, max_length=64_000)
+
+
+class ConflictResolutionRequest(BaseModel):
+    stable_key: str = Field(min_length=1, max_length=200)
+    rationale: str = Field(min_length=10, max_length=2000)
 
 
 class HarnessOverview(BaseModel):
@@ -91,12 +99,24 @@ async def _skill_evaluation_gate(
 ) -> dict[str, Any] | None:
     if candidate.license_id == "UNKNOWN" or candidate.conflict_state != "clear":
         return None
+    compatibility = candidate.compatibility_snapshot
+    route_alias = compatibility.get("route_alias")
+    capability_revision = compatibility.get("model_capability_revision")
+    if not isinstance(route_alias, str) or not route_alias or not isinstance(capability_revision, str) or not capability_revision:
+        return None
     evaluations = list(await db.scalars(select(EvaluationRun).where(
         EvaluationRun.project_id == project_id,
         EvaluationRun.status == "succeeded",
     ).order_by(EvaluationRun.created_at.desc()).limit(100)))
     for evaluation in evaluations:
         manifest = evaluation.manifest
+        route = manifest.get("model_route_policy") if isinstance(manifest, dict) else None
+        if (
+            not isinstance(route, dict)
+            or route.get("alias") != route_alias
+            or route_capability_revision(route) != capability_revision
+        ):
+            continue
         versions = manifest.get("skill_versions") if isinstance(manifest, dict) else None
         if not isinstance(versions, list) or not any(
             isinstance(version, dict)
@@ -367,6 +387,11 @@ async def create_skill_candidate(
         validate_provenance(body.source_kind, body.scope_type, "untrusted")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    try:
+        frozen_route = await route_manifest(db, project.organization_id, body.route_alias)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    capability_revision = route_capability_revision(frozen_route)
     if body.scope_type == "task":
         try:
             task_id = UUID(body.scope_id)
@@ -406,6 +431,10 @@ async def create_skill_candidate(
     key = hashlib.sha256(
         f"{body.scope_type}:{scope_id}:{artifact.slug}".encode()
     ).hexdigest()[:32]
+    if body.scope_type == "organization" and db.get_bind().dialect.name == "postgresql":
+        lock_material = f"{project.organization_id}:{key}".encode()
+        lock_id = int.from_bytes(hashlib.sha256(lock_material).digest()[:8], "big", signed=True)
+        await db.execute(select(func.pg_advisory_xact_lock(lock_id)))
     version_query = select(HarnessExperience).where(
         HarnessExperience.experience_key == key,
         HarnessExperience.scope_type == body.scope_type,
@@ -420,11 +449,15 @@ async def create_skill_candidate(
     versions = list(await db.scalars(
         version_query.order_by(HarnessExperience.version.desc()).with_for_update()
     ))
-    duplicate = next((row for row in versions if row.artifact_digest == artifact.digest), None)
+    duplicate = next((
+        row for row in versions
+        if row.artifact_digest == artifact.digest and row.status != "rejected"
+    ), None)
     if duplicate is not None:
         return {
             "id": str(duplicate.id),
             "status": duplicate.status,
+            "version": duplicate.version,
             "candidate_digest": duplicate.candidate_digest,
             "idempotent_replay": True,
         }
@@ -505,8 +538,8 @@ async def create_skill_candidate(
             harness2_revision=UPSTREAM_REVISION,
             tool_revision=settings.acp_harness_revision,
             policy_revision=policy_revision,
-            model_capability_revision=None,
-            route_alias=None,
+            model_capability_revision=capability_revision,
+            route_alias=body.route_alias,
             executor_image=settings.acp_agent_image,
             repository=(
                 repository_scope if body.scope_type in {"repository", "task"} else None
@@ -523,11 +556,90 @@ async def create_skill_candidate(
     return {
         "id": str(row.id),
         "status": row.status,
+        "version": row.version,
         "candidate_digest": row.candidate_digest,
         "artifact_digest": row.artifact_digest,
         "conflict_state": row.conflict_state,
         "automatically_activated": False,
         "declared_tools_grant_capabilities": False,
+    }
+
+
+@router.post("/projects/{project_id}/harness-experiences/{experience_id}/resolve-conflict")
+async def resolve_skill_conflict(
+    project_id: UUID,
+    experience_id: UUID,
+    body: ConflictResolutionRequest,
+    actor: User = Depends(current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    await _operator(db, actor, project_id, admin=True)
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    prior = await db.scalar(select(SkillConflictResolution).where(
+        SkillConflictResolution.project_id == project_id,
+        SkillConflictResolution.stable_key == body.stable_key,
+    ))
+    if prior is not None:
+        if prior.target_experience_id != experience_id:
+            raise HTTPException(409, "Conflict resolution key is already bound to another group")
+        return {
+            "decision": prior.action,
+            "candidate_ids": prior.candidate_ids,
+            "reimport_required": True,
+        }
+    target = await db.scalar(select(HarnessExperience).where(
+        HarnessExperience.id == experience_id,
+        HarnessExperience.organization_id == project.organization_id,
+        or_(
+            HarnessExperience.project_id == project_id,
+            HarnessExperience.scope_type == "organization",
+        ),
+    ).with_for_update())
+    if target is None:
+        raise HTTPException(404, "Conflicting skill candidate not found")
+    if target.status != "candidate" or target.conflict_state != "conflict":
+        raise HTTPException(409, "Only an unresolved conflicting candidate can be resolved")
+    rows = list(await db.scalars(select(HarnessExperience).where(
+        HarnessExperience.organization_id == project.organization_id,
+        HarnessExperience.conflict_key == target.conflict_key,
+        HarnessExperience.status == "candidate",
+        or_(
+            HarnessExperience.project_id == project_id,
+            HarnessExperience.scope_type == "organization",
+        ),
+    ).with_for_update()))
+    group = [row for row in rows if scopes_overlap(
+        target.scope_type,
+        target.scope_id,
+        target.repository_scope,
+        row.scope_type,
+        row.scope_id,
+        row.repository_scope,
+    )]
+    if len(group) < 2:
+        raise HTTPException(409, "The conflicting candidate group is no longer unresolved")
+    candidate_ids = sorted(str(row.id) for row in group)
+    for row in group:
+        row.status = "rejected"
+    db.add(SkillConflictResolution(
+        organization_id=project.organization_id,
+        project_id=project_id,
+        actor_id=actor.id,
+        target_experience_id=target.id,
+        conflict_key=target.conflict_key,
+        stable_key=body.stable_key,
+        action="reject_group",
+        rationale=body.rationale.strip(),
+        candidate_ids=candidate_ids,
+        created_at=datetime.now(UTC),
+    ))
+    await db.commit()
+    return {
+        "decision": "reject_group",
+        "candidate_ids": candidate_ids,
+        "reimport_required": True,
     }
 
 

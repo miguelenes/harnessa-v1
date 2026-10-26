@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -373,3 +373,31 @@ class HarnessPromotion(Scoped, Base):
     gate_evidence: Mapped[dict[str, Any]] = mapped_column(
         JSON_DOCUMENT, nullable=False, default=dict
     )
+
+
+class SkillConflictResolution(Base):
+    """Append-only administrator decision that retires a conflicting candidate group."""
+
+    __tablename__ = "skill_conflict_resolutions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "stable_key", name="uq_skill_conflict_resolution_key"),
+        CheckConstraint("action = 'reject_group'", name="ck_skill_conflict_resolution_action"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    target_experience_id: Mapped[UUID] = mapped_column(
+        ForeignKey("harness_experiences.id", ondelete="RESTRICT")
+    )
+    conflict_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    stable_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    action: Mapped[str] = mapped_column(String(24), nullable=False)
+    rationale: Mapped[str] = mapped_column(String(2000), nullable=False)
+    candidate_ids: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

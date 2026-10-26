@@ -21,7 +21,7 @@ The product validator rejects paths outside the pinned OpenCode surface and rese
 
 ## Scope and provenance
 
-`POST /projects/{project_id}/skills` accepts imported or operator-authored skill content and returns an untrusted candidate. The request binds the exact path, bytes, source kind, scope type, and scope identifier. Supported scopes are:
+`POST /projects/{project_id}/skills` accepts imported or operator-authored skill content and returns an untrusted candidate. The request binds the exact path, bytes, source kind, scope type, scope identifier, and an enabled model-route alias. Harnessa freezes the alias's enabled deployment identities, capability declarations, context limits, and pricing revision into the compatibility snapshot. Evaluation must use the same alias and capability revision; a route change blocks the candidate until it is reimported or otherwise revalidated under a new evaluation. Supported scopes are:
 
 | Scope | `scope_id` | Use boundary |
 |---|---|---|
@@ -32,7 +32,7 @@ The product validator rejects paths outside the pinned OpenCode surface and rese
 
 Generated candidates are derived from composed skill files and retain source experiment/run IDs, trace evidence, confidence rationale, artifact digest, and compatibility snapshot. Imported, operator-authored, and generated sources remain distinct. Content and provenance fields are immutable in the ORM and, on PostgreSQL, protected by a database trigger. Status, stale reason, and revalidation time are lifecycle fields. The artifact store verifies the SHA-256 reference and size before evaluation or artifact display.
 
-Repeated identical content in the same scope is idempotent. Different candidate content that overlaps an outstanding candidate's scope is marked conflicting and cannot enter evaluation or promotion until the conflicting candidate is resolved. Repository-specific candidates in different repositories do not conflict solely because they share a slug.
+Repeated identical content in the same scope is idempotent and returns its existing version number. Different candidate content that overlaps an outstanding candidate's scope is marked conflicting and cannot enter evaluation or promotion until an administrator resolves the group. `POST /projects/{project_id}/harness-experiences/{experience_id}/resolve-conflict` requires an administrator, a stable idempotency key, and a rationale. It rejects every currently overlapping candidate in the conflict group and appends an audit record with the affected candidate IDs; it does not select a winner. Reimport the chosen artifact to create a new clear candidate version. Repository-specific candidates in different repositories do not conflict solely because they share a slug.
 
 ## Evaluation, promotion, and rollback
 

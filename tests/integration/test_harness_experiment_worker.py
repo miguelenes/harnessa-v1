@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -20,7 +21,7 @@ from harnessa.db.harness import (
     HarnessPolicy,
     HarnessProbeRun,
 )
-from harnessa.db.models import Project, Repository, Task
+from harnessa.db.models import Project, ProjectMembership, Repository, Task
 from harnessa.db.orchestration import Run
 from harnessa.db.review import VerificationManifestRevision  # noqa: F401
 from harnessa.db.session import SessionLocal
@@ -28,6 +29,7 @@ from harnessa.db.specification import SpecificationInterview
 from harnessa.domain.skill_evolution import compatibility_snapshot, validate_skill_artifact
 from harnessa.services import harness_experiments as worker_module
 from harnessa.services.harness_experiments import HarnessExperimentWorker
+from harnessa.services.skill_compatibility import route_capability_revision, route_manifest
 from sqlalchemy import select, update
 from sqlalchemy.exc import DBAPIError
 
@@ -192,7 +194,7 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
             specification_revision=3,
             policy_revision=2,
             harness2_revision="d" * 40,
-            result={"route_alias": "probe-route"},
+            result={"route_alias": "coding"},
         )
         policy = HarnessPolicy(
             organization_id=fixture["organization_id"],
@@ -214,8 +216,11 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
             compatibility_snapshot=compatibility_snapshot(
                 harness2_revision=experiment.harness2_revision,
                 tool_revision=worker_module.settings.acp_harness_revision,
-                policy_revision=policy.revision, model_capability_revision=None,
-                route_alias="probe-route", executor_image=worker_module.settings.acp_agent_image,
+                policy_revision=policy.revision,
+                model_capability_revision=route_capability_revision(
+                    await route_manifest(db, fixture["organization_id"], "coding")
+                ),
+                route_alias="coding", executor_image=worker_module.settings.acp_agent_image,
                 repository=repository.target_id, task=None, organization=None,
             ),
             expiry_at=datetime.now(UTC) + timedelta(days=1), policy_revision=policy.revision,
@@ -236,7 +241,7 @@ async def test_inputs_freeze_ready_spec_and_persist_matched_probe_evidence(
             policy_revision=policy.revision,
         )
         experiment.result = {
-            "route_alias": "probe-route",
+            "route_alias": "coding",
             "skill_versions": [{
                 "id": str(selected_experience.id), "version": selected_experience.version,
                 "candidate_digest": selected_experience.candidate_digest,
@@ -458,7 +463,7 @@ async def test_experiment_route_freezes_inputs_and_enforces_idempotency(
             stable_key="route-idempotency-key",
             mode="both",
             k=2,
-            route_alias="probe-route",
+            route_alias="coding",
         )
 
         created = await harness_routes.create_harness_experiment(
@@ -471,7 +476,7 @@ async def test_experiment_route_freezes_inputs_and_enforces_idempotency(
         assert created.status == "queued"
         assert created.base_sha == "a" * 40
         assert created.specification_revision == 7
-        assert created.result["route_alias"] == "probe-route"
+        assert created.result["route_alias"] == "coding"
 
         row = await db.get(HarnessExperiment, created.id)
         assert row is not None
@@ -528,7 +533,7 @@ async def test_harness_overview_returns_policy_experiments_probes_and_experience
             specification_revision=2,
             policy_revision=3,
             harness2_revision="c" * 40,
-            result={"route_alias": "probe-route"},
+            result={"route_alias": "coding"},
         )
         db.add_all([
             HarnessPolicy(
@@ -550,7 +555,7 @@ async def test_harness_overview_returns_policy_experiments_probes_and_experience
                 status="succeeded",
                 delivered=True,
                 wall_ms=10,
-                route_alias="probe-route",
+                route_alias="coding",
                 harness_digest="d" * 64,
                 trace_digest="e" * 64,
                 component_diff={"changed": []},
@@ -610,6 +615,7 @@ async def test_skill_import_scopes_are_validated_and_organization_skills_are_sha
                 source_kind="operator_authored",
                 scope_type="task",
                 scope_id=str(task.id),
+                route_alias="coding",
                 skill_path="skills/scoped-skill/SKILL.md",
                 content=content,
             ),
@@ -623,7 +629,7 @@ async def test_skill_import_scopes_are_validated_and_organization_skills_are_sha
         task_replay = await harness_routes.create_skill_candidate(
             project.id,
             harness_routes.SkillImportRequest(
-                source_kind="operator_authored", scope_type="task", scope_id=str(task.id),
+                source_kind="operator_authored", scope_type="task", scope_id=str(task.id), route_alias="coding",
                 skill_path="skills/scoped-skill/SKILL.md", content=content,
             ),
             actor,
@@ -641,7 +647,7 @@ async def test_skill_import_scopes_are_validated_and_organization_skills_are_sha
         conflict_candidate = await harness_routes.create_skill_candidate(
             project.id,
             harness_routes.SkillImportRequest(
-                source_kind="operator_authored", scope_type="task", scope_id=str(task.id),
+                source_kind="operator_authored", scope_type="task", scope_id=str(task.id), route_alias="coding",
                 skill_path="skills/scoped-skill/SKILL.md", content=conflicting_content,
             ),
             actor,
@@ -656,6 +662,7 @@ async def test_skill_import_scopes_are_validated_and_organization_skills_are_sha
                 source_kind="operator_authored",
                 scope_type="organization",
                 scope_id=str(project.organization_id),
+                route_alias="coding",
                 skill_path="skills/shared-skill/SKILL.md",
                 content=organization_content,
             ),
@@ -668,6 +675,57 @@ async def test_skill_import_scopes_are_validated_and_organization_skills_are_sha
             "organization",
             str(project.organization_id),
         )
+        assert organization_row.compatibility_snapshot["route_alias"] == "coding"
+        assert len(organization_row.compatibility_snapshot["model_capability_revision"]) == 64
+        conflict_content = content.replace("scoped-skill", "conflict-skill")
+        await harness_routes.create_skill_candidate(
+            project.id,
+            harness_routes.SkillImportRequest(
+                source_kind="operator_authored", scope_type="project", scope_id=str(project.id),
+                route_alias="coding", skill_path="skills/conflict-skill/SKILL.md",
+                content=conflict_content,
+            ),
+            actor,
+            db,
+        )
+        conflict_content_v2 = conflict_content.replace(
+            "bounded guidance", "different conflict guidance"
+        )
+        project_conflict = await harness_routes.create_skill_candidate(
+            project.id,
+            harness_routes.SkillImportRequest(
+                source_kind="operator_authored", scope_type="project", scope_id=str(project.id),
+                route_alias="coding", skill_path="skills/conflict-skill/SKILL.md",
+                content=conflict_content_v2,
+            ),
+            actor,
+            db,
+        )
+        assert project_conflict["conflict_state"] == "conflict"
+        resolution = await harness_routes.resolve_skill_conflict(
+            project.id,
+            UUID(project_conflict["id"]),
+            harness_routes.ConflictResolutionRequest(
+                stable_key="resolve-conflict-skill-v1",
+                rationale="Reject both incompatible imports before selecting one version.",
+            ),
+            actor,
+            db,
+        )
+        assert resolution["decision"] == "reject_group"
+        assert len(resolution["candidate_ids"]) == 2
+        selected_again = await harness_routes.create_skill_candidate(
+            project.id,
+            harness_routes.SkillImportRequest(
+                source_kind="operator_authored", scope_type="project", scope_id=str(project.id),
+                route_alias="coding", skill_path="skills/conflict-skill/SKILL.md",
+                content=conflict_content,
+            ),
+            actor,
+            db,
+        )
+        assert selected_again["conflict_state"] == "clear"
+        assert selected_again["status"] == "candidate"
         task_promotion = harness_routes.PromotionRequest(
             stable_key="task-skill-cannot-promote", candidate_digest=task_candidate["candidate_digest"],
             rationale="Task scope remains local.",
@@ -701,6 +759,72 @@ async def test_skill_import_scopes_are_validated_and_organization_skills_are_sha
             item["id"] == organization_candidate["id"]
             for item in overview.experiences
         )
+
+
+@pytest.mark.anyio
+async def test_concurrent_organization_skill_imports_allocate_unique_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = await gateway_fixture()
+    monkeypatch.setattr(harness_routes.settings, "artifact_root", str(tmp_path))
+    async with SessionLocal() as db:
+        actor = await db.get(harness_routes.User, fixture["user_id"])
+        first_project = await db.get(Project, fixture["project_id"])
+        assert actor is not None and first_project is not None
+        second_project = Project(
+            organization_id=first_project.organization_id,
+            name="Concurrent organization skill project",
+            slug=f"concurrent-{uuid4().hex[:10]}",
+        )
+        db.add(second_project)
+        await db.flush()
+        db.add(ProjectMembership(
+            project_id=second_project.id, user_id=actor.id, role="administrator"
+        ))
+        await db.commit()
+        first_project_id, second_project_id = first_project.id, second_project.id
+        organization_id = first_project.organization_id
+
+    contents = [
+        (
+            "---\nname: concurrent-org-skill\ndescription: Concurrent import fixture.\n"
+            "license: MIT\nmetadata:\n  dependencies: []\nallowed-tools: []\n---\n\nFirst version.\n"
+        ),
+        (
+            "---\nname: concurrent-org-skill\ndescription: Concurrent import fixture.\n"
+            "license: MIT\nmetadata:\n  dependencies: []\nallowed-tools: []\n---\n\nSecond version.\n"
+        ),
+    ]
+
+    async def import_from(project_id: UUID, content: str) -> dict[str, Any]:
+        async with SessionLocal() as db:
+            actor = await db.get(harness_routes.User, fixture["user_id"])
+            assert actor is not None
+            return await harness_routes.create_skill_candidate(
+                project_id,
+                harness_routes.SkillImportRequest(
+                    source_kind="operator_authored",
+                    scope_type="organization",
+                    scope_id=str(organization_id),
+                    route_alias="coding",
+                    skill_path="skills/concurrent-org-skill/SKILL.md",
+                    content=content,
+                ),
+                actor,
+                db,
+            )
+
+    results = await asyncio.gather(
+        import_from(first_project_id, contents[0]),
+        import_from(second_project_id, contents[1]),
+    )
+    assert sorted(result["version"] for result in results) == [1, 2]
+    async with SessionLocal() as db:
+        rows = list(await db.scalars(select(HarnessExperience).where(
+            HarnessExperience.organization_id == organization_id,
+            HarnessExperience.cue == "concurrent-org-skill",
+        )))
+    assert sorted(row.version for row in rows) == [1, 2]
 
 
 @pytest.mark.anyio
@@ -772,6 +896,7 @@ async def test_skill_promotion_gate_requires_a_matched_multi_task_holdout_receip
     artifact = validate_skill_artifact("skills/evaluated-skill/SKILL.md", content)
     stored = LocalArtifactStore(tmp_path).put_bytes(content.encode(), media_type="text/markdown")
     async with SessionLocal() as db:
+        route = await route_manifest(db, fixture["organization_id"], "coding")
         second_task = Task(
             project_id=fixture["project_id"], title="Second heldout task",
             description="Bounded fixture", stage=TaskStage.HARNESS_PROBE.value,
@@ -786,7 +911,10 @@ async def test_skill_promotion_gate_requires_a_matched_multi_task_holdout_receip
             scope_id=str(fixture["project_id"]), license_id="MIT", artifact_path=artifact.path,
             artifact_digest=stored.digest, artifact_storage_key=stored.storage_key,
             artifact_size_bytes=stored.size_bytes, confidence_rationale="Bounded fixture evidence.",
-            compatibility_snapshot={}, expiry_at=datetime.now(UTC) + timedelta(days=1), policy_revision=1,
+            compatibility_snapshot={
+                "route_alias": "coding",
+                "model_capability_revision": route_capability_revision(route),
+            }, expiry_at=datetime.now(UTC) + timedelta(days=1), policy_revision=1,
         )
         db.add_all([second_task, candidate])
         await db.flush()
@@ -798,6 +926,7 @@ async def test_skill_promotion_gate_requires_a_matched_multi_task_holdout_receip
                 "skill_versions": [{"id": str(candidate.id), "version": candidate.version,
                                     "candidate_digest": candidate.candidate_digest,
                                     "artifact_digest": candidate.artifact_digest}],
+                "model_route_policy": route,
                 "task_inputs": [{"task_id": task_id} for task_id in task_ids],
             }, manifest_digest="c" * 64, experiment_ids=[], max_cost_usd="1.00000000",
         )
