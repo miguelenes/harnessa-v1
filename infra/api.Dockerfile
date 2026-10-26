@@ -1,4 +1,4 @@
-FROM node:26.12.0-bookworm-slim@sha256:742a0fe7320e09e0321222b68165e6ac731d30470e7ea7f98f9bfc3a6e1034fe AS openspec-runtime
+FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS openspec-runtime
 WORKDIR /app
 RUN npm install --global pnpm@10.34.7
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -11,7 +11,7 @@ COPY packages/ui-react/package.json packages/ui-react/package.json
 COPY packages/ui-svelte/package.json packages/ui-svelte/package.json
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter harnessa
 
-FROM python:3.12.15-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70 AS python-dependencies
+FROM python:3.15.0-slim-bookworm@sha256:0e019bbdfb5d9874cb2389f1c2884b64aa2ac97c99960b5bc521cef978c0617d AS python-dependencies
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN apt-get update \
@@ -20,7 +20,7 @@ RUN apt-get update \
     && pip install --no-cache-dir uv==0.13.5 \
     && uv sync --frozen --no-dev
 
-FROM python:3.12.15-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70
+FROM python:3.15.0-slim-bookworm@sha256:0e019bbdfb5d9874cb2389f1c2884b64aa2ac97c99960b5bc521cef978c0617d
 WORKDIR /app
 RUN apt-get update \
     && apt-get install --no-install-recommends -y git libatomic1 \
