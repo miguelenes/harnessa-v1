@@ -37,6 +37,8 @@ _MAX_REQUEST_BYTES = 1_000_000
 _MAX_SUITE_BYTES = 1_000_000
 _MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
 _MAX_EXTRACTED_BYTES = 512 * 1024 * 1024
+_MAX_CASE_ASSET_BYTES = 512 * 1024 * 1024
+_MAX_VERIFIER_BYTES = 1 * 1024 * 1024
 _MAX_ARCHIVE_FILES = 50_000
 _MAX_PATCH_BYTES = 10 * 1024 * 1024
 _MAX_PATCHES = 8
@@ -59,6 +61,7 @@ class HoldoutCase:
     source_archive: str
     source_archive_sha256: str
     verifier_id: str
+    verifier_sha256: str = ""
 
 
 def _read_private_json(path: Path, *, max_bytes: int) -> dict[str, Any]:
@@ -155,6 +158,85 @@ def _safe_child(root: Path, relative: str) -> Path:
     return candidate
 
 
+def _validate_case_assets(
+    *, base_dir: Path, cases: dict[str, HoldoutCase]
+) -> tuple[dict[str, HoldoutCase], str, dict[str, tuple[int, int, int, int]]]:
+    """Validate and fingerprint every immutable input before reporting readiness."""
+
+    validated: dict[str, HoldoutCase] = {}
+    fingerprints: list[str] = []
+    metadata: dict[str, tuple[int, int, int, int]] = {}
+    total_bytes = 0
+    for task_id, case in sorted(cases.items()):
+        archive = _safe_child(base_dir, case.source_archive)
+        verifier = _safe_child(base_dir, f"verifiers/{case.verifier_id}.py")
+        if not archive.is_file() or not verifier.is_file():
+            raise ValueError("configured evaluator case assets are unavailable")
+        archive_size = archive.stat().st_size
+        verifier_size = verifier.stat().st_size
+        total_bytes += archive_size + verifier_size
+        if (
+            archive_size > _MAX_ARCHIVE_BYTES
+            or verifier_size <= 0
+            or verifier_size > _MAX_VERIFIER_BYTES
+            or total_bytes > _MAX_CASE_ASSET_BYTES
+        ):
+            raise ValueError("configured evaluator case assets exceed their size limits")
+        archive_digest = _sha256_file(archive)
+        if not hmac.compare_digest(archive_digest, case.source_archive_sha256):
+            raise ValueError("configured evaluator source archive checksum is invalid")
+        verifier_digest = _sha256_file(verifier)
+        validated[task_id] = HoldoutCase(
+            task_id=case.task_id,
+            project_id=case.project_id,
+            base_sha=case.base_sha,
+            source_archive=case.source_archive,
+            source_archive_sha256=case.source_archive_sha256,
+            verifier_id=case.verifier_id,
+            verifier_sha256=verifier_digest,
+        )
+        fingerprints.append(f"{task_id}:{archive_digest}:{verifier_digest}")
+        for path, key in ((archive, f"{task_id}:archive"), (verifier, f"{task_id}:verifier")):
+            stat = path.stat()
+            metadata[key] = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    asset_digest = hashlib.sha256("\n".join(fingerprints).encode("ascii")).hexdigest()
+    return validated, asset_digest, metadata
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _case_assets_unchanged(
+    *,
+    base_dir: Path,
+    cases: dict[str, HoldoutCase],
+    metadata: dict[str, tuple[int, int, int, int]],
+) -> bool:
+    for task_id, case in cases.items():
+        for relative, key in (
+            (case.source_archive, f"{task_id}:archive"),
+            (f"verifiers/{case.verifier_id}.py", f"{task_id}:verifier"),
+        ):
+            try:
+                path = _safe_child(base_dir, relative)
+                stat = path.stat()
+            except (OSError, ValueError):
+                return False
+            if not path.is_file() or metadata.get(key) != (
+                stat.st_dev,
+                stat.st_ino,
+                stat.st_size,
+                stat.st_mtime_ns,
+            ):
+                return False
+    return True
+
+
 def _verify_cas_artifact(root: Path, digest: str, size_bytes: int) -> bytes:
     if (
         not _DIGEST.fullmatch(digest)
@@ -244,6 +326,11 @@ def _run_verifier(
     ):
         raise ValueError("source archive integrity check failed")
     verifier = _safe_child(config.base_dir, f"verifiers/{case.verifier_id}.py")
+    verifier_bytes = verifier.read_bytes()
+    if not hmac.compare_digest(
+        hashlib.sha256(verifier_bytes).hexdigest(), case.verifier_sha256
+    ):
+        raise ValueError("configured evaluator verifier checksum changed")
     scratch_root = Path("/tmp")
     with tempfile.TemporaryDirectory(prefix="harnessa-holdout-", dir=scratch_root) as temp:
         work = Path(temp)
@@ -314,9 +401,24 @@ def create_app(config: EvaluatorConfig | None = None) -> FastAPI:
     if config is None:
         app.state.cases = None
         app.state.suite_digest = None
+        app.state.asset_metadata = {}
     else:
-        app.state.cases, app.state.judge_revision = _load_cases(config.suite_path)
-        app.state.suite_digest = app.state.judge_revision.rsplit(":", maxsplit=1)[-1]
+        try:
+            cases, judge_revision = _load_cases(config.suite_path)
+            cases, asset_digest, asset_metadata = _validate_case_assets(
+                base_dir=config.base_dir, cases=cases
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("Private holdout data unavailable (%s)", type(exc).__name__)
+            app.state.cases = None
+            app.state.judge_revision = None
+            app.state.suite_digest = None
+            app.state.asset_metadata = {}
+        else:
+            app.state.cases = cases
+            app.state.judge_revision = f"{judge_revision}:{asset_digest[:16]}"
+            app.state.suite_digest = asset_digest
+            app.state.asset_metadata = asset_metadata
     app.state.lock = asyncio.Semaphore(1)
 
     @app.get("/health/ready")
@@ -326,6 +428,11 @@ def create_app(config: EvaluatorConfig | None = None) -> FastAPI:
             and app.state.cases
             and app.state.suite_digest
             and app.state.config.artifact_root.is_dir()
+            and _case_assets_unchanged(
+                base_dir=app.state.config.base_dir,
+                cases=app.state.cases,
+                metadata=app.state.asset_metadata,
+            )
         )
         return JSONResponse(
             {"status": "ready" if ready else "unavailable"}, status_code=200 if ready else 503

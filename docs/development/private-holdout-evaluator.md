@@ -53,7 +53,12 @@ exact base commit, source archive digest, and verifier ID:
 The evaluator verifies the canonical manifest digest, exact task/project/base
 identity, archive checksum, content-addressed patch digest, and archive paths.
 It rejects symlinks and path traversal. Receipts contain only `status`, the
-manifest digest, and a judge revision bound to the suite digest. It suppresses
+manifest digest, and a judge revision bound to the suite and validated asset
+fingerprints. At startup it verifies every configured source archive checksum,
+requires bounded source and verifier files, and fingerprints verifier bytes.
+Readiness returns unavailable if a required asset is missing or changes after
+startup; evaluation also checks the selected verifier fingerprint before running
+it. It suppresses
 verifier stdout/stderr and never returns individual test outcomes or expected
 values. The Harnessa worker reserves the configured evaluator maximum in the
 shared spend ledger before dispatch; the local evaluator itself makes no paid

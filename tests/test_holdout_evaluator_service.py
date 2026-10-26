@@ -201,6 +201,65 @@ async def test_evaluator_rejects_bad_token_and_tampered_manifest(tmp_path: Path)
     assert tampered.status_code == 422
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "asset_state",
+    [
+        "missing_archive",
+        "missing_verifier",
+        "archive_checksum_mismatch",
+        "removed_after_start",
+        "changed_after_start",
+    ],
+)
+async def test_readiness_requires_valid_case_assets(tmp_path: Path, asset_state: str) -> None:
+    task_id, project_id = str(uuid4()), str(uuid4())
+    base_dir = tmp_path / "private"
+    archive = base_dir / "bases" / "base.tar"
+    archive_digest = _write_source_archive(archive)
+    verifier = base_dir / "verifiers" / "case-v1.py"
+    verifier.parent.mkdir(parents=True, exist_ok=True)
+    verifier.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    if asset_state == "missing_archive":
+        archive.unlink()
+    elif asset_state == "missing_verifier":
+        verifier.unlink()
+    elif asset_state == "archive_checksum_mismatch":
+        archive.write_bytes(b"changed archive")
+
+    suite_path = base_dir / "suite.json"
+    suite_path.write_text(json.dumps({
+        "schema_version": 1,
+        "dataset_id": "m13-acceptance-holdout",
+        "dataset_revision": "1",
+        "dataset_license": "MIT",
+        "cases": [{
+            "task_id": task_id,
+            "project_id": project_id,
+            "base_sha": "a" * 40,
+            "source_archive": "bases/base.tar",
+            "source_archive_sha256": archive_digest,
+            "verifier_id": "case-v1",
+        }],
+    }), encoding="utf-8")
+    artifact_root = tmp_path / "cas"
+    artifact_root.mkdir()
+    app = create_app(EvaluatorConfig("token", suite_path, base_dir, artifact_root))
+
+    async with await _client(app) as client:
+        if asset_state in {"removed_after_start", "changed_after_start"}:
+            before = await client.get("/health/ready")
+            assert before.status_code == 200
+            if asset_state == "removed_after_start":
+                verifier.unlink()
+            else:
+                verifier.write_text("raise SystemExit(0)\n# changed\n", encoding="utf-8")
+        response = await client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "unavailable"}
+
+
 def test_private_suite_rejects_traversal_and_duplicate_task_ids(tmp_path: Path) -> None:
     path = tmp_path / "suite.json"
     task_id, project_id = str(uuid4()), str(uuid4())
