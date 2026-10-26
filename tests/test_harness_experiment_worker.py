@@ -14,6 +14,7 @@ from harness2.substrate.opencode import OpencodeSubstrate
 from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.async_bridge import call_on_event_loop
 from harnessa.adapters.execution import TaskInput
+from harnessa.domain.skill_evolution import validate_skill_artifact
 from harnessa.services.harness_adaptation import FrozenExperiment
 from harnessa.services.harness_experiments import (
     HarnessACPTaskAdapter,
@@ -415,6 +416,11 @@ async def test_task_adapter_records_and_reads_a_completed_rollout(
 ) -> None:
     from harnessa.services import harness_experiments as module
 
+    skill_content = (
+        "---\nname: adapter-guide\ndescription: Adapter skill fixture.\nlicense: MIT\n"
+        "metadata:\n  dependencies: []\nallowed-tools: []\n---\n\nUse bounded guidance.\n"
+    )
+    skill = validate_skill_artifact("skills/adapter-guide/SKILL.md", skill_content)
     frozen = FrozenExperiment(
         experiment_id=uuid4(),
         task_id=uuid4(),
@@ -431,6 +437,7 @@ async def test_task_adapter_records_and_reads_a_completed_rollout(
         tool_revision="upstream-revision",
         root=tmp_path,
         claim_attempt=2,
+        skill_artifacts=({"path": skill.path, "content": skill.content, "digest": skill.digest},),
     )
     base = tmp_path / "base"
     base.mkdir()
@@ -476,6 +483,67 @@ async def test_task_adapter_records_and_reads_a_completed_rollout(
     assert adapter.deliverable_text(run_dir).startswith("diff --git")
     assert adapter.records[0]["phase"] == "baseline"
     assert adapter.records[0]["status"] == "succeeded"
+
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / "systemprompt.md").write_text("candidate guidance", encoding="utf-8")
+    candidate_dir = await asyncio.to_thread(
+        adapter.execute, str(frozen.task_id), candidate, "candidate-run"
+    )
+    assert candidate_dir.is_dir()
+    assert (candidate / skill.path).read_text(encoding="utf-8") == skill.content
+    assert (base / "skills" / "adapter-guide" / "SKILL.md").exists() is False
+    assert adapter.records[1]["phase"] == "candidate"
+
+
+def test_materialize_active_skills_verifies_and_contains_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harnessa.services import harness_experiments as module
+
+    content = (
+        "---\nname: materialized-guide\ndescription: Materialized skill fixture.\nlicense: MIT\n"
+        "metadata:\n  dependencies: []\nallowed-tools: []\n---\n\nRead only guidance.\n"
+    )
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    artifact = store.put_bytes(content.encode(), media_type="text/markdown")
+    monkeypatch.setattr(module.settings, "artifact_root", str(tmp_path / "artifacts"))
+    experience = SimpleNamespace(
+        artifact_digest=artifact.digest,
+        artifact_storage_key=artifact.storage_key,
+        artifact_path="skills/materialized-guide/SKILL.md",
+        artifact_size_bytes=artifact.size_bytes,
+    )
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "systemprompt.md").write_text(
+        "safe base. Load materialized-guide for bounded guidance.", encoding="utf-8"
+    )
+
+    module._materialize_active_skills(base, [experience], substrate=OpencodeSubstrate())
+
+    assert (base / experience.artifact_path).read_text(encoding="utf-8") == content
+    assert "safe base" in (base / "systemprompt.md").read_text(encoding="utf-8")
+
+    invalid = SimpleNamespace(
+        artifact_digest="a" * 64,
+        artifact_storage_key=f"sha256/{'a' * 2}/{'a' * 64}",
+        artifact_path="skills/missing/SKILL.md",
+        artifact_size_bytes=1,
+    )
+    with pytest.raises(module.HarnessAdaptationError, match="content-addressed verification"):
+        module._materialize_active_skills(base, [invalid], substrate=OpencodeSubstrate())
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    symlink_base = tmp_path / "symlink-base"
+    (symlink_base / "skills").mkdir(parents=True)
+    (symlink_base / "systemprompt.md").write_text(
+        "Load materialized-guide for bounded guidance.", encoding="utf-8"
+    )
+    (symlink_base / "skills" / "materialized-guide").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(module.HarnessAdaptationError, match="escaped its harness"):
+        module._materialize_active_skills(symlink_base, [experience], substrate=OpencodeSubstrate())
 
 
 @pytest.mark.anyio

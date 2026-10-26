@@ -270,6 +270,7 @@ describe("workspace routes and task board", () => {
       if (url.endsWith("/tasks/task-1/runs")) return response([]);
       if (url.endsWith("/projects/project-1/harness")) return response({
         experiments: experiment ? [experiment] : [],
+        experiences: [{ id: "skill-1", cue: "Bounded guidance", status: "candidate", version: 1, artifact_digest: "f".repeat(64), conflict_state: "clear", license_id: "MIT" }],
         probes: experiment ? [
           { experiment_id: experiment.id, status: "succeeded", delivered: true, wall_ms: 100, cost_usd: "0.01" },
           { experiment_id: experiment.id, status: "failed", delivered: false, wall_ms: 200, cost_usd: "0.02" },
@@ -309,8 +310,9 @@ describe("workspace routes and task board", () => {
     });
 
     render(<Workspace section="evals" />);
-    await screen.findByRole("option", { name: "Prepare release" });
-    fireEvent.change(await screen.findByRole("combobox", { name: "Evaluation task" }), { target: { value: probeTask.id } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Prepare release" }));
+    const skillSelect = await screen.findByRole("combobox", { name: "Candidate skill version" });
+    fireEvent.change(skillSelect, { target: { value: "skill-1" } });
     expect(await screen.findByText(/The estimate assumes the full route context window and configured retry bound/)).toBeTruthy();
     await waitFor(() => expect((screen.getByRole("button", { name: "Estimate evaluation cost" }) as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 });
     fireEvent.click(screen.getByRole("button", { name: "Estimate evaluation cost" }));
@@ -348,6 +350,7 @@ describe("workspace routes and task board", () => {
     const createCall = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).endsWith("/evaluations") && init?.method === "POST");
     expect(createCall?.[1]?.body).toContain('"mode":"both"');
     expect(createCall?.[1]?.body).toContain('"k":1');
+    expect(createCall?.[1]?.body).toContain('"skill_experience_id":"skill-1"');
     fireEvent.click(screen.getByRole("button", { name: "Cancel evaluation" }));
     expect(await screen.findByText(/Cancellation was recorded/)).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("cancelled").length).toBeGreaterThan(0));
@@ -428,6 +431,8 @@ describe("workspace routes and task board", () => {
       experiences: [
         { id: "experience-1", cue: "Use narrow fixtures", lesson: "Keep fixture setup local.", status: "candidate", version: 1, repository_scope: "repo/demo", domain_scope: "testing", conflict_key: "fixture-style", expiry_at: "2026-12-01T00:00:00Z", evidence_refs: [{ digest: "f".repeat(64) }], candidate_digest: "1".repeat(64) },
         { id: "experience-2", cue: "Retain previous rule", lesson: "Restore the reviewed version.", status: "superseded", version: 2, repository_scope: "repo/demo", domain_scope: "testing", conflict_key: "fixture-style", expiry_at: "2026-12-01T00:00:00Z", evidence_refs: [], candidate_digest: "2".repeat(64) },
+        { id: "experience-conflict", cue: "Conflicting guidance", lesson: "Needs an explicit group decision.", status: "candidate", conflict_state: "conflict", version: 1, repository_scope: "repo/demo", domain_scope: "testing", conflict_key: "conflicting-guidance", expiry_at: "2026-12-01T00:00:00Z", evidence_refs: [], candidate_digest: "3".repeat(64) },
+        { id: "../skill", cue: "Path-like identifier", lesson: "Artifact link path segments must stay bounded.", status: "active", version: 1, artifact_digest: "4".repeat(64), repository_scope: "repo/demo", domain_scope: "testing", conflict_key: "path-like", expiry_at: "2026-12-01T00:00:00Z", evidence_refs: [] },
       ],
     };
     vi.spyOn(window, "prompt").mockReturnValue("Reviewed exact candidate evidence.");
@@ -449,7 +454,9 @@ describe("workspace routes and task board", () => {
     expect(screen.getByText("Probe comparisons")).toBeTruthy();
     expect(screen.getByText("Use narrow fixtures")).toBeTruthy();
     expect(screen.getByText(/Evidence: .*f{64}/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Review and promote" }));
+    expect(screen.getByRole("link", { name: "Review exact skill artifact" }).getAttribute("href"))
+      .toContain("%2Fskill");
+    fireEvent.click(screen.getAllByRole("button", { name: "Review and promote" })[0]);
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/harness-experiences/experience-1/promote"),
       expect.objectContaining({ method: "POST", body: expect.stringContaining("Reviewed exact candidate evidence.") }),
@@ -459,6 +466,12 @@ describe("workspace routes and task board", () => {
       expect.stringContaining("/harness-experiences/experience-2/rollback"),
       expect.objectContaining({ method: "POST" }),
     ));
+    fireEvent.click(screen.getByRole("button", { name: "Reject conflicting group" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/harness-experiences/experience-conflict/resolve-conflict"),
+      expect.objectContaining({ method: "POST", body: expect.stringContaining("Reviewed exact candidate evidence.") }),
+    ));
+    expect(await screen.findByText(/Conflicting candidates were rejected and audited/)).toBeTruthy();
   });
 
   it("shows authenticated GitHub health and queues an administrator repair", async () => {

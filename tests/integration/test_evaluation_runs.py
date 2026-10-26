@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+from uuid import UUID
+
 import pytest
 from fastapi import HTTPException
-from harnessa.api import evaluation_routes, execution_routes
+from harnessa.api import evaluation_routes, execution_routes, harness_routes
 from harnessa.contracts import ModelPoolKind
 from harnessa.db.harness import EvaluationRun, HarnessExperiment, HarnessPolicy, HarnessProbeRun
 from harnessa.db.models import Repository, Task
@@ -21,6 +24,7 @@ pytestmark = pytest.mark.integration
 async def test_project_runner_selection_is_persisted_and_rejects_unavailable_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(execution_routes.settings, "acp_execution_enabled", False)
     fixture = await gateway_fixture()
     async with SessionLocal() as db:
         actor = await db.get(execution_routes.User, fixture["user_id"])
@@ -46,8 +50,12 @@ async def test_project_runner_selection_is_persisted_and_rejects_unavailable_ada
 
 
 @pytest.mark.anyio
-async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children() -> None:
+async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fixture = await gateway_fixture()
+    monkeypatch.setattr(harness_routes.settings, "artifact_root", str(tmp_path))
+    monkeypatch.setattr(evaluation_routes.settings, "artifact_root", str(tmp_path))
     async with SessionLocal() as db:
         budget = await db.scalar(select(evaluation_routes.ModelBudgetPolicy).where(
             evaluation_routes.ModelBudgetPolicy.project_id == fixture["project_id"]
@@ -73,10 +81,44 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
         ))
         actor = await db.get(evaluation_routes.User, fixture["user_id"])
         assert actor is not None
+        skill_content = (
+            "---\nname: eval-skill\ndescription: A grouped evaluation fixture.\n"
+            "license: MIT\nmetadata:\n  dependencies: []\nallowed-tools: []\n---\n\n"
+            "Use this bounded guidance during the evaluation.\n"
+        )
+        skill = await harness_routes.create_skill_candidate(
+            fixture["project_id"],
+            harness_routes.SkillImportRequest(
+                source_kind="operator_authored", scope_type="project",
+                scope_id=str(fixture["project_id"]), route_alias="coding",
+                skill_path="skills/eval-skill/SKILL.md",
+                content=skill_content,
+            ),
+            actor,
+            db,
+        )
         body = evaluation_routes.EvaluationRunCreate(
             stable_key="grouped-evaluation-fixture", suite="harness2-local",
             task_ids=[task.id], mode="both", k=1, route_alias="coding",
+            skill_experience_id=UUID(skill["id"]),
         )
+        candidate = await db.get(harness_routes.HarnessExperience, UUID(skill["id"]))
+        assert candidate is not None
+        original_capabilities = candidate.compatibility_snapshot["model_capability_revision"]
+        deployment = await db.scalar(select(evaluation_routes.ModelDeployment).where(
+            evaluation_routes.ModelDeployment.organization_id == fixture["organization_id"]
+        ))
+        assert deployment is not None
+        previous_capabilities = deployment.capabilities
+        deployment.capabilities = {**previous_capabilities, "tools": False}
+        await db.flush()
+        with pytest.raises(HTTPException, match="exact evaluated route and deployment capabilities"):
+            await evaluation_routes.evaluation_dry_run(
+                fixture["project_id"], body, actor, db
+            )
+        deployment.capabilities = previous_capabilities
+        await db.flush()
+        assert candidate.compatibility_snapshot["model_capability_revision"] == original_capabilities
         estimate = await evaluation_routes.evaluation_dry_run(
             fixture["project_id"], body, actor, db
         )
@@ -93,6 +135,7 @@ async def test_grouped_evaluation_freezes_inputs_estimates_and_cancels_children(
         assert created.status == "queued"
         assert created.manifest_digest == estimate.manifest_digest
         assert created.manifest["task_inputs"][0]["base_sha"] == "a" * 40
+        assert created.manifest["skill_versions"][0]["artifact_path"] == "skills/eval-skill/SKILL.md"
         assert created.sample_size == 5
         assert created.missing_samples == 5
 
@@ -213,24 +256,38 @@ async def test_failed_evaluation_resumes_from_child_state_when_parent_row_is_que
             "specification_hash": interview.artifact_hash,
             "specification_revision": interview.revision, "policy_revision": policy.revision,
         }
+        route = await evaluation_routes.route_manifest(
+            db, fixture["organization_id"], "coding"
+        )
+        manifest = {
+            "mode": "parallel", "k": 1, "task_inputs": [manifest_task],
+            "route_alias": "coding", "model_route_policy": route,
+        }
+        manifest_digest = evaluation_routes._digest(manifest)
         child = HarnessExperiment(
             organization_id=fixture["organization_id"], project_id=fixture["project_id"],
             task_id=task.id, created_by=fixture["user_id"], stable_key="resume-child-fixture",
             mode="parallel", k=1, status="failed", phase="failed", attempts=1,
             base_sha=interview.base_sha, specification_hash=interview.artifact_hash,
             specification_revision=interview.revision, policy_revision=policy.revision,
-            harness2_revision="fixture", result={"route_alias": "coding", "resume_count": 0},
+            harness2_revision="fixture",
+            result={
+                "route_alias": "coding", "resume_count": 0,
+                "evaluation_manifest_digest": manifest_digest,
+                "route_capability_revision": evaluation_routes.route_capability_revision(route),
+            },
         )
         db.add(child)
         await db.flush()
         run = EvaluationRun(
             organization_id=fixture["organization_id"], project_id=fixture["project_id"],
             created_by=fixture["user_id"], stable_key="resume-evaluation-fixture",
-            status="queued",
-            manifest={"mode": "parallel", "k": 1, "task_inputs": [manifest_task]},
-            manifest_digest="d" * 64, experiment_ids=[str(child.id)], max_cost_usd="0.01",
+            status="queued", manifest=manifest,
+            manifest_digest=manifest_digest,
+            experiment_ids=[str(child.id)], max_cost_usd="0.01",
         )
         db.add(run)
+        child.evaluation_run_id = run.id
         await db.commit()
         actor = await db.get(evaluation_routes.User, fixture["user_id"])
         assert actor is not None
@@ -242,3 +299,18 @@ async def test_failed_evaluation_resumes_from_child_state_when_parent_row_is_que
         assert resumed.status == "queued"
         assert child.status == "queued"
         assert child.result["resume_count"] == 1
+
+        child.status, child.phase = "failed", "failed"
+        deployment = await db.scalar(select(evaluation_routes.ModelDeployment).where(
+            evaluation_routes.ModelDeployment.organization_id == fixture["organization_id"]
+        ))
+        assert deployment is not None
+        original_price_revision = deployment.price_revision
+        deployment.price_revision = "route-drift-price-revision"
+        await db.flush()
+        with pytest.raises(HTTPException, match="route changed"):
+            await evaluation_routes.resume_evaluation_run(
+                fixture["project_id"], run.id, actor, db
+            )
+        deployment.price_revision = original_price_revision
+        await db.commit()

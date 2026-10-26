@@ -57,6 +57,7 @@ nav:
   - Retrieval and MCP integration: integrations/retrieval-mcp.md
   - GitHub App integration: integrations/github-app.md
   - Evidence provenance: integrations/evidence-plane.md
+  - Skill evolution: integrations/skill-evolution.md
   - Harness integration: harness-integration.md
   - Design system: design-system.md
   - Workflow illustration provenance: assets/workflow-hero-provenance.md
@@ -76,6 +77,7 @@ nav:
       - Milestone 11: milestones/11.md
       - Milestone 12: milestones/12.md
       - Milestone 13: milestones/13.md
+      - Milestone 14: milestones/14.md
       - Web foundation: milestones/parallel-web-foundation.md
   - Contributing: contributing.md
   - Security: security.md

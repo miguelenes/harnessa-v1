@@ -7,14 +7,17 @@ import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from math import ceil
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.harness2 import UPSTREAM_REVISION
 from harnessa.auth.users import current_active_user
+from harnessa.config import settings
 from harnessa.contracts import TaskStage
-from harnessa.db.harness import EvaluationRun, HarnessExperiment, HarnessPolicy
+from harnessa.db.harness import EvaluationRun, HarnessExperience, HarnessExperiment, HarnessPolicy
 from harnessa.db.model_gateway import (
     AliasDeployment,
     ModelAlias,
@@ -24,12 +27,18 @@ from harnessa.db.model_gateway import (
     ModelPool,
     PoolAlias,
 )
-from harnessa.db.models import Project, Task, User
+from harnessa.db.models import Project, Repository, Task, User
 from harnessa.db.session import get_db
 from harnessa.db.specification import SpecificationInterview
+from harnessa.domain.skill_evolution import scopes_overlap, validate_skill_artifact
 from harnessa.services.authorization import require_membership
+from harnessa.services.skill_compatibility import (
+    route_capability_revision,
+    route_manifest,
+    route_snapshot_matches,
+)
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +53,7 @@ class EvaluationRunCreate(BaseModel):
     mode: str = Field(pattern=r"^(parallel|sequential|both)$")
     k: int = Field(ge=1, le=3)
     route_alias: str = Field(min_length=1, max_length=120)
+    skill_experience_id: UUID | None = None
 
 
 class EvaluationRunRead(BaseModel):
@@ -124,6 +134,9 @@ async def _frozen_inputs(
         )
         if interview is None or interview.readiness_state != "READY":
             raise HTTPException(409, "Every evaluation task needs a ready frozen specification")
+        repository = await db.get(Repository, interview.repository_id)
+        if repository is None:
+            raise HTTPException(409, "Every evaluation task needs an authorized repository")
         frozen.append({
             "task_id": str(task.id),
             "title_digest": hashlib.sha256(task.title.encode()).hexdigest(),
@@ -131,8 +144,179 @@ async def _frozen_inputs(
             "specification_hash": interview.artifact_hash,
             "specification_revision": interview.revision,
             "policy_revision": policy.revision,
+            "repository_scope": repository.target_id,
         })
     return frozen, policy.revision
+
+
+async def _frozen_skill_version(
+    db: AsyncSession,
+    project_id: UUID,
+    experience_id: UUID | None,
+    task_inputs: list[dict[str, Any]],
+    route: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if experience_id is None:
+        return []
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    experience = await db.scalar(
+        select(HarnessExperience).where(
+            HarnessExperience.id == experience_id,
+            or_(
+                HarnessExperience.project_id == project_id,
+                (HarnessExperience.organization_id == project.organization_id)
+                & (HarnessExperience.scope_type == "organization")
+                & (HarnessExperience.scope_id == str(project.organization_id)),
+            ),
+        ).with_for_update()
+    )
+    if (
+        experience is None
+        or experience.status != "candidate"
+        or experience.expiry_at <= datetime.now(UTC)
+        or experience.conflict_state != "clear"
+        or not experience.artifact_digest
+        or not experience.artifact_storage_key
+        or not experience.artifact_path
+        or not experience.artifact_size_bytes
+    ):
+        raise HTTPException(409, "Evaluation requires one unexpired, non-conflicting skill candidate")
+    compatibility = experience.compatibility_snapshot
+    if (
+        compatibility.get("route_alias") != route.get("alias")
+        or compatibility.get("model_capability_revision") != route_capability_revision(route)
+    ):
+        raise HTTPException(
+            409,
+            "Skill compatibility must match the exact evaluated route and deployment capabilities",
+        )
+    competing_candidates = list(await db.scalars(select(HarnessExperience).where(
+        HarnessExperience.organization_id == project.organization_id,
+        HarnessExperience.conflict_key == experience.conflict_key,
+        HarnessExperience.status == "candidate",
+        HarnessExperience.id != experience.id,
+        or_(
+            HarnessExperience.project_id == project_id,
+            HarnessExperience.scope_type == "organization",
+        ),
+    )))
+    if any(
+        item.artifact_digest != experience.artifact_digest
+        and scopes_overlap(
+            experience.scope_type,
+            experience.scope_id,
+            experience.repository_scope,
+            item.scope_type,
+            item.scope_id,
+            item.repository_scope,
+        )
+        for item in competing_candidates
+    ):
+        raise HTTPException(409, "Conflicting skill candidates cannot enter evaluation")
+    repositories = {item["repository_scope"] for item in task_inputs}
+    if experience.scope_type == "repository" and repositories != {experience.scope_id}:
+        raise HTTPException(409, "Every evaluation task must match the skill's repository scope")
+    if experience.scope_type == "project" and experience.scope_id != str(project_id):
+        raise HTTPException(409, "Skill project scope does not match the evaluation project")
+    if experience.scope_type == "task" and {item["task_id"] for item in task_inputs} != {experience.scope_id}:
+        raise HTTPException(409, "Task-scoped skills require an evaluation of their exact task only")
+    if experience.scope_type == "organization" and experience.scope_id != str(project.organization_id):
+        raise HTTPException(409, "Skill organization scope does not match the evaluation project")
+    store = LocalArtifactStore(Path(settings.artifact_root))
+    state = store.verify_reference(
+        experience.artifact_storage_key,
+        expected_digest=experience.artifact_digest,
+        expected_size=experience.artifact_size_bytes,
+        max_bytes=64_000,
+    )
+    if state != "verified":
+        raise HTTPException(409, "Skill artifact CAS reference failed verification")
+    content = (store.root / experience.artifact_storage_key).read_text(encoding="utf-8")
+    try:
+        artifact = validate_skill_artifact(experience.artifact_path, content)
+    except ValueError as exc:
+        raise HTTPException(409, "Skill artifact schema is invalid") from exc
+    if artifact.digest != experience.artifact_digest:
+        raise HTTPException(409, "Skill artifact changed after it was recorded")
+    return [{
+        "id": str(experience.id),
+        "experience_key": experience.experience_key,
+        "version": experience.version,
+        "candidate_digest": experience.candidate_digest,
+        "artifact_digest": experience.artifact_digest,
+        "artifact_path": experience.artifact_path,
+        "artifact_storage_key": experience.artifact_storage_key,
+        "artifact_size_bytes": experience.artifact_size_bytes,
+        "source_kind": experience.source_kind,
+        "scope_type": experience.scope_type,
+        "scope_id": experience.scope_id,
+        "license_id": experience.license_id,
+    }]
+
+
+async def _route_manifest(
+    db: AsyncSession, project_id: UUID, route_alias: str
+) -> dict[str, Any]:
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    try:
+        return await route_manifest(db, project.organization_id, route_alias)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+def _evaluation_manifest(
+    *,
+    suite: str,
+    task_inputs: list[dict[str, Any]],
+    mode: str,
+    k: int,
+    route_alias: str,
+    route: dict[str, Any],
+    skill_versions: list[dict[str, Any]],
+    policy_revision: int,
+    estimate: Decimal,
+    budget: ModelBudgetPolicy,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "suite": suite,
+        "suite_revision": UPSTREAM_REVISION,
+        "task_inputs": task_inputs,
+        "task_subset_seed": None,
+        "common_base": sorted({item["base_sha"] for item in task_inputs}),
+        "candidate_diff": {"skill_versions": skill_versions},
+        "mode": mode,
+        "k": k,
+        "model_route_policy": route,
+        "route_alias": route_alias,
+        "harness_policy_revision": policy_revision,
+        "executor": {
+            "name": "opencode-acp",
+            "image": settings.acp_agent_image,
+            "tool_revision": settings.acp_harness_revision,
+            "mcp_grants_revision": None,
+        },
+        "harness_revision": UPSTREAM_REVISION,
+        "skill_versions": skill_versions,
+        "benchmark": {"revision": UPSTREAM_REVISION, "judge_revision": None},
+        "budget": {
+            "max_cost_usd": str(estimate),
+            "max_output_tokens": budget.max_output_tokens,
+            "max_steps": budget.max_steps,
+            "max_attempts": budget.max_attempts,
+            "project_limit_usd": str(budget.probe_project_limit_usd),
+            "task_limit_usd": str(budget.probe_task_limit_usd),
+            "run_limit_usd": str(budget.probe_run_limit_usd),
+        },
+        "environment": {"image_digest": settings.acp_agent_image},
+        "evidence_artifacts": [],
+        "max_tasks": MAX_EVALUATION_TASKS,
+        "estimate_usd": str(estimate),
+    }
 
 
 async def _estimate_cost(
@@ -249,15 +433,25 @@ async def evaluation_dry_run(
     harness_policy = await db.scalar(select(HarnessPolicy).where(HarnessPolicy.project_id == project_id))
     if harness_policy is None or body.k > harness_policy.max_k:
         raise HTTPException(422, "Evaluation exceeds the configured Harness² sample policy")
-    estimate, _ = await _estimate_cost(
+    estimate, budget = await _estimate_cost(
         db, project_id, body.route_alias, task_ids=body.task_ids, mode=body.mode, k=body.k
     )
-    manifest = {
-        "schema_version": 1, "suite": body.suite, "suite_revision": UPSTREAM_REVISION,
-        "task_inputs": tasks, "mode": body.mode, "k": body.k,
-        "route_alias": body.route_alias, "harness_policy_revision": policy_revision,
-        "max_tasks": MAX_EVALUATION_TASKS, "estimate_usd": str(estimate),
-    }
+    route = await _route_manifest(db, project_id, body.route_alias)
+    skills = await _frozen_skill_version(
+        db, project_id, body.skill_experience_id, tasks, route
+    )
+    manifest = _evaluation_manifest(
+        suite=body.suite,
+        task_inputs=tasks,
+        mode=body.mode,
+        k=body.k,
+        route_alias=body.route_alias,
+        route=route,
+        skill_versions=skills,
+        policy_revision=policy_revision,
+        estimate=estimate,
+        budget=budget,
+    )
     return EvaluationDryRun(
         suite=body.suite, manifest=manifest, manifest_digest=_digest(manifest),
         task_count=len(tasks), cost_estimate_usd=str(estimate),
@@ -278,15 +472,25 @@ async def create_evaluation_run(
     harness_policy = await db.scalar(select(HarnessPolicy).where(HarnessPolicy.project_id == project_id))
     if harness_policy is None or body.k > harness_policy.max_k:
         raise HTTPException(422, "Evaluation exceeds the configured Harness² sample policy")
-    estimate, _ = await _estimate_cost(
+    estimate, budget = await _estimate_cost(
         db, project_id, body.route_alias, task_ids=body.task_ids, mode=body.mode, k=body.k
     )
-    manifest = {
-        "schema_version": 1, "suite": body.suite, "suite_revision": UPSTREAM_REVISION,
-        "task_inputs": tasks, "mode": body.mode, "k": body.k,
-        "route_alias": body.route_alias, "harness_policy_revision": policy_revision,
-        "max_tasks": MAX_EVALUATION_TASKS, "estimate_usd": str(estimate),
-    }
+    route = await _route_manifest(db, project_id, body.route_alias)
+    skills = await _frozen_skill_version(
+        db, project_id, body.skill_experience_id, tasks, route
+    )
+    manifest = _evaluation_manifest(
+        suite=body.suite,
+        task_inputs=tasks,
+        mode=body.mode,
+        k=body.k,
+        route_alias=body.route_alias,
+        route=route,
+        skill_versions=skills,
+        policy_revision=policy_revision,
+        estimate=estimate,
+        budget=budget,
+    )
     digest = _digest(manifest)
     prior = await db.scalar(select(EvaluationRun).where(
         EvaluationRun.project_id == project_id, EvaluationRun.stable_key == body.stable_key
@@ -328,7 +532,12 @@ async def create_evaluation_run(
             specification_hash=task["specification_hash"],
             specification_revision=task["specification_revision"],
             policy_revision=policy_revision, harness2_revision=UPSTREAM_REVISION,
-            result={"route_alias": body.route_alias, "evaluation_manifest_digest": digest},
+            result={
+                "route_alias": body.route_alias,
+                "route_capability_revision": route_capability_revision(route),
+                "evaluation_manifest_digest": digest,
+                "skill_versions": skills,
+            },
         )
         if interview is None:
             raise HTTPException(409, "A frozen evaluation task changed during manifest creation")
@@ -410,6 +619,17 @@ async def resume_evaluation_run(
     summary = await _read_run(db, run)
     if summary.status not in {"failed", "blocked"}:
         raise HTTPException(409, "Only failed evaluation runs can be resumed")
+    manifest = run.manifest
+    route_alias = manifest.get("route_alias") if isinstance(manifest, dict) else None
+    frozen_route = manifest.get("model_route_policy") if isinstance(manifest, dict) else None
+    if not isinstance(route_alias, str) or run.manifest_digest != _digest(manifest):
+        raise HTTPException(409, "The frozen evaluation manifest is invalid; create a new evaluation")
+    try:
+        current_route = await _route_manifest(db, project_id, route_alias)
+    except HTTPException as exc:
+        raise HTTPException(409, "The frozen evaluation route is unavailable; create a new evaluation") from exc
+    if not route_snapshot_matches(frozen_route, current_route, route_alias):
+        raise HTTPException(409, "The evaluation route changed; create a new evaluation manifest")
     policy = await db.scalar(select(HarnessPolicy).where(HarnessPolicy.project_id == project_id))
     children = list(await db.scalars(select(HarnessExperiment).where(
         HarnessExperiment.id.in_([UUID(value) for value in run.experiment_ids])

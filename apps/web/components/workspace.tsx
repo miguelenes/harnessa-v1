@@ -587,6 +587,34 @@ function useProjectRuns(projectId: string, tasks: Task[]) {
   return { runs, error };
 }
 
+function experimentResultSummary(value: unknown): string {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "No structured result summary is available.";
+  const result = value as Record<string, unknown>;
+  const holdout = typeof result.holdout_evaluation === "object" && result.holdout_evaluation !== null
+    ? (result.holdout_evaluation as Record<string, unknown>).status
+    : null;
+  const holdoutStatus = ["passed", "failed", "blocked", "unavailable", "unknown", "not_run"].includes(String(holdout))
+    ? String(holdout)
+    : "not available";
+  return [
+    `Matched comparison: ${result.comparison_successful === true ? "passed" : "not passed"}`,
+    `Composed run: ${result.composed_successful === true ? "passed" : "not passed"}`,
+    `Holdout: ${holdoutStatus}`,
+    `Candidate: ${result.experience_candidate ? "recorded" : "not produced"}`,
+  ].join("\n");
+}
+
+function componentDiffSummary(value: unknown): string {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "Component diff unavailable.";
+  const diff = value as Record<string, unknown>;
+  const count = (key: string) => Array.isArray(diff[key]) ? (diff[key] as unknown[]).length : 0;
+  return `Components added: ${count("added")}\nComponents removed: ${count("removed")}\nComponents modified: ${count("modified")}`;
+}
+
+function experienceArtifactHref(projectId: string, experienceId: string): string {
+  return `${API}/projects/${encodeURIComponent(projectId)}/harness-experiences/${encodeURIComponent(experienceId)}/artifact`;
+}
+
 function HarnessStudioView({ projectId, tasks }: { projectId: string; tasks: Task[] }) {
   const visibleTasks = useMemo(() => tasks.slice(0, 50), [tasks]);
   const { runs, error } = useProjectRuns(projectId, visibleTasks);
@@ -605,6 +633,20 @@ function HarnessStudioView({ projectId, tasks }: { projectId: string; tasks: Tas
   const experiences = Array.isArray(harness?.experiences) ? harness.experiences as Record<string, unknown>[] : [];
   const manifest = harness?.manifest as Record<string, unknown> | undefined;
   const components = Array.isArray(manifest?.components) ? manifest.components as Record<string, unknown>[] : [];
+  async function resolveSkillConflict(experience: Record<string, unknown>) {
+    const rationale = window.prompt("Rationale for rejecting every candidate in this conflicting skill group");
+    if (!rationale?.trim()) return;
+    const response = await fetch(`${API}/projects/${projectId}/harness-experiences/${String(experience.id)}/resolve-conflict`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
+      body: JSON.stringify({ stable_key: crypto.randomUUID(), rationale: rationale.trim() }),
+    });
+    if (!response.ok) { setHarnessError(response.status === 403 ? "Resolving skill conflicts requires project administrator access." : "Skill conflict resolution failed."); return; }
+    setHarnessError("Conflicting candidates were rejected and audited. Reimport the selected artifact to create a clean candidate version.");
+    const refreshed = await fetch(`${API}/projects/${projectId}/harness`, { credentials: "include", cache: "no-store" });
+    if (refreshed.ok) setHarness(await refreshed.json() as Record<string, unknown>);
+  }
+
   async function decideExperience(experience: Record<string, unknown>, action: "promote" | "rollback") {
     const rationale = window.prompt(`Rationale for ${action} of this exact experience version`);
     if (!rationale?.trim()) return;
@@ -617,14 +659,16 @@ function HarnessStudioView({ projectId, tasks }: { projectId: string; tasks: Tas
     const refreshed = await fetch(`${API}/projects/${projectId}/harness`, { credentials: "include", cache: "no-store" });
     if (refreshed.ok) setHarness(await refreshed.json() as Record<string, unknown>);
   }
-  return <div className="space-y-4"><Card><CardHeader><CardTitle>Harness Studio</CardTitle><CardDescription>Project harness versions, immutable host policy, experiment history, component diffs, and authorized probe evidence.</CardDescription></CardHeader><CardContent>{harnessError ? <Alert variant="destructive"><AlertDescription>{harnessError}</AlertDescription></Alert> : !harness ? <p role="status">Loading project harness evidence…</p> : <div className="space-y-4"><p className="text-sm">Harness² {String(manifest?.upstream_revision ?? "unavailable")} · {String(manifest?.upstream_license ?? "unknown license")} · shared harness activation requires reviewed promotion.</p><ul className="grid gap-2 sm:grid-cols-2">{components.map((component, index) => <li key={String(component.category ?? index)} className="rounded-lg border border-[var(--border)] p-3"><strong>{String(component.category)}</strong><p className="text-xs text-[var(--muted-foreground)]">{Array.isArray(component.paths) ? component.paths.join(", ") : "No mapped paths"}</p></li>)}</ul><h3 className="font-semibold">Experiment history</h3>{experiments.length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No task-level experiments are recorded.</p> : experiments.map((experiment) => <div key={String(experiment.id)} className="rounded-lg border border-[var(--border)] p-3"><div className="flex flex-wrap items-center gap-2"><Badge>{String(experiment.status)}</Badge><span>{String(experiment.mode)} · k={String(experiment.k)} · task {String(experiment.task_id)}</span></div><p className="mt-1 text-xs text-[var(--muted-foreground)]">Base {String(experiment.base_sha)} · spec {String(experiment.specification_hash)} · {String(experiment.upstream_revision)}</p><pre className="mt-2 overflow-auto text-xs">{JSON.stringify(experiment.result, null, 2)}</pre></div>)}<h3 className="font-semibold">Probe comparisons</h3>{probes.length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No baseline, candidate, or composed probe evidence is recorded.</p> : probes.map((probe, index) => <div key={`${String(probe.label)}-${index}`} className="rounded-lg border border-[var(--border)] p-3"><div className="flex flex-wrap items-center gap-2"><strong>{String(probe.label)}</strong><Badge>{String(probe.phase)} · {String(probe.status)}</Badge>{typeof probe.delivered === "boolean" && <span>{probe.delivered ? "Delivered" : "Not delivered"}</span>}{typeof probe.wall_ms === "number" && <span>{probe.wall_ms} ms</span>}</div><pre className="mt-2 overflow-auto text-xs">{JSON.stringify(probe.component_diff, null, 2)}</pre><p className="text-xs text-[var(--muted-foreground)]">Trace {String(probe.trace_digest ?? "not captured")} · harness {String(probe.harness_digest ?? "unknown")}</p></div>)}<h3 className="font-semibold">Cross-task experience versions</h3>{experiences.length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No evidence-backed experience candidates are recorded.</p> : experiences.map((experience) => <div key={String(experience.id)} className="rounded-lg border border-[var(--border)] p-3"><div className="flex flex-wrap items-center gap-2"><strong>{String(experience.cue)}</strong><Badge>{String(experience.status)} · v{String(experience.version)}</Badge></div><p className="mt-2 text-sm">{String(experience.lesson)}</p><p className="text-xs text-[var(--muted-foreground)]">Scope {String(experience.repository_scope)} / {String(experience.domain_scope)} · conflict {String(experience.conflict_key)} · expires {new Date(String(experience.expiry_at)).toLocaleDateString()}</p><p className="text-xs text-[var(--muted-foreground)]">Evidence: {Array.isArray(experience.evidence_refs) ? experience.evidence_refs.map((ref) => typeof ref === "object" && ref !== null ? String((ref as Record<string, unknown>).digest ?? "unknown digest") : "invalid reference").join(", ") : "missing"} · SHA-256 {String(experience.candidate_digest)}</p>{experience.status === "candidate" && <Button size="sm" className="mt-2" onClick={() => void decideExperience(experience, "promote")}>Review and promote</Button>}{experience.status === "superseded" && <Button size="sm" variant="outline" className="mt-2" onClick={() => void decideExperience(experience, "rollback")}>Review and roll back to this version</Button>}</div>)}</div>}</CardContent></Card>{error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}{visibleTasks.map((task) => <Card key={task.id}><CardHeader><CardTitle>{task.title}</CardTitle><CardDescription>{LABELS[task.stage]} · task v{task.version}</CardDescription></CardHeader><CardContent>{(runs[task.id] ?? []).length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No run has been claimed by the scheduler.</p> : <ul className="space-y-2">{(runs[task.id] ?? []).map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] p-3"><span>Attempt {run.attempt}</span><Badge variant={run.status === "FAILED" ? "destructive" : "secondary"}>{run.status}</Badge><span className="text-xs text-[var(--muted-foreground)]">{run.started_at ? new Date(run.started_at).toLocaleString() : "Not started"}</span></li>)}</ul>}</CardContent></Card>)}</div>;
+  return <div className="space-y-4"><Card><CardHeader><CardTitle>Harness Studio</CardTitle><CardDescription>Project harness versions, immutable host policy, experiment history, component diffs, and authorized probe evidence.</CardDescription></CardHeader><CardContent>{harnessError ? <Alert variant="destructive"><AlertDescription>{harnessError}</AlertDescription></Alert> : !harness ? <p role="status">Loading project harness evidence…</p> : <div className="space-y-4"><p className="text-sm">Harness² {String(manifest?.upstream_revision ?? "unavailable")} · {String(manifest?.upstream_license ?? "unknown license")} · shared harness activation requires reviewed promotion.</p><ul className="grid gap-2 sm:grid-cols-2">{components.map((component, index) => <li key={String(component.category ?? index)} className="rounded-lg border border-[var(--border)] p-3"><strong>{String(component.category)}</strong><p className="text-xs text-[var(--muted-foreground)]">{Array.isArray(component.paths) ? component.paths.join(", ") : "No mapped paths"}</p></li>)}</ul><h3 className="font-semibold">Experiment history</h3>{experiments.length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No task-level experiments are recorded.</p> : experiments.map((experiment) => <div key={String(experiment.id)} className="rounded-lg border border-[var(--border)] p-3"><div className="flex flex-wrap items-center gap-2"><Badge>{String(experiment.status)}</Badge><span>{String(experiment.mode)} · k={String(experiment.k)} · task {String(experiment.task_id)}</span></div><p className="mt-1 text-xs text-[var(--muted-foreground)]">Base {String(experiment.base_sha)} · spec {String(experiment.specification_hash)} · {String(experiment.upstream_revision)}</p><pre className="mt-2 overflow-auto text-xs">{experimentResultSummary(experiment.result)}</pre></div>)}<h3 className="font-semibold">Probe comparisons</h3>{probes.length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No baseline, candidate, or composed probe evidence is recorded.</p> : probes.map((probe, index) => <div key={`${String(probe.label)}-${index}`} className="rounded-lg border border-[var(--border)] p-3"><div className="flex flex-wrap items-center gap-2"><strong>{String(probe.label)}</strong><Badge>{String(probe.phase)} · {String(probe.status)}</Badge>{typeof probe.delivered === "boolean" && <span>{probe.delivered ? "Delivered" : "Not delivered"}</span>}{typeof probe.wall_ms === "number" && <span>{probe.wall_ms} ms</span>}</div><pre className="mt-2 overflow-auto text-xs">{componentDiffSummary(probe.component_diff)}</pre><p className="text-xs text-[var(--muted-foreground)]">Trace {String(probe.trace_digest ?? "not captured")} · harness {String(probe.harness_digest ?? "unknown")}</p></div>)}<h3 className="font-semibold">Cross-task experience versions</h3>{experiences.length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No evidence-backed experience candidates are recorded.</p> : experiences.map((experience) => <div key={String(experience.id)} className="rounded-lg border border-[var(--border)] p-3"><div className="flex flex-wrap items-center gap-2"><strong>{String(experience.cue)}</strong><Badge>{String(experience.status)} · v{String(experience.version)}</Badge></div><p className="mt-2 text-sm">{String(experience.lesson)}</p><p className="text-xs text-[var(--muted-foreground)]">Scope {String(experience.repository_scope)} / {String(experience.domain_scope)} · conflict {String(experience.conflict_key)} · expires {new Date(String(experience.expiry_at)).toLocaleDateString()}</p><p className="text-xs text-[var(--muted-foreground)]">Source {String(experience.source_kind ?? "legacy")} · author {String(experience.author ?? "unknown")} · producer {String(experience.producer ?? "unknown")}</p><p className="text-xs text-[var(--muted-foreground)]">Scope {String(experience.scope_type ?? "repository")}:{String(experience.scope_id ?? experience.repository_scope)} · license {String(experience.license_id ?? "UNKNOWN")} · trust {String(experience.trust_level ?? "unknown")} · conflict {String(experience.conflict_state ?? "unknown")}</p><p className="text-xs text-[var(--muted-foreground)]">Tools declared (no grants): {Array.isArray(experience.allowed_tools) ? experience.allowed_tools.join(", ") || "none" : "unknown"} · dependencies {Array.isArray(experience.dependencies) ? experience.dependencies.join(", ") || "none" : "unknown"}</p><p className="text-xs text-[var(--muted-foreground)]">Artifact {String(experience.artifact_path ?? "none")} · SHA-256 {String(experience.artifact_digest ?? experience.candidate_digest)} · confidence {String(experience.confidence_rationale ?? "not recorded")}</p><p className="text-xs text-[var(--muted-foreground)]">Compatibility {JSON.stringify(experience.compatibility_snapshot ?? {})} · stale reason {JSON.stringify(experience.stale_reason ?? null)}</p><p className="text-xs text-[var(--muted-foreground)]">Evidence: {Array.isArray(experience.evidence_refs) ? experience.evidence_refs.map((ref) => typeof ref === "object" && ref !== null ? String((ref as Record<string, unknown>).digest ?? "unknown digest") : "invalid reference").join(", ") : "missing"}</p>{typeof experience.artifact_digest === "string" && <a className="text-sm underline" href={experienceArtifactHref(projectId, String(experience.id))} target="_blank" rel="noreferrer">Review exact skill artifact</a>}{experience.status === "candidate" && <Button size="sm" className="mt-2" onClick={() => void decideExperience(experience, "promote")}>Review and promote</Button>}{experience.status === "candidate" && experience.conflict_state === "conflict" && <Button size="sm" variant="outline" className="mt-2" onClick={() => void resolveSkillConflict(experience)}>Reject conflicting group</Button>}{experience.status === "superseded" && <Button size="sm" variant="outline" className="mt-2" onClick={() => void decideExperience(experience, "rollback")}>Review and roll back to this version</Button>}</div>)}</div>}</CardContent></Card>{error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}{visibleTasks.map((task) => <Card key={task.id}><CardHeader><CardTitle>{task.title}</CardTitle><CardDescription>{LABELS[task.stage]} · task v{task.version}</CardDescription></CardHeader><CardContent>{(runs[task.id] ?? []).length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No run has been claimed by the scheduler.</p> : <ul className="space-y-2">{(runs[task.id] ?? []).map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] p-3"><span>Attempt {run.attempt}</span><Badge variant={run.status === "FAILED" ? "destructive" : "secondary"}>{run.status}</Badge><span className="text-xs text-[var(--muted-foreground)]">{run.started_at ? new Date(run.started_at).toLocaleString() : "Not started"}</span></li>)}</ul>}</CardContent></Card>)}</div>;
 }
 
 function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[] }) {
   const visibleTasks = useMemo(() => tasks.slice(0, 50), [tasks]);
   const [experiments, setExperiments] = useState<Record<string, unknown>[]>([]);
   const [probeRows, setProbeRows] = useState<Record<string, unknown>[]>([]);
-  const [selectedTask, setSelectedTask] = useState("");
+  const [skillCandidates, setSkillCandidates] = useState<Record<string, unknown>[]>([]);
+  const [selectedTask, setSelectedTask] = useState<string[]>([]);
+  const [selectedSkillId, setSelectedSkillId] = useState("");
   const [routeAlias, setRouteAlias] = useState("harnessa-deepseek-flash");
   const [mode, setMode] = useState("both");
   const [sampleSize, setSampleSize] = useState(1);
@@ -638,16 +682,17 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
   const eligibleTasks = visibleTasks.filter((task) =>
     task.stage === "HARNESS_PROBE" && task.specification_readiness_state === "READY",
   );
-  const evaluationInputs = JSON.stringify([selectedTask, routeAlias.trim(), mode, sampleSize]);
+  const evaluationInputs = JSON.stringify([selectedTask, selectedSkillId, routeAlias.trim(), mode, sampleSize]);
   useEffect(() => {
     let mounted = true;
     void fetch(`${API}/projects/${projectId}/harness`, { credentials: "include", cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error(response.status === 403 ? "Evaluation evidence is not authorized for this project." : "Evaluation evidence is unavailable.");
-        const value = await response.json() as { experiments?: unknown; probes?: unknown };
+        const value = await response.json() as { experiments?: unknown; probes?: unknown; experiences?: unknown };
         if (mounted) {
           setExperiments(Array.isArray(value.experiments) ? value.experiments.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
           setProbeRows(Array.isArray(value.probes) ? value.probes.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : []);
+          setSkillCandidates(Array.isArray(value.experiences) ? value.experiences.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && item.status === "candidate" && typeof item.artifact_digest === "string" && item.conflict_state === "clear") : []);
         }
       })
       .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : "Evaluation evidence is unavailable."); });
@@ -702,16 +747,16 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
     }
   }
   async function previewEvaluationCost() {
-    if (!selectedTask || !routeAlias.trim()) return;
+    if (selectedTask.length === 0 || selectedTask.length > 20 || !routeAlias.trim()) return;
     setBusy(true);
     setError("");
     setNotice("");
-    const inputsAtRequest = JSON.stringify([selectedTask, routeAlias.trim(), mode, sampleSize]);
+    const inputsAtRequest = JSON.stringify([selectedTask, selectedSkillId, routeAlias.trim(), mode, sampleSize]);
     try {
       const response = await fetch(`${API}/projects/${projectId}/evaluations/dry-run`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": sessionStorage.getItem("csrf_token") ?? "" },
-        body: JSON.stringify({ stable_key: `preview-${crypto.randomUUID()}`, suite: "harness2-local", task_ids: [selectedTask], mode, k: sampleSize, route_alias: routeAlias.trim() }),
+        body: JSON.stringify({ stable_key: `preview-${crypto.randomUUID()}`, suite: "harness2-local", task_ids: selectedTask, mode, k: sampleSize, route_alias: routeAlias.trim(), ...(selectedSkillId ? { skill_experience_id: selectedSkillId } : {}) }),
       });
       if (!response.ok) throw new Error(response.status === 409
         ? "Configure the selected probe route and a finite project/run budget before estimating."
@@ -729,7 +774,7 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
     }
   }
   async function startExperiment() {
-    if (!selectedTask || !routeAlias.trim() || !costEstimate) return;
+    if (selectedTask.length === 0 || selectedTask.length > 20 || !routeAlias.trim() || !costEstimate) return;
     setBusy(true);
     setError("");
     setNotice("");
@@ -744,10 +789,11 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
         body: JSON.stringify({
           stable_key: crypto.randomUUID(),
           suite: "harness2-local",
-          task_ids: [selectedTask],
+          task_ids: selectedTask,
           mode,
           k: sampleSize,
           route_alias: routeAlias.trim(),
+          ...(selectedSkillId ? { skill_experience_id: selectedSkillId } : {}),
         }),
       });
       if (!response.ok) {
@@ -840,7 +886,8 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
       return <Card key={String(run.id)}><CardHeader><CardTitle className="flex flex-wrap items-center gap-2">Evaluation {String(run.id)}<Badge variant={run.status === "succeeded" ? "success" : "warning"}>{String(run.status)}</Badge></CardTitle><CardDescription>Manifest {String(run.manifest_digest)} · {String(run.completed_samples)}/{String(run.sample_size)} rollout records · {String(run.missing_samples)} missing · {String(run.failed_samples)} failed · {String(run.unknown_samples)} usage/outcome unknown · cost {run.cost_usd === null ? "unknown" : `$${String(run.cost_usd)}`}</CardDescription></CardHeader><CardContent className="space-y-2"><p className="text-xs">Delivery {String(run.delivery_successes)}/{String(run.delivery_samples)}{interval ? ` · 95% Wilson interval ${(interval[0] * 100).toFixed(1)}–${(interval[1] * 100).toFixed(1)}%` : " · uncertainty unavailable"} · latency p50/p95 {String(run.p50_latency_ms ?? "unknown")}/{String(run.p95_latency_ms ?? "unknown")} ms</p><div className="flex flex-wrap gap-2">{["queued", "running"].includes(String(run.status)) && <Button size="sm" variant="outline" disabled={busy} onClick={() => void updateEvaluationRun(run, "cancel")}>Cancel grouped evaluation</Button>}{["failed", "blocked"].includes(String(run.status)) && <Button size="sm" variant="outline" disabled={busy} onClick={() => void updateEvaluationRun(run, "resume")}>Resume failed children</Button>}</div></CardContent></Card>;
     })}</Card>
     <Card><CardHeader><CardTitle>Run a bounded Harness² comparison</CardTitle><CardDescription>Queues the existing task-level baseline, candidate probes, and composed evaluation. The server enforces the reviewed project harness policy and model budgets; no hidden benchmark data is exposed to the agent.</CardDescription></CardHeader><CardContent className="space-y-4">
-      <label className="grid gap-1 text-sm">Eligible task<select aria-label="Evaluation task" value={selectedTask} onChange={(event) => { setSelectedTask(event.target.value); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="">Select a READY task in Harness probe</option>{eligibleTasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
+      <fieldset className="grid gap-2 rounded-lg border border-[var(--border)] p-3"><legend className="px-1 text-sm font-medium">Matched task subset (up to 20)</legend>{eligibleTasks.slice(0, 20).map((task) => <label key={task.id} className="flex items-start gap-2 text-sm"><input type="checkbox" checked={selectedTask.includes(task.id)} onChange={(event) => { setSelectedTask((current) => event.target.checked ? [...current, task.id].slice(0, 20) : current.filter((id) => id !== task.id)); setCostEstimate(null); }} /><span>{task.title}</span></label>)}{eligibleTasks.length === 0 && <p className="text-sm text-[var(--muted-foreground)]">No task is currently READY in Harness probe. Move an eligible task into that stage after its specification is frozen.</p>}</fieldset>
+      <label className="grid gap-1 text-sm">Candidate skill version (optional)<select aria-label="Candidate skill version" value={selectedSkillId} onChange={(event) => { setSelectedSkillId(event.target.value); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="">No pinned skill candidate</option>{skillCandidates.map((skill) => <option key={String(skill.id)} value={String(skill.id)}>{String(skill.cue)} · v{String(skill.version)} · {String(skill.license_id ?? "UNKNOWN")} · {String(skill.id).slice(0, 8)}</option>)}</select></label>
       {eligibleTasks.length === 0 && <p className="text-sm text-[var(--muted-foreground)]">No task is currently READY in Harness probe. Move an eligible task into that stage after its specification is frozen.</p>}
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="grid gap-1 text-sm">Comparison mode<select aria-label="Comparison mode" value={mode} onChange={(event) => { setMode(event.target.value); setCostEstimate(null); }} className="min-h-10 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3"><option value="both">Parallel and sequential</option><option value="parallel">Parallel</option><option value="sequential">Sequential</option></select></label>
@@ -849,7 +896,7 @@ function EvaluationsView({ projectId, tasks }: { projectId: string; tasks: Task[
       </div>
       {budget ? <p className="text-xs text-[var(--muted-foreground)]">Each request is reserved against project/task/run cost and token ceilings. The estimate assumes the full route context window and configured retry bound; actual usage may be lower. Prior usage can reduce remaining availability.</p> : <p className="text-xs text-[var(--danger)]">No project model budget is configured. Evaluation remains blocked until finite project, task, and run limits are set in Model routing.</p>}
       {costEstimate && costEstimateInputs === evaluationInputs && <p role="status" className="text-sm">Conservative evaluation estimate ${costEstimate.cost_estimate_usd} · {costEstimate.estimate_kind} · manifest {costEstimate.manifest_digest.slice(0, 12)}</p>}
-      <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={!selectedTask || !routeAlias.trim() || busy || eligibleTasks.length === 0 || !budget} onClick={() => void previewEvaluationCost()}>{busy ? "Estimating…" : "Estimate evaluation cost"}</Button><Button disabled={!selectedTask || !routeAlias.trim() || busy || eligibleTasks.length === 0 || !budget || !costEstimate || costEstimateInputs !== evaluationInputs} onClick={() => void startExperiment()}>{busy ? "Updating evaluation…" : "Queue immutable evaluation"}</Button></div>
+      <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={selectedTask.length === 0 || selectedTask.length > 20 || !routeAlias.trim() || busy || eligibleTasks.length === 0 || !budget} onClick={() => void previewEvaluationCost()}>{busy ? "Estimating…" : "Estimate evaluation cost"}</Button><Button disabled={selectedTask.length === 0 || selectedTask.length > 20 || !routeAlias.trim() || busy || eligibleTasks.length === 0 || !budget || !costEstimate || costEstimateInputs !== evaluationInputs} onClick={() => void startExperiment()}>{busy ? "Updating evaluation…" : "Queue immutable evaluation"}</Button></div>
       {notice && <p role="status" className="text-sm">{notice}</p>}
     </CardContent></Card>
     <Card><CardHeader><CardTitle>Repository acceptance</CardTitle><CardDescription>Review task-linked verification and readiness evidence. Task or run status is not an evaluation score.</CardDescription></CardHeader>{visibleTasks.length === 0 ? <Card><CardHeader><CardTitle>No task evidence</CardTitle><CardDescription>Create or select a task to see its specification readiness state.</CardDescription></CardHeader></Card> : visibleTasks.map((task) => <Card key={task.id}><CardHeader><CardTitle>{task.title}</CardTitle><CardDescription>{LABELS[task.stage]} · run {task.run_status}</CardDescription></CardHeader><CardContent>{task.specification_readiness_state ? <div className="flex flex-wrap items-center gap-2"><Badge variant={task.specification_readiness_state === "READY" ? "success" : "warning"}>Specification {task.specification_readiness_state}</Badge><span className="text-sm text-[var(--muted-foreground)]">Revision {task.specification_revision}</span></div> : <p className="text-sm text-[var(--muted-foreground)]">No specification readiness record is attached.</p>}</CardContent></Card>)}</Card>

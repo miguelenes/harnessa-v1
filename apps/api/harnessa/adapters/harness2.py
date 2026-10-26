@@ -11,6 +11,7 @@ from harness2.core import tree as upstream_tree  # type: ignore[import-untyped]
 from harness2.substrate.opencode import OPENCODE_SURFACE  # type: ignore[import-untyped]
 
 from harnessa.adapters.artifacts import LocalArtifactStore, StoredArtifact
+from harnessa.domain.skill_evolution import validate_skill_artifact
 
 UPSTREAM_REVISION = "1cfe254e8d25b15f37048c3730134686abe60335"
 UPSTREAM_LICENSE = "Apache-2.0"
@@ -114,6 +115,8 @@ def validate_product_tree(tree: dict[str, str]) -> dict[str, Any]:
             raise ValueError(f"Harness path is outside the editable upstream surface: {raw_path}")
         if not isinstance(contents, str):
             raise TypeError(f"Harness component must contain UTF-8 text: {raw_path}")
+        if path.startswith("skills/"):
+            validate_skill_artifact(path, contents)
         total += len(contents.encode("utf-8"))
         normalized[path] = contents
     if total > MAX_COMPONENT_BYTES:

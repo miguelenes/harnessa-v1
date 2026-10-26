@@ -23,18 +23,30 @@ from harnessa.adapters.acp_execution import ACPExecutionAdapter
 from harnessa.adapters.artifacts import LocalArtifactStore
 from harnessa.adapters.async_bridge import call_on_event_loop
 from harnessa.adapters.execution import ExecutionFailure, RunInput, StaleLease, TaskInput
-from harnessa.adapters.harness2 import component_diff, validate_product_tree
+from harnessa.adapters.harness2 import UPSTREAM_REVISION, component_diff, validate_product_tree
 from harnessa.adapters.protocols import HarnessEvaluator
 from harnessa.adapters.safe_diagnostics import safe_exception_type_chain
 from harnessa.adapters.specification_workspace import SpecificationWorkspaceError
 from harnessa.config import settings
 from harnessa.contracts import ModelPoolKind
-from harnessa.db.harness import HarnessExperience, HarnessExperiment, HarnessPolicy, HarnessProbeRun
+from harnessa.db.harness import (
+    EvaluationRun,
+    HarnessExperience,
+    HarnessExperiment,
+    HarnessPolicy,
+    HarnessProbeRun,
+)
 from harnessa.db.model_gateway import ModelBudgetPolicy, ModelRequestLedger
 from harnessa.db.models import Project, Repository, Task
 from harnessa.db.orchestration import Run, RunArtifact, RunCheckpoint
 from harnessa.db.session import SessionLocal
 from harnessa.db.specification import SpecificationInterview
+from harnessa.domain.skill_evolution import (
+    changed_skill_artifacts,
+    compatibility_drift,
+    compatibility_snapshot,
+    validate_skill_artifact,
+)
 from harnessa.services.harness_adaptation import (
     FrozenExperiment,
     GatewayHarness2Proposer,
@@ -45,6 +57,11 @@ from harnessa.services.harness_adaptation import (
 from harnessa.services.harness_experience import (
     canonical_experience_evidence_refs,
     experience_candidate_digest,
+)
+from harnessa.services.skill_compatibility import (
+    route_capability_revision,
+    route_manifest,
+    route_snapshot_matches,
 )
 from harnessa.services.specifications import specification_workspace_manager
 from sqlalchemy import func, or_, select
@@ -158,6 +175,44 @@ def _exception_type_chain(error: BaseException, *, limit: int = 4) -> str:
     return safe_exception_type_chain(error, limit=limit)
 
 
+def _materialize_active_skills(
+    base_harness: Path,
+    experiences: list[HarnessExperience],
+    *,
+    substrate: OpencodeSubstrate,
+) -> None:
+    """Copy verified active skill bytes into the fixed OpenCode harness tree."""
+    root = base_harness.resolve()
+    for experience in experiences:
+        digest = experience.artifact_digest
+        storage_key = experience.artifact_storage_key
+        artifact_path = experience.artifact_path
+        if not digest or not storage_key or not artifact_path:
+            raise HarnessAdaptationError("Active skill experience has no immutable artifact reference")
+        artifact_store = LocalArtifactStore(Path(settings.artifact_root))
+        state = artifact_store.verify_reference(
+            storage_key,
+            expected_digest=digest,
+            expected_size=experience.artifact_size_bytes or 0,
+            max_bytes=64_000,
+        )
+        if state != "verified":
+            raise HarnessAdaptationError("Active skill artifact failed content-addressed verification")
+        content = (artifact_store.root / storage_key).read_text(encoding="utf-8")
+        try:
+            skill_artifact = validate_skill_artifact(artifact_path, content)
+        except ValueError as exc:
+            raise HarnessAdaptationError("Active skill artifact failed schema validation") from exc
+        if skill_artifact.digest != digest:
+            raise HarnessAdaptationError("Active skill artifact digest changed")
+        target = (root / skill_artifact.path).resolve()
+        if not target.is_relative_to(root):
+            raise HarnessAdaptationError("Active skill artifact path escaped its harness")
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target.write_text(skill_artifact.content, encoding="utf-8")
+    validate_product_tree(harness_tree.read_tree(substrate.surface(), base_harness))
+
+
 class HarnessACPTaskAdapter:
     """Harness² rollouts executed by independent, fenced Harnessa ACP runs."""
 
@@ -214,6 +269,29 @@ class HarnessACPTaskAdapter:
     ) -> Path:
         self.domain_of(task_id)
         del timeout
+        if harness_dir is not None and self.frozen.skill_artifacts:
+            candidate_root = harness_dir.resolve()
+            for skill in self.frozen.skill_artifacts:
+                path, content = skill.get("path"), skill.get("content")
+                if not isinstance(path, str) or not isinstance(content, str):
+                    raise HarnessAdaptationError("Frozen skill version is malformed")
+                try:
+                    skill_artifact = validate_skill_artifact(path, content)
+                except ValueError as exc:
+                    raise HarnessAdaptationError("Frozen skill version failed schema validation") from exc
+                if skill_artifact.digest != skill.get("digest"):
+                    raise HarnessAdaptationError("Frozen skill version digest changed")
+                cursor = candidate_root
+                for segment in Path(skill_artifact.path).parts:
+                    cursor = cursor / segment
+                    if cursor.is_symlink():
+                        raise HarnessAdaptationError("Frozen skill path crosses a symbolic link")
+                target = (candidate_root / skill_artifact.path).resolve()
+                if not target.is_relative_to(candidate_root):
+                    raise HarnessAdaptationError("Frozen skill version escaped its candidate tree")
+                target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                target.write_text(skill_artifact.content, encoding="utf-8")
+            validate_product_tree(harness_tree.read_tree(self.substrate.surface(), harness_dir))
         run_uuid = uuid5(_RUN_NAMESPACE, f"{self.frozen.experiment_id}:{self.frozen.claim_attempt}:{run_id}")
         run_dir = self.frozen.root / "rollouts" / run_uuid.hex
         with self._semaphore:
@@ -538,6 +616,7 @@ class HarnessExperimentWorker:
             base_harness=base_harness, max_concurrency=max_concurrency, sessions=self._sessions,
             event_loop=asyncio.get_running_loop(),
         )
+        _materialize_active_skills(base_harness, experiences, substrate=adapter.substrate)
         proposer = GatewayHarness2Proposer(
             frozen, max_concurrency=max_concurrency, event_loop=asyncio.get_running_loop()
         )
@@ -645,6 +724,40 @@ class HarnessExperimentWorker:
             route = str(exp.result.get("route_alias", ""))
             if not route:
                 raise HarnessAdaptationError("Frozen probe route is missing")
+            try:
+                current_route = await route_manifest(db, project.organization_id, route)
+            except ValueError as exc:
+                raise HarnessAdaptationError("Frozen probe route capabilities are unavailable") from exc
+            capability_revision = route_capability_revision(current_route)
+            if exp.evaluation_run_id is not None:
+                evaluation = await db.get(EvaluationRun, exp.evaluation_run_id)
+                result = exp.result if isinstance(exp.result, dict) else {}
+                frozen_manifest = evaluation.manifest if evaluation is not None else {}
+                frozen_route = (
+                    frozen_manifest.get("model_route_policy")
+                    if isinstance(frozen_manifest, dict) else None
+                )
+                frozen_alias = (
+                    frozen_manifest.get("route_alias")
+                    if isinstance(frozen_manifest, dict) else None
+                )
+                if (
+                    evaluation is None
+                    or not isinstance(frozen_route, dict)
+                    or result.get("evaluation_manifest_digest") != evaluation.manifest_digest
+                    or not isinstance(frozen_alias, str)
+                    or route != frozen_alias
+                    or not route_snapshot_matches(frozen_route, current_route, frozen_alias)
+                ):
+                    raise HarnessAdaptationError(
+                        "Grouped evaluation route changed since its immutable manifest was frozen"
+                    )
+                if result.get("route_capability_revision") != route_capability_revision(
+                    frozen_route
+                ):
+                    raise HarnessAdaptationError(
+                        "Grouped evaluation route capability revision is invalid"
+                    )
             proposer_run_id = uuid5(_RUN_NAMESPACE, f"{exp.id}:{attempt}:proposer")
             proposer_run_attempt = int(await db.scalar(
                 select(func.max(Run.attempt)).where(Run.task_id == task.id)
@@ -662,14 +775,145 @@ class HarnessExperimentWorker:
                 execution_result={"experiment_id": str(exp.id)},
             ))
             await db.flush()
+            selected_skill_rows: list[dict[str, Any]] = []
+            selected_versions = exp.result.get("skill_versions", [])
+            if not isinstance(selected_versions, list) or len(selected_versions) > 1:
+                raise HarnessAdaptationError("Frozen evaluation skill selection is invalid")
+            for version in selected_versions:
+                if not isinstance(version, dict):
+                    raise HarnessAdaptationError("Frozen evaluation skill version is invalid")
+                try:
+                    skill_id = UUID(str(version["id"]))
+                except (KeyError, ValueError, TypeError) as exc:
+                    raise HarnessAdaptationError("Frozen evaluation skill identity is invalid") from exc
+                skill_row = await db.scalar(select(HarnessExperience).where(
+                    HarnessExperience.id == skill_id,
+                    or_(
+                        HarnessExperience.project_id == project.id,
+                        (HarnessExperience.organization_id == project.organization_id)
+                        & (HarnessExperience.scope_type == "organization")
+                        & (HarnessExperience.scope_id == str(project.organization_id)),
+                    ),
+                ).with_for_update())
+                if (
+                    skill_row is None
+                    or skill_row.status != "candidate"
+                    or skill_row.expiry_at <= datetime.now(UTC)
+                    or skill_row.conflict_state != "clear"
+                    or skill_row.artifact_digest != version.get("artifact_digest")
+                    or skill_row.version != version.get("version")
+                    or skill_row.artifact_storage_key != version.get("artifact_storage_key")
+                    or skill_row.artifact_path != version.get("artifact_path")
+                    or skill_row.artifact_size_bytes != version.get("artifact_size_bytes")
+                    or not skill_row.artifact_digest
+                    or not skill_row.artifact_storage_key
+                    or not skill_row.artifact_path
+                    or not skill_row.artifact_size_bytes
+                ):
+                    raise HarnessAdaptationError("Frozen skill version changed before dispatch")
+                if skill_row.scope_type == "repository" and skill_row.scope_id != repo.target_id:
+                    raise HarnessAdaptationError("Frozen skill version is outside the repository scope")
+                if skill_row.scope_type == "project" and skill_row.scope_id != str(project.id):
+                    raise HarnessAdaptationError("Frozen skill version is outside the project scope")
+                if skill_row.scope_type == "organization" and skill_row.scope_id != str(project.organization_id):
+                    raise HarnessAdaptationError("Frozen skill version is outside the organization scope")
+                if skill_row.scope_type == "task" and skill_row.scope_id != str(task.id):
+                    raise HarnessAdaptationError("Frozen skill version is outside the task scope")
+                store = LocalArtifactStore(Path(settings.artifact_root))
+                artifact_state = store.verify_reference(
+                    skill_row.artifact_storage_key,
+                    expected_digest=skill_row.artifact_digest,
+                    expected_size=skill_row.artifact_size_bytes,
+                    max_bytes=64_000,
+                )
+                if artifact_state != "verified":
+                    raise HarnessAdaptationError("Frozen skill artifact failed CAS verification")
+                skill_content = (store.root / skill_row.artifact_storage_key).read_text(encoding="utf-8")
+                try:
+                    parsed_skill = validate_skill_artifact(skill_row.artifact_path, skill_content)
+                except ValueError as exc:
+                    raise HarnessAdaptationError("Frozen skill failed schema validation") from exc
+                if parsed_skill.digest != skill_row.artifact_digest:
+                    raise HarnessAdaptationError("Frozen skill bytes do not match their digest")
+                selected_skill_rows.append({
+                    "path": parsed_skill.path,
+                    "content": parsed_skill.content,
+                    "digest": parsed_skill.digest,
+                    "experience_id": str(skill_row.id),
+                    "version": skill_row.version,
+                })
             frozen = FrozenExperiment(
                 exp.id, task.id, project.id, project.organization_id, exp.base_sha,
                 exp.specification_hash, exp.specification_revision, exp.policy_revision,
                 exp.mode, exp.k, route, settings.acp_agent_image,
                 settings.acp_harness_revision, root, attempt, proposer_run_id,
+                tuple(selected_skill_rows),
             )
             task_input = TaskInput(task.id, project.id, task.title, task.description, approved_base_sha=exp.base_sha, specification_hash=exp.specification_hash, specification_revision=exp.specification_revision)
-            experiences = list(await db.scalars(select(HarnessExperience).where(HarnessExperience.project_id == exp.project_id, HarnessExperience.status == "active", HarnessExperience.repository_scope == repo.target_id, HarnessExperience.expiry_at > datetime.now(UTC))))
+            now = datetime.now(UTC)
+            scoped_experiences = list(await db.scalars(select(HarnessExperience).where(
+                HarnessExperience.organization_id == project.organization_id,
+                HarnessExperience.status == "active",
+                or_(
+                    (HarnessExperience.scope_type == "repository")
+                    & (HarnessExperience.scope_id == repo.target_id),
+                    (HarnessExperience.scope_type == "project")
+                    & (HarnessExperience.scope_id == str(project.id)),
+                    (HarnessExperience.scope_type == "task")
+                    & (HarnessExperience.scope_id == str(task.id)),
+                    (HarnessExperience.scope_type == "organization")
+                    & (HarnessExperience.scope_id == str(project.organization_id)),
+                ),
+            ).with_for_update()))
+            experiences: list[HarnessExperience] = []
+            for experience in scoped_experiences:
+                compatibility_policy = policy
+                if (
+                    experience.scope_type == "organization"
+                    and experience.project_id != project.id
+                ):
+                    compatibility_policy = await db.scalar(select(HarnessPolicy).where(
+                        HarnessPolicy.project_id == experience.project_id
+                    ))
+                expected_compatibility = compatibility_snapshot(
+                    harness2_revision=exp.harness2_revision,
+                    tool_revision=settings.acp_harness_revision,
+                    policy_revision=(
+                        compatibility_policy.revision if compatibility_policy is not None else None
+                    ),
+                    model_capability_revision=capability_revision,
+                    route_alias=route,
+                    executor_image=settings.acp_agent_image,
+                    repository=(
+                        repo.target_id
+                        if experience.scope_type in {"repository", "task"}
+                        else None
+                    ),
+                    task=str(task.id) if experience.scope_type == "task" else None,
+                    organization=(
+                        str(project.organization_id)
+                        if experience.scope_type == "organization"
+                        else None
+                    ),
+                )
+                drift = compatibility_drift(
+                    experience.compatibility_snapshot, expected_compatibility
+                )
+                if not experience.artifact_digest or not experience.artifact_storage_key:
+                    drift["artifact"] = {"recorded": None, "current": "required"}
+                if experience.expiry_at <= now:
+                    drift["expiry"] = {
+                        "recorded": experience.expiry_at.isoformat(),
+                        "current": "expired",
+                    }
+                if experience.conflict_state != "clear":
+                    drift["conflict"] = {"recorded": experience.conflict_state, "current": "clear_required"}
+                if drift:
+                    experience.status = "stale"
+                    experience.stale_at = now
+                    experience.stale_reason = drift
+                    continue
+                experiences.append(experience)
             await db.commit()
             return frozen, task_input, project.organization_id, repo.target_id, base_harness, experiences, min(policy.max_probe_concurrency, settings.harness2_max_probe_concurrency)
 
@@ -735,6 +979,7 @@ class HarnessExperimentWorker:
             holdout_artifacts: list[dict[str, Any]] = []
             probe_cost_total = Decimal(0)
             probe_cost_known = True
+            probe_evidence: list[dict[str, Any]] = []
             for record in adapter.records:
                 trace = (Path(record["run_dir"]) / "trajectory.txt").read_bytes()[:200_000]
                 store = LocalArtifactStore(Path(settings.artifact_root))
@@ -775,6 +1020,12 @@ class HarnessExperimentWorker:
                         }
                         for item in run_artifacts
                     ],
+                })
+                probe_evidence.append({
+                    "digest": stored.digest,
+                    "kind": record["phase"],
+                    "label": record["label"],
+                    "run_id": str(run_id),
                 })
                 db.add(HarnessProbeRun(
                     organization_id=frozen.organization_id, project_id=frozen.project_id, task_id=frozen.task_id,
@@ -915,7 +1166,7 @@ class HarnessExperimentWorker:
                         "media_type": candidate_metadata_artifact.media_type,
                     }
                 manifest = {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "experiment_id": str(frozen.experiment_id),
                     "task_id": str(frozen.task_id),
                     "project_id": str(frozen.project_id),
@@ -929,6 +1180,15 @@ class HarnessExperimentWorker:
                     "k": frozen.k,
                     "route_alias": frozen.route_alias,
                     "image_revision": frozen.image_revision,
+                    "skill_versions": [
+                        {
+                            "experience_id": item["experience_id"],
+                            "version": item["version"],
+                            "path": item["path"],
+                            "digest": item["digest"],
+                        }
+                        for item in frozen.skill_artifacts
+                    ],
                     "artifacts": holdout_artifacts,
                     "base_harness": {
                         "sha256": base_harness_artifact.digest,
@@ -948,6 +1208,86 @@ class HarnessExperimentWorker:
                     **manifest,
                     "digest": hashlib.sha256(manifest_bytes).hexdigest(),
                 }
+                composed_records = [
+                    record for record in adapter.records
+                    if record["phase"] == "composed"
+                    and record["status"] == "succeeded"
+                    and record["delivered"] is True
+                ]
+                skill_sets = [
+                    changed_skill_artifacts(
+                        base_tree,
+                        record["tree"],
+                        ignore=frozenset(
+                            (item["path"], item["digest"])
+                            for item in frozen.skill_artifacts
+                            if isinstance(item.get("path"), str)
+                            and isinstance(item.get("digest"), str)
+                        ),
+                    )
+                    for record in composed_records
+                ]
+                if skill_sets:
+                    capability_revision = route_capability_revision(
+                        await route_manifest(db, frozen.organization_id, frozen.route_alias)
+                    )
+                    canonical_sets = [
+                        {artifact.path: artifact.digest for artifact in artifacts}
+                        for artifacts in skill_sets
+                    ]
+                    if any(value != canonical_sets[0] for value in canonical_sets[1:]):
+                        result["skill_candidate_state"] = "conflicting_compositions"
+                        result["skill_candidates"] = []
+                    else:
+                        result["skill_candidates"] = []
+                        selected = composed_records[0]
+                        for artifact in skill_sets[0]:
+                            stored_skill = await asyncio.to_thread(
+                                LocalArtifactStore(Path(settings.artifact_root)).put_bytes,
+                                artifact.content.encode("utf-8"),
+                                media_type="text/markdown; charset=utf-8",
+                            )
+                            identity = {
+                                "artifact_digest": stored_skill.digest,
+                                "experiment_id": str(frozen.experiment_id),
+                                "path": artifact.path,
+                                "policy_revision": frozen.policy_revision,
+                                "scope": adapter.repository_scope,
+                            }
+                            candidate_digest = hashlib.sha256(
+                                json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+                            ).hexdigest()
+                            result["skill_candidates"].append({
+                                "path": artifact.path,
+                                "slug": artifact.slug,
+                                "cue": artifact.name,
+                                "lesson": artifact.description,
+                                "license_id": artifact.license_id,
+                                "dependencies": list(artifact.dependencies),
+                                "allowed_tools": list(artifact.declared_tools),
+                                "artifact_digest": stored_skill.digest,
+                                "artifact_storage_key": stored_skill.storage_key,
+                                "artifact_size_bytes": stored_skill.size_bytes,
+                                "candidate_digest": candidate_digest,
+                                "source_run_id": selected["run_uuid"],
+                                "evidence_refs": probe_evidence,
+                                "confidence_rationale": (
+                                    "Derived from an exact changed SKILL.md in the selected composed "
+                                    "harness; one task is an observation only and cannot authorize promotion."
+                                ),
+                                "compatibility_snapshot": compatibility_snapshot(
+                                    harness2_revision=UPSTREAM_REVISION,
+                                    tool_revision=frozen.tool_revision,
+                                    policy_revision=frozen.policy_revision,
+                                    model_capability_revision=capability_revision,
+                                    route_alias=frozen.route_alias,
+                                    executor_image=frozen.image_revision,
+                                    repository=adapter.repository_scope,
+                                ),
+                            })
+                        result["skill_candidate_state"] = (
+                            "derived" if result["skill_candidates"] else "no_changed_skill"
+                        )
                 exp.baseline_digest = next((r["harness_digest"] for r in adapter.records if r["phase"] == "baseline"), None)
                 exp.result = result
                 result_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
