@@ -22,9 +22,18 @@ from harnessa.services.harness_experiments import (
     _assert_holdout_free_tree,
     _exception_type_chain,
     _experience_candidate_draft,
+    _frozen_route_alias,
     _matched_comparison,
     _probe_label,
 )
+
+
+def test_harness_adapter_validates_product_tree_contract() -> None:
+    adapter = HarnessACPTaskAdapter.__new__(HarnessACPTaskAdapter)
+
+    assert adapter.validate_tree({"systemprompt.md": "safe instructions\n"}) is None
+    with pytest.raises(ValueError, match="editable upstream surface"):
+        adapter.validate_tree({"harnessa_policy.py": "cannot override host policy\n"})
 
 
 def test_experience_candidate_is_review_only_and_content_addressed(tmp_path: Path) -> None:
@@ -100,6 +109,14 @@ def test_failed_candidate_is_never_captured_as_experience(tmp_path: Path) -> Non
     )
 
     assert candidate is None
+
+
+def test_harness_experiment_resume_keeps_the_frozen_route() -> None:
+    assert _frozen_route_alias({"route_alias": "deepseek-flash"}) == "deepseek-flash"
+    assert _frozen_route_alias({
+        "adaptation_usage": {"route_alias": "deepseek-flash"}
+    }) == "deepseek-flash"
+    assert _frozen_route_alias({"route_alias": "  ", "adaptation_usage": {}}) == ""
 
 
 def test_exception_chain_records_numeric_rpc_code_without_error_message() -> None:

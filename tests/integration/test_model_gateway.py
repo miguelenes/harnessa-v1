@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -708,3 +708,28 @@ async def test_stale_reservation_reconciliation_releases_capacity_and_charges_es
         assert all(counter.reserved_usd == 0 for counter in counters)
         assert all(counter.estimated_usd == context.reservation.reserved_usd for counter in counters)
     await client.aclose()
+
+
+@pytest.mark.anyio
+async def test_old_task_can_make_model_request_on_a_fresh_within_limit_run(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    data = await gateway_fixture()
+    monkeypatch.setattr(settings, "model_gateway_api_key", SecretStr("sk-fixture-virtual-key"))
+    async with SessionLocal() as db:
+        task = await db.get(Task, data["task_id"])
+        run = await db.get(Run, data["run_id"])
+        assert task is not None and run is not None
+        task.created_at = datetime.now(UTC) - timedelta(hours=2)
+        run.started_at = datetime.now(UTC)
+        await db.commit()
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: success_response("gateway-primary")),
+        base_url="http://litellm",
+    )
+    try:
+        result = await _complete(LiteLLMModelRouter(client=client), data, "old-task-fresh-run")
+        assert result["actual_model"] == "provider/primary-model"
+    finally:
+        await client.aclose()

@@ -37,7 +37,7 @@ export default function SetupPage() {
   const [modelDoctor, setModelDoctor] = useState<ModelDoctor | null>(null);
   const [github, setGithub] = useState<GitHubStatus | null>(null);
   const [runtime, setRuntime] = useState<Check>({ state: "unavailable", detail: "Checking runtime readiness…" });
-  const [alias, setAlias] = useState("harnessa-deepseek-flash");
+  const [alias, setAlias] = useState("deepseek-flash");
   const [authorizePaid, setAuthorizePaid] = useState(false);
   const [probeState, setProbeState] = useState("");
   const [error, setError] = useState("");

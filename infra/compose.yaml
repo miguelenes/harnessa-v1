@@ -297,6 +297,47 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+  holdout-evaluator:
+    profiles: [holdout-evaluator]
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    command: ["python", "-m", "harnessa.holdout_evaluator"]
+    environment:
+      HARNESS_HOLDOUT_EVALUATOR_TOKEN: ${HARNESS_HOLDOUT_EVALUATOR_TOKEN:-}
+      HARNESS_HOLDOUT_SUITE_PATH: /holdout/suite.json
+      HARNESS_HOLDOUT_BASE_DIR: /holdout
+      HARNESS_HOLDOUT_ARTIFACT_ROOT: /var/lib/harnessa/artifacts
+      PYTHONDONTWRITEBYTECODE: "1"
+    ports:
+      - "127.0.0.1:${HARNESS_HOLDOUT_EVALUATOR_PORT:-19094}:8001"
+    volumes:
+      - artifacts:/var/lib/harnessa/artifacts:ro
+      - type: bind
+        source: ${HARNESS_HOLDOUT_DATASET_DIR:-/var/lib/harnessa/private-holdout}
+        target: /holdout
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    restart: "no"
+    mem_limit: 2g
+    cpus: 1.0
+    pids_limit: 128
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "__import__('urllib.request',fromlist=['urlopen']).urlopen('http://127.0.0.1:8001/health/ready',timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [holdout_private]
 volumes:
   pgdata: {}
   artifacts: {}
@@ -308,3 +349,5 @@ networks:
     internal: true
   github_egress: {}
   provider_egress: {}
+  holdout_private:
+    internal: true

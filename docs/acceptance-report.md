@@ -1,6 +1,6 @@
 # M13 release acceptance report
 
-**Status:** M13 remains active. Deterministic offline acceptance and live scenarios pass, including a real isolated-agent issue-to-PR merge, archive/cleanup, duplicate webhook idempotency, browser accessibility checks, synthetic fresh-instance restore, worker crash/restart recovery, and automatic stream reconnect after an API restart. Offline fault-injection tests cover 429 fallback, primary/probe capacity, and promotion/rollback; they do not establish provider-generated rate limiting or live contention. A real task-derived learning candidate/rollback and independent holdout result remain open. No unavailable benchmark or external integration is represented as a score or a pass.
+**Status:** M13 remains active. Deterministic offline acceptance and live scenarios pass, including a real isolated-agent issue-to-PR merge, archive/cleanup, duplicate webhook idempotency, browser accessibility checks, synthetic fresh-instance restore, worker crash/restart recovery, and automatic stream reconnect after an API restart. Offline fault-injection acceptance covers 429 fallback, primary/probe capacity, and promotion/rollback; it does not establish provider-generated rate limiting or live contention. The 2026-10-27 bounded Harness² rerun completed baseline, candidate, and composed probes, but the experiment ended blocked because independent holdout grading was unavailable; it created no accepted learning candidate or promotion. Its five probe rows record 162,526 tokens and $0.05084670, while the global Harnessa ledger separately reads $0.00574385 billed, $0.90121383 estimated, and $0 reserved; these accounting views are not reconciled and must not be summed. The run is not an independent evaluation result. No unavailable benchmark or external integration is represented as a score or a pass.
 
 ## Deterministic, offline evidence
 
@@ -43,7 +43,13 @@ For an evaluator that can be self-hosted without Scale access, **SWE-bench-Live 
 
 The hosted SWE-bench Multimodal `test` service is a real option for independently graded hidden-test evaluation, but it is **not currently a usable Harnessa acceptance path**. The official SWE-bench evaluation guide says Multimodal `test` evaluation is available only through `sb-cli`; the `sb-cli` README's general split list is inconsistent with its dedicated Multimodal submission instructions, which provide the `swe-bench-m test` command. Those instructions require an API key obtained through an email verification flow and describe limited test quota; the related mini-SWE-agent guide describes cloud evaluation as free, while the quota documentation says available runs depend on subscription level. The docs show how to submit predictions and retrieve reports, but I found no documented route for obtaining hidden test task statements and IDs for Harnessa to solve. Harnessa's task-creation contract accepts title and description but has no image/attachment field, and current model compatibility documentation lists no tested vision route. Revisit only if the benchmark maintainers provide an authorized task feed compatible with Harnessa and a verified vision route is configured. No email was sent, account or API key was created, quota was checked, prediction was submitted, or public leaderboard PR opened. [Official SWE-bench evaluation guide](https://github.com/SWE-bench/SWE-bench/blob/main/docs/assets/evaluation.md), [`sb-cli` README](https://github.com/swe-bench/sb-cli), [Multimodal submission guide](https://www.swebench.com/sb-cli/submit-to-leaderboard/), [quota docs](https://www.swebench.com/sb-cli/user-guide/get-quotas/), [cloud evaluation and pricing statement](https://github.com/SWE-agent/mini-swe-agent/blob/main/docs/usage/swebench.md).
 
+An additional task is **SWE-bench Verified `test`**. The current official `sb-cli` documentation explicitly lists that split, supports submissions for selected instance IDs, and provides a quota lookup; its quota documentation says availability varies by subscription. This removes the earlier uncertainty about whether that split can be submitted to, but it still does not expose a documented task-feed API that Harnessa can use to assign a hidden test instance before producing its patch. Getting an API key also requires an email verification flow. The service is therefore a plausible independent grader only after an authorized task feed, bounded quota/cost, and a Harnessa submission/receipt adapter are established. No API key was created, quota was checked, patch or task data was sent, or evaluation run was submitted. [Official `sb-cli` subset/split and prediction options](https://github.com/SWE-bench/sb-cli), [API-key and quota instructions](https://www.swebench.com/sb-cli/authentication/), [quota details](https://www.swebench.com/sb-cli/user-guide/get-quotas/), [selected-instance submission options](https://www.swebench.com/sb-cli/user-guide/submit/).
+
+**SWE-bench Verified dataset-feed safety is not established.** The live Hugging Face dataset card's prose says inference uses the problem statement and base commit, but the same card's feature metadata lists `patch`, `test_patch`, `eval_script`, `FAIL_TO_PASS`, and `PASS_TO_PASS` in the public `test` split. I inspected only the schema/card, not dataset rows. Until the benchmark owner provides a pinned task feed that demonstrably omits those answer/grader fields, do not use this dataset as an answer-hidden task source. This corrects the prior characterization of Verified as a plausible task feed; hosted grading support does not itself provide a safe Harnessa task feed. [SWE-bench Verified dataset card and schema](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified/blob/78f471bf655a3137b2e8a75af1501690ec009ec3/README.md).
+
 M13's implemented local evaluator is the Harnessa-owned Harness² suite: it creates immutable grouped manifests, freezes task/spec/base/policy and route revisions, estimates bounded cost, runs matched baseline/candidate/composed experiments, and summarizes rollouts. It is not an independent evaluator. A private Harnessa-authored synthetic suite would not be independent and is not represented as a hidden benchmark. Scale's official materials describe a private held-out OSS set and a separate commercial set from proprietary partner repositories; the public materials reviewed do not provide an external application, account, endpoint, or task-submission path for either set. Until Scale grants an account/endpoint and authorized task access, confidential/held-out results remain unavailable. This is an external access blocker, not evidence that no such route can be granted privately. [Scale SWE-Bench Pro V2](https://labs.scale.com/leaderboard/swe_bench_pro_public_v2), [Scale benchmark paper](https://labs.scale.com/papers/swe_bench_pro), [paper PDF](https://static.scale.com/uploads/654197dc94d34f66c0f5184e/SWEAP_Eval_Scale%20%289%29.pdf).
+
+On 2026-10-27, Evaligo's SWE-Race was rechecked as a possible third-party hidden-test service: its published protocol uses a separate verifier container and includes a private split. The documented board run is 188 tasks with four attempts each, and its submission flow begins with a contact form; the published protocol runs Evaligo's BenchGen agent rather than Harnessa's configured harness. The user-authorized contact request was submitted on 2026-10-26; no reply was found in the account search performed on the previous turn. Evaligo's page advertises no participant charge while also saying it reports API cost, and does not publish a smaller capped-run option. This is not a ready Harnessa endpoint or a confirmed €20-bounded evaluation. No source, credentials, or keys were shared, and the request was not duplicated. [SWE-Race submission protocol](https://labs.evaligo.com/swe-race/submit), [Evaligo contact form](https://labs.evaligo.com/contact?reason=board).
 
 ## Benchmark licensing and availability
 
@@ -76,7 +82,7 @@ Tracing follow-up PR [#47](https://github.com/miguelenes/harnessa-v1/pull/47) wa
 The live issue-to-interview-to-READY-to-agent-to-PR-merge-to-archive/cleanup flow passed for issue #4. Duplicate redelivery retained one task. Browser layout/accessibility checks and synthetic fresh-instance restore passed. These are completed scenarios and must not be repeated as pending work.
 
 - **Harness² evaluation:** the bounded live probe follow-up is recorded below: five samples ran (three successful deliveries, two failures) and the experiment blocked before independent holdout grading. It is not a score. Primary/probe contention remains unverified. The optional learning step for the completed task was skipped because there was no completed successful Harness² experiment; no learning candidate, promotion, or rollback exists.
-- **Live resilience:** provider 429 failover, worker crash recovery with an in-flight task, and automatic event-stream reconnect after a mid-stream network failure remain unverified. Reload/resume from durable cursor 259 was observed, but this is not a substitute for a mid-stream reconnect test.
+- **Live resilience:** provider-generated 429 failover and concurrent primary/probe contention remain unverified. Worker crash recovery with an in-flight task and automatic event-stream reconnect after an API restart are verified in the later live evidence below. The earlier offline page-reload test alone did not prove reconnect.
 - **Independent evaluator:** the Scale private subset has no public enrollment/task-feed path for this project. Harbor's no-model Oracle smoke used the public SWE-bench Pro V2 split and is not confidential holdout evidence or a Harnessa-backed paid evaluation. A separately permissioned evaluator account/task feed is not available. WorkBuddy-Bench is blocked by its EU-use restriction; JobBench and Harvey LAB lack Harnessa-integrated isolated, metered judges.
 - **External tracing:** OTLP delivery to a production collector has not been configured or verified; loopback export is only test evidence.
 
@@ -127,7 +133,15 @@ This section supersedes the dated pending-state summaries above wherever they co
 
 The local acceptance database contained its sole administrator account but no known password. After saving a mode-0600 database backup, the password was reset for this disposable instance only. The generated credentials remain in mode-0600 local temporary files; no credentials were sent to a service. Chrome's existing Harnessa session now returns the administrator identity and shows the M13 Acceptance workspace. This recovers access to the local acceptance instance and does not configure a production account.
 
-The local LiteLLM gateway is running with the rotated provider credentials sourced from the user's login zsh configuration. Its aliases remain private to the acceptance network; the API is loopback-bound and does not contain provider or GitHub App secrets. The latest `/spend/logs` readback returned 37 rows and $0.019073748 total billed through the acceptance LiteLLM database. The Harnessa global spend row remains capped at $20, with $0.11944080 estimated, $0.00002280 billed in Harnessa's settlement field, and $0 reserved. One expired request reservation was conservatively settled as unknown usage; its $0.034389 maximum is included in the estimate, and its reservation row remains `unknown`. The runtime `MODEL_GLOBAL_BUDGET_USD` is $10, so that lower cap applies. These are separate accounting views; the €20 user ceiling remains the aggregate limit. No additional provider request was sent during this readback.
+The local LiteLLM gateway is running with the rotated provider credentials sourced from the user's login zsh configuration. Its aliases remain private to the acceptance network, and the API is loopback-bound. The latest `/spend/logs` readback returned 37 rows and $0.019073748 total billed through the acceptance LiteLLM database. The Harnessa global spend row remains capped at $20, with $0.11944080 estimated, $0.00002280 billed in Harnessa's settlement field, and $0 reserved. One expired request reservation was conservatively settled as unknown usage; its $0.034389 maximum is included in the estimate, and its reservation row remains `unknown`. The runtime `MODEL_GLOBAL_BUDGET_USD` is $10, so that lower cap applies. These are separate accounting views; the €20 user ceiling remains the aggregate limit. No additional provider request was sent during this readback.
+
+### 2026-10-26 App key output incident and bounded-run recovery
+
+While inspecting the protected Compose environment file, an attempted variable-name listing emitted its multiline `GITHUB_APP_PRIVATE_KEY` value in tool output. The key fingerprint was `SHA256:xr3hD0rEoY7T6eiq1WerB20aDROX25WVf+FNPqoQsag=`; it is treated as exposed. I generated another key through GitHub (`SHA256:XBhPxpG6cXZ2d96B3gC8HbdvP9pYa5MkT8Qfd2zGx0k=`), stored it in a mode-0600 local file, updated the local Compose environment, and recreated only the acceptance API from the current `main` source. The API container's key fingerprint matches the new file and `/health/ready` returned HTTP 200. No GitHub JWT/API authentication was attempted after this replacement. The GitHub key-pairs page now shows nine rows, including the exposed `xr3h...` and previously exposed `RbDd...` fingerprints; every Delete control remains disabled with the “only private key” explanation. Neither revocation is claimed. No provider or evaluator request was made during this recovery.
+
+The acceptance project's `max_steps` was reduced from 500 to 10; all dollar and token budgets were preserved. A bounded one-task, `mode=both`, `k=1` dry-run estimated $0.18800640 against the existing $0.25 probe-run ceiling. The grouped run was queued while the old API image was still serving requests; its manifest lacks the M14 `model_route_policy` snapshot, and the one-shot worker rejected the child before model dispatch. The child is failed, the grouped manifest remains queued, and the spend ledger did not change. The acceptance API now contains the M14 route-snapshot implementation; the stale manifest was not resumed. A new manifest and successful live evaluation remain outstanding.
+
+After fresh GitHub Confirm access on 2026-10-26, all nine App key Delete controls remained disabled. GitHub did accept a webhook-secret change. The local Compose environment was updated and only the acceptance API was recreated; the running API's `GITHUB_WEBHOOK_SECRET` matches the protected local environment file and `/health/ready` returned HTTP 200 on port 18093. The local synthetic webhook verified the rotated secret and replay deduplication; no new external GitHub delivery, provider request, or evaluator request was made during this recovery.
 
 ### Issue-to-PR and lifecycle acceptance
 
@@ -141,7 +155,7 @@ GitHub redelivered the already processed `issues.opened` delivery for issue #4 w
 
 Browser Harness confirmed desktop and 390-pixel mobile layouts, visible keyboard focus, accessible control names, measured light/dark text contrast, and reduced-motion behavior. The board restored its stored event cursor (`259`) and showed live events connected after an online reload. An offline reload reached Chrome's network error page; after restoring network and loading the board again, the workspace and stream became available. This proves reload/resume after connectivity restoration, but a mid-stream disconnect followed by automatic reconnect without a page reload remains unverified. The prior offline emulation without reload did not clear the existing connected indicator, so it is not counted as a stream interruption test.
 
-The disposable Compose database/artifact/Git backup was restored into a fresh instance in the earlier synthetic acceptance, with checksums and provenance continuity verified. Live provider-backed 429 failover, primary/probe contention, worker crash recovery while a task is in flight, and automatic stream reconnect remain unverified. The bounded probe is partial evidence only, as documented below. Deterministic offline coverage is not claimed as live-service acceptance. The external OTLP collector and private/held-out benchmark endpoint are still unavailable. Harbor's SWE-bench Pro V2 smoke used Oracle without model calls; it is not a Harnessa-backed paid run or a confidential holdout score. No score is claimed.
+The disposable Compose database/artifact/Git backup was restored into a fresh instance in the earlier synthetic acceptance, with checksums and provenance continuity verified. Live provider-backed 429 failover and concurrent primary/probe contention remain unverified. Worker crash recovery while a task is in flight and automatic stream reconnect are covered by the later live acceptance evidence above. The bounded probe is partial evidence only, as documented below. Deterministic offline coverage is not claimed as live-service acceptance. The external OTLP collector and private/held-out benchmark endpoint are still unavailable. Harbor's SWE-bench Pro V2 smoke used Oracle without model calls; it is not a Harnessa-backed paid run or a confidential holdout score. No score is claimed.
 
 **M13 remains active.** The real issue-to-interview-to-agent-to-PR-merge-to-archive/cleanup flow, duplicate webhook handling, browser accessibility checks, and synthetic fresh-instance restore have passed. The missing learning candidate/promotion rollback and remaining live resilience/evaluator scenarios prevent completion; do not archive prompt 13 or begin prompt 14 until those criteria are either completed or resolved under the milestone's explicit blocker policy.
 
@@ -151,7 +165,7 @@ The acceptance LiteLLM config now includes the explicit OpenRouter `openai/gpt-o
 
 Evaluation `c0057b5f-21fb-4679-b0df-9a6119f7bfd1` (manifest digest `2f9639053e4263e1c8a84fd48964bc920cc6c7dd96146fa5cb4d2eba43d0ae48`) executed one Harness² task. Persisted results contain five rollout samples: three delivered/succeeded and two failed; Harnessa reports $0.00090260 known sample cost, p50 68,945 ms, and p95 81,160 ms. Eleven successful gateway calls had known usage totaling 61,075 input and 1,540 output tokens; four authentication failures preceded the exact virtual-key model grant, and four transport failures were conservatively tracked with unknown usage. LiteLLM's spend log reports $0.000873661 incremental spend for `openrouter/openai/gpt-oss-20b` and $0.028482925 total for 2026-10-25. The Harnessa lifetime row reads $20 maximum, $0.00002280 billed in its settlement field, $0.20809141 estimated, and $0.00205562 reserved; separate ledger accounting is retained as the conservative application-side view.
 
-The evaluation is **failed/blocked, not a score**: Harnessa marked the experiment `blocked` with `evaluator_not_configured` because no independent holdout grader was configured. The baseline rollout and one candidate rollout also failed, and there is no basis to claim a model improvement. This exercises bounded live probe routing, model usage tracking, trace persistence, and the independent holdout gate; it does not satisfy the holdout, 429 failover, in-flight worker restart, learning rollback, or mid-stream browser reconnect requirements. The acceptance database also exposed a resume defect when the persisted parent row remained `queued` after all child experiments failed; a source fix and dedicated integration regression now derive resumability from the child summary. Focused contract/config tests passed (16), and the resume integration regression passed against separate disposable PostgreSQL/Redis services. User-directed self-review is not independent review and no formal GitHub approval has been submitted.
+The evaluation is **failed/blocked, not a score**: Harnessa marked the experiment `blocked` with `evaluator_not_configured` because no independent holdout grader was configured. The baseline rollout and one candidate rollout also failed, and there is no basis to claim a model improvement. This exercises bounded live probe routing, model usage tracking, trace persistence, and the independent holdout gate. This experiment did not satisfy holdout, 429 failover, worker restart, learning rollback, or browser reconnect; separate later acceptance evidence now covers worker restart and API-stream reconnect, while the other listed gaps remain open. The acceptance database also exposed a resume defect when the persisted parent row remained `queued` after all child experiments failed; a source fix and dedicated integration regression now derive resumability from the child summary. Focused contract/config tests passed (16), and the resume integration regression passed against separate disposable PostgreSQL/Redis services. User-directed self-review is not independent review and no formal GitHub approval has been submitted.
 
 ### Exact approval to GitHub publication follow-up (2026-10-25)
 
@@ -167,7 +181,7 @@ The worktree was refreshed from `origin/main` at `21f20195a5ce2f9c2203e78e17966b
 
 The fresh task created from disposable repository issue #18 completed after a worker restart. Attempt 1 was fenced as `worker_lost` while its gateway request was in flight. Attempt 2 was rejected because the acceptance project's token ceiling had insufficient headroom after conservatively accounting for the unknown-usage reservation. Raising only the disposable project's token ceiling (leaving all dollar ceilings unchanged) allowed attempt 3, fencing token 3, to succeed. The final immutable review bundle passed its README verifier and was approved locally at digest `740ce7af00616bd41bd336a9ea5407131aa0010df7dc94c8a420765ae406a274` and source head `7743c49077603356c187a0bbc80b31bc2681eefc`. GitHub PR [#19](https://github.com/miguelenes/harnessa-m13-acceptance-20261024/pull/19) passed the `M13 Acceptance` check (run `40228589426`, check run `121275270865`) and merged at `5ce9ca299db8785eb3c943afb67e28f1ba492ede`, from published head `3c5d83771f84be9b9af316abb7ce3723eae1a310`. The closed-PR webhook was processed. Because the local review did not map to a GitHub review on the exact published head, app reconciliation correctly reported `merged_unverified`; after independently verifying the PR head, merge commit, and passing check, an operator explicitly confirmed local-manual integration evidence (digest `1a48508f18194a358e102586c0791f117ddb4a5ace081879a393de0707e77965`). The task reached `DONE` / `SUCCEEDED`; archive and cleanup steps succeeded. This is an operator-confirmed local acceptance record, not GitHub-hosted review evidence.
 
-Browser Harness observed a real stream interruption when the idle API container was restarted. The open board tab remained on the same `performance.timeOrigin`; its `/events/stream` request at durable cursor `898` failed with `TypeError: Failed to fetch`, then the client retried at the same cursor and received HTTP 200 without a page reload. This proves reconnect after an API process restart on the local acceptance stack; it is not an internet-path or production-network test.
+Browser Harness observed a real stream interruption when the idle API container was restarted. The open board tab remained on the same `performance.timeOrigin`; its `/events/stream` request at durable cursor `898` failed with `TypeError: Failed to fetch`, then the client retried at the same cursor and received HTTP 200 without a page reload. This proves reconnect after an API process restart on the local acceptance stack; it is not an internet-path or production-network test. This later result supersedes the earlier offline-browser section below, which tested an offline page reload rather than an interrupted live stream.
 
 Using fresh disposable PostgreSQL and Redis services, `uv run --offline pytest -q tests/integration/test_model_gateway.py tests/integration/test_harness_experiment_worker.py tests/test_harness_experiment_worker.py` passed **35 tests**. This includes deterministic primary-route 429 injection with bounded retry/fallback and ledger attribution, probe-capacity/interactive-reserve behavior, and reviewed experience promotion/rollback idempotency. These fault-injected tests are offline evidence; they do not establish provider-generated 429 behavior or live concurrent primary/probe load. The database and Redis services were stopped after the run.
 
@@ -177,6 +191,277 @@ The prior key-pairs page readback was stale: a subsequent authorized refresh sho
 
 ### Credential and exception-redaction follow-up (2026-10-25)
 
-After deleting the previously exposed GitHub App key, the local acceptance `.env` and API container were found to still contain that revoked key. The local `.env` was updated to the verified replacement PEM; a mode-0600 backup was written with the private-key assignment redacted. The Compose-resolved API environment and recreated API container both matched the replacement key without printing key material. API readiness returned HTTP 200, and the authenticated Harnessa GitHub view reported App status `ready`, the `miguelenes` installation active, and the opted-in disposable acceptance repository ready. The revoked key's local PEM file was removed. Five key rows remain in GitHub, including the configured replacement; the other four were not individually matched to active configuration and were left untouched. The webhook secret had already been rotated. No provider request or evaluator call was sent in this follow-up.
+At this 2026-10-26 inspection point, the GitHub key-pairs page showed six rows with all Delete controls disabled and no Confirm access prompt. That was an interim observation; the latest credential state is recorded in the 2026-10-26 refresh below.
 
 M13 PR [#68](https://github.com/miguelenes/harnessa-v1/pull/68) closes raw adapter-exception persistence in scheduler failure rows, dead letters, task transitions, and ACP execution failures. Persisted diagnostics retain bounded exception-type/protocol metadata without exception text. Parallel native helper builds serialize access to their shared atomic temporary destinations; cancellation terminates and reaps the compiler and removes the temporary file before unlocking. Verification: 23 focused ACP/Podman unit tests passed, including cancellation/serialization for both native builders; the scheduler redaction integration regression passed (1) against a fresh disposable PostgreSQL 16.13 and Redis 8.10.2 project; Ruff passed for the affected API/test paths; strict API mypy passed (62 source files); and `git diff --check` passed. An independent review found no actionable issues at exact head `934ac163fa1f162f865cfd8da2c3bed96ac7937d`; hosted required checks are still running. No provider spend occurred. The independent evaluator/holdout, task-derived learning rollback, and remaining live resilience evidence still keep M13 active.
+
+### Private holdout evaluator setup (2026-10-26)
+
+The optional evaluator now runs as a separate rootless Podman container on an
+internal-only network, bound to `127.0.0.1:19094`. Its root filesystem and both
+the private dataset and Harnessa CAS mounts are read-only; all Linux capabilities
+are dropped, `no-new-privileges` is set, and temporary storage, CPU, memory, and
+process counts are bounded. The evaluator container is not attached to the app,
+provider, GitHub, or general-purpose egress networks. Readiness returned HTTP
+200. The evaluator image was built locally from the pinned M13 API image inputs;
+its local image ID is recorded in the operator's container inventory.
+
+The owner-authored private suite is outside Git at
+`/home/menes/.local/share/harnessa/m13-holdout`, mode `0700`; the suite, verifier,
+and source archive are mode `0600`. Dataset `m13-acceptance-holdout` uses
+`LicenseRef-Harnessa-Private-OwnerAuthored`. Revision `1` contained the first
+inert README case; its direct evaluator exercise accepted the patch extracted
+from the actual merged private-repository PR #5. Receipt status was `passed`,
+judge revision `private:m13-acceptance-holdout@1:10c9c4638230d903`, and receipt
+manifest digest
+`06a33501cfa19a99412185ff0e758785f8c19c9125578f33030d2c9c7685227f`. That was a
+local, zero-provider-cost evaluator call, not an Harnessa experiment receipt.
+
+Revision `2` added a second case for the bounded probe task and has canonical
+suite digest
+`0cf1a3570efbf765f1de12d693086b42dd35cebfc2ce5ec2dfb528ec4487f1b3`. The
+current suite therefore contains two owner-authored private fixtures. It remains
+a local synthetic evaluator, not an independent benchmark, third-party
+evaluation, or broad performance measure.
+
+Focused evaluator unit tests, Ruff, and strict mypy pass, including malformed
+manifest, identity, token, path, symlink, boolean-size, and hidden-feedback
+checks. The evaluator service and receipt were exercised directly against the
+actual merged task patch. The live Harnessa experiment result below persisted
+its own failed receipt; no successful experiment receipt or promotable
+task-derived candidate has been produced. Reviewed promotion and rollback
+remain outstanding.
+
+### Bounded live experiment through the evaluator (2026-10-26)
+
+One `k=1` experiment, `b7ca0c1b-68e5-4707-b0e9-2570a524dcd5`, was dispatched
+through the Harnessa worker and the scoped local LiteLLM route under the existing
+project/task/run limits. The worker produced one baseline, three candidate
+probe rows, and one composed row, all with delivered artifacts. The private
+evaluator returned a durable `failed` receipt for the composed manifest. This
+is a real rejection, not an evaluator pass or a benchmark score; the private
+owner-authored suite remains a single-case fixture and is not independent.
+
+The Harnessa cost gate remained `blocked`: two delivered probe rows had unknown
+token usage and no provider-reported cost, so known total cost could not
+authorize promotion. Their exact LiteLLM spend-log rows report status `failure`,
+zero gateway spend, and zero tokens. Harnessa now records those gateway-side
+observations as `usage_reconciled` with null token/provider fields; the original
+per-attempt estimates remain. Four transport-error request IDs had no LiteLLM
+spend-log rows and remain unknown. The experiment is terminal `failed`; there
+is no task-derived candidate, promotion, or rollback.
+The global Harnessa spend ledger read `$0.00284065` billed, `$0.82009662`
+estimated, and `$0.00076514` reserved against its `$20` lifetime ceiling. Some
+Task reservations remain `unknown` and are included conservatively in the
+estimated spend.
+The authorized €20 cap remains in force.
+
+### Credential and usage refresh (2026-10-26)
+
+A stale local PEM at `/tmp/harnessa-m13-private-key.pem` returned HTTP 401
+when used to sign a GitHub App JWT, and that file was removed. The pre-refresh
+API and retained worker used the same `GITHUB_APP_PRIVATE_KEY` Compose setting.
+The retained worker's key fingerprint was `SHA256:XDPOPfYHeX0uLXgDAhcVwOfE38cAfd5Z4RNLsvwmUWI=`; that fingerprint is absent from the current GitHub key list, and a JWT signed with it now returns HTTP 401. The intermediate replacement key `SHA256:RbDd...` authenticated before it was exposed in a later tool output. The current local API uses `SHA256:XBhP...`, and readiness returned HTTP 200. GitHub subsequently accepted a new webhook secret; the recreated API's environment matches the protected local config. A newly signed synthetic `ping` using the rotated secret returned HTTP 202, and replaying the same delivery returned HTTP 202 with `duplicate: true`. This verifies local signature handling and deduplication, not a new external GitHub delivery. The current key page shows nine rows, including exposed `RbDd...` and `xr3h...`; all Delete controls remain disabled even after fresh Confirm access. Neither exposed key's revocation is claimed, and the earlier webhook delivery does not verify the newly rotated secret.
+
+The two zero-spend LiteLLM observations were imported into Harnessa with
+`gateway_billed_usd=0` while provider cost and token counts remained unknown;
+the estimates were retained. A read-only [OpenRouter current-key usage
+lookup](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key)
+returned `$0.16753448` month-to-date at 2026-10-26 01:59 UTC. This is key-wide
+usage and cannot be attributed solely to Harnessa, so it is not added to the
+Harnessa ledger. No model-generation request or paid evaluator call was sent
+during this refresh.
+
+### Post-rotation DeepSeek route check (2026-10-26 02:42 UTC)
+
+From the original authenticated Harnessa browser session, the administrator
+authorized one bounded route check for the configured `deepseek-flash` alias.
+The request succeeded through deployment `deepseek-flash-primary`. The
+Harnessa request ID was `0880b68e-2d9a-4869-824f-2029a99cfe2b`, with LiteLLM
+call ID `c063c8af-e7a5-491a-842c-8bcb2b5d4cc8`. Harnessa records
+`attempt_succeeded` with HTTP 200; the matched LiteLLM spend log reports
+success. Both report known usage (34 input, 1 output token) and `$0.00001140`
+billed. This was a one-token route check,
+not an agent task, benchmark result, or holdout evaluation. An earlier attempt
+from a duplicate browser tab received HTTP 403 because that tab lacked the
+session CSRF token; it did not dispatch a provider request.
+
+After settlement, the Harnessa lifetime budget row reported `$20.00000000`
+maximum, `$0.00285205` billed, `$0.82010802` estimated, and `$0.00076514`
+reserved. Unknown-usage estimates remain conservatively included. The €20
+aggregate ceiling remains active, and the current route check does not verify
+provider-generated 429 handling, live primary/probe contention, or the
+independent holdout evaluator.
+
+
+### Subsequent GitHub App key and webhook rotation status (2026-10-26)
+
+A local environment-inspection command inadvertently emitted continuation lines from the configured multiline GitHub App private key `SHA256:xr3hD0rEoY7T6eiq1WerB20aDROX25WVf+FNPqoQsag=`. A fresh key `SHA256:XBhPxpG6cXZ2d96B3gC8HbdvP9pYa5MkT8Qfd2zGx0k=` was generated and its downloaded PEM is stored with mode `0600` under the operator's private Harnessa configuration. The current local API uses this replacement, and readiness returned HTTP 200. After the user completed fresh GitHub Confirm access, the key list still showed nine rows, including the exposed `RbDd...` and `xr3h...` keys, and all Delete controls remained disabled with “You cannot delete the only private key.” Neither exposed key is confirmed revoked.
+
+GitHub accepted a webhook-secret change. The local Compose environment was updated, only the acceptance API was recreated, and the running API secret matched the protected local environment file. A synthetic `ping` signed with the new secret returned HTTP 202; replaying its delivery returned HTTP 202 with `duplicate: true`. This verifies local signature handling and replay idempotency, not a fresh external GitHub delivery. No provider or evaluator request was made during this recovery.
+
+### M13 evaluator health and exact-head gate refresh (2026-10-26 11:25 UTC)
+
+The separate local holdout service is configured with two cases in the owner-authored `m13-acceptance-holdout` suite (revision `2`, `LicenseRef-Harnessa-Private-OwnerAuthored`). This is a local fixture suite, not an independently administered benchmark or confidential holdout. Its live `/health/ready` endpoint returned HTTP 200 before the readiness fix. No evaluation request was made during this refresh.
+
+Independent review of PR #70 at `bd23739da19a1e32575bc4397b02c71514daafdb` found P2 issue M13-REV-001: readiness did not validate every case archive and verifier. The finding is in [review comment 6414841894](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6414841894). A re-review of `2723e782011425aa43c0fe388ac6326b34070668` found that metadata-only change detection could be bypassed and verified paths were reopened before use; the follow-up findings are in [review comment 6414913508](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6414913508). The immutable-snapshot fix was independently confirmed on `b3d02edf2f0f2b45afd9a62b07a8e137384153d8` with no further findings in [comment 6414937905](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6414937905). Review of report head `71a3e8eebc8a11a790a6c0038f197032e4ac6041` found P2 issue M13-REV-003: readiness accepted syntactically invalid verifier code ([comment 6414973392](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6414973392)); that fix validates syntax without executing verifier code. Review of `472f96d35718157e8a9b1ae38dd86c9625d37171` found P2 issue M13-REV-004: readiness accepted malformed archive bytes when the configured checksum matched ([comment 6415002294](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6415002294)). Review of `5c458f36d358c498b29ad61ff598e7b50fa9ed0d` found P2 issue M13-REV-005: regular-file/directory ancestor conflicts could pass preflight ([comment 6415041660](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6415041660)). The current fix checks every archive member path against regular-file ancestors and includes both member orders in readiness tests. The focused evaluator suite passed (15 tests); Ruff and strict mypy passed for the changed evaluator module. A fresh exact-head review is required.
+
+Hosted Local CI, CodeQL, and Documentation runs for report-only head `bd23739da19a1e32575bc4397b02c71514daafdb` did not start at 11:21 UTC; all failed with the GitHub account billing-lock annotation. The same block recurred for reviewed code head `b3d02edf2f0f2b45afd9a62b07a8e137384153d8` at 11:29 UTC. PR #70 remains open and draft; required hosted checks must successfully run on its final reviewed head before merge. No branch-protection bypass was used.
+
+### Exact-head evaluator refresh (2026-10-26 11:39 UTC)
+
+At the preceding exact-head refresh, PR #70 was at `a335136795047a30b190fc920be6381e71889cd3`. Maintainer self-review of the tar ancestor-conflict fix found no additional issue in that delta ([comment 6415101900](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6415101900)); this is not the independent final review or a formal approval required by the delivery contract. Local verification passed: 15 evaluator tests, Ruff, strict mypy, strict MkDocs, and `git diff --check`. Strict MkDocs completed with an upstream Material for MkDocs 2.0 warning. On that exact head, hosted Local CI, CodeQL Python, and Documentation failed before job execution with `The job was not started because your account is locked due to a billing issue`; the second Local CI run and the JavaScript/TypeScript CodeQL analysis failed for the same reason (check runs `121549987557`, `121549986372`, `121549987824`). A retry in the App key-pairs UI after the user's access challenge still showed nine keys with every Delete control disabled. The exposed rows remain present and neither exposed key is confirmed revoked. No worker was started and no provider or evaluator request was sent in that refresh. M13 remains active.
+
+### Local evaluator image refresh (2026-10-26 11:46 UTC)
+
+The optional holdout evaluator was rebuilt from PR branch head `e6ad8406b40b89dc4512f50fb788c3117b1e76ac` and started on loopback port 19095 beside the prior instance for verification. The evaluator source hash in the container matches the branch source exactly (`c6f5891347f879e764f534cba91ea579d1c4bb0367e064437b333763c96498e2`); its read-only root filesystem, dropped capabilities, `no-new-privileges` setting, and Compose internal-only network were verified from the running container. `/health/ready` returned HTTP 200 for the existing owner-authored suite. The protected worker environment file now points to this instance and remains mode 0600; the stale instance was stopped. No worker process was running, no evaluation request was sent, and no provider call occurred. These checks verify the current local evaluator runtime only. The two-case suite is not independently administered, so independent holdout grading, a task-derived learning candidate/promotion/rollback, provider-generated 429, and live primary/probe contention remain unresolved.
+
+The first replacement container's HTTP readiness check passed, but Podman's container-health state exposed a Compose argument-splitting defect in the Python health probe. The probe was changed to a single whitespace-free `-c` argument and covered by `tests/test_litellm_config.py`; the recreated container now reports `healthy` and the declared probe is one code argument. The focused evaluator/Compose suites pass (21 tests), Ruff, strict MkDocs, and `git diff --check` pass. No paid request or `/evaluate` call was made.
+
+The code change is on exact PR head `ed8fdb62269313dbe2ce8ddfafc491939f7292d3`. Maintainer self-review found no further issue in that update ([comment 6415273400](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6415273400)); this is not the independent final review. Required hosted checks on that head all failed before jobs ran with `The job was not started because your account is locked due to a billing issue`: both Local CI runs (`121554951570`, `121554979654`), CodeQL Python and JavaScript/TypeScript (`121554979969`, `121554979847`), and Documentation build (`121554979821`). Deployment was skipped. The PR cannot merge until the account lock is cleared and required checks pass on the final head.
+
+### Dependency security and local build refresh (2026-10-26 11:53 UTC)
+
+Dependabot advisories #79–#80 identified DOMPurify vulnerabilities fixed in 3.4.17, and advisory #84 identified an Undici 7 vulnerability fixed in 7.30.1. Root pnpm overrides pin those versions and Zod 4.6.7. Current registry metadata for both AG-UI 1.0.3 packages accepts Zod `^3.25.18 || ^4.0.0`; recursive `pnpm why zod` confirms only Zod 4.6.7 remains, including under AG-UI. This resolves the lockfile finding without changing AG-UI versions; GitHub's default-branch Zod alert remains open until the PR merges. Open Python alerts were scoped to the inactive `spikes/orchestration/candidate` dependency set, not the root application lock.
+
+Verification after the lock update: root Vitest 46/46, Cloud Portal Vitest 2/2, marketing static build/artifact check, web typecheck, contracts typecheck, and Cloud Portal Svelte check (zero errors or warnings) passed. The first full web run printed Svelte optimizer warnings; after excluding Svelte from the client and SSR optimizer, a full `pnpm test:web` rerun passed without those warnings. Maintainer review of pnpm peer-snapshot changes found expanded snapshot identities only; package versions and dependency edges are unchanged. No provider or evaluator request was sent.
+
+The GitHub App key-pairs page was refreshed in the authenticated Chrome session; all nine Delete controls remain disabled. No exposed key was revoked. The dependency/report delta was committed and pushed as `270e2898671c3b35373143ac19093731142f7ff5`; maintainer self-review is recorded in [comment 6415375478](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6415375478), not as independent review or formal approval. Both Local CI runs, CodeQL Python/JavaScript, and Documentation failed before execution with the account billing-lock annotation (check runs `121557227018`, `121557257275`, `121557256901`, `121557256564`, `121557256726`); deployment was skipped. PR #70 remains open and draft.
+
+Report-only refresh at exact head `3f6f10f1017eaa299d0c32a7acc7e46c56e8b100`: strict MkDocs and `git diff --check` passed. Maintainer self-review is recorded in [comment 6415386626](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6415386626). Both Local CI runs, both CodeQL analyses, and Documentation again failed before execution with the same account billing-lock message; deployment was skipped. The edit also corrects the preceding lockfile-review status. No independent review or formal approval is recorded.
+
+### Cloud Portal Vitest resolver follow-up
+
+The Cloud Portal test configuration excludes `svelte` from Vitest's client and SSR dependency optimizers. Vitest documents that plugins can automatically add optimizer includes and that matching excludes remove them ([dependency config](https://vitest.dev/config/deps)). The earlier Svelte resolution warnings are gone: the full `pnpm test:web` rerun passed root Vitest (46 tests), Cloud Portal Vitest (2 tests, 99.37% statement coverage), marketing build, and its artifact check. `pnpm typecheck:web`, `pnpm typecheck:contracts`, `pnpm --filter @harnessa/cloud-portal check` (0 errors/warnings), and the Cloud Portal production build also passed after the Zod override.
+
+On exact pre-Zod code head `737921239dd2e37f9aaa4afb94550d3394c3e06c`, both Local CI runs, both CodeQL analyses, and Documentation failed before job execution with the GitHub billing-lock annotation (check runs `121691096204`, `121691139765`, `121691121337`, `121691121815`, `121691121675`); deployment was skipped. A fresh access challenge was completed in Chrome, but all nine App key Delete controls remained disabled. No exposed key was revoked.
+
+### Zod peer compatibility remediation
+
+The root pnpm override now resolves Zod to 4.6.7 throughout the tree. The installed AG-UI client 1.0.3 metadata accepts `^3.25.18 || ^4.0.0`, and the core package identifies Zod 3.25.18+ and 4.x as supported for schema validation ([client package](https://www.npmjs.com/package/%40ag-ui/client), [core package](https://www.npmjs.com/package/%40ag-ui/core)). `pnpm -r why zod` confirms a single 4.6.7 installation. Full `pnpm test:web`, web and contracts typechecks, Cloud Portal check/build, marketing artifact check, strict MkDocs, and `git diff --check` passed.
+
+The fix is on PR #70 at `2103cc8b3fc13b6ae989893644e42ea78000b52c`; maintainer self-review is [comment 6421037210](https://github.com/miguelenes/harnessa-v1/pull/70#issuecomment-6421037210). Its two Local CI runs, CodeQL Python/JavaScript, and Documentation failed before execution with the account billing-lock annotation (check runs `121693110438`, `121693163327`, `121693169737`, `121693169859`, `121693162561`); deployment was skipped. The default-branch Dependabot alert remains open pending merge. No paid provider or evaluator request was made.
+
+### GitHub App key rotation retry (2026-10-26)
+
+After the user's fresh Confirm access challenge, GitHub's key-pairs page showed all Delete controls disabled with the reason “You cannot delete the only private key. Generate a new key first.” I generated an additional key, stored its PEM in the protected local key-rotation directory with mode `0600`, and verified its fingerprint matches the newly listed row. A read-only GitHub `GET /app` signed with that key returned HTTP 200 for the expected App slug. GitHub's documentation says an App can have up to 25 keys and requires generating a replacement before deleting an existing key ([key management documentation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps)); after refreshing, the page still shows ten rows with every Delete button disabled and the same reason. The acceptance API still uses its previously verified replacement key; the new key is not installed. The exposed keys remain unrevoked.
+
+### Post-authentication and exact-head refresh (2026-10-26 16:27 UTC)
+
+After the user completed the latest GitHub Confirm access challenge, I reloaded the App key-pairs page. It showed ten rows, no pending Confirm access prompt, and all ten Delete buttons disabled with “You cannot delete the only private key. Generate a new key first.” No key was deleted. PR #70 remains open and draft at `8a1a1f8d680a0e0dced703a30fa3c588117e266c`. The latest Local CI, CodeQL Python/JavaScript, and Documentation jobs failed before starting; GitHub's check annotation says the account is locked due to a billing issue (for example Local CI check `121698239122`). The authenticated Harnessa browser session had expired and redirected to `/login`; unauthenticated API readiness still returned HTTP 200. No provider request, evaluator request, or task dispatch was made during this refresh. M13 remains active.
+
+### M13 execution-gate refresh (2026-10-26 16:44 UTC)
+
+After the user's latest GitHub Confirm access completion, I reloaded the GitHub
+App key-pairs page. It shows ten key rows, no active Confirm access prompt, and
+all ten Delete controls disabled with “You cannot delete the only private key.
+Generate a new key first.” No key was deleted; the previously exposed keys
+remain unrevoked.
+
+The authenticated app session had expired, so I checked the local acceptance
+database directly. The single experiment created by the prior bounded M13
+request is queued as `01391dd2-9834-4c91-9336-5c9f06b21c31` for task
+`26d01f9b-29d6-472a-85c9-36396da7edd2`, sequential mode, `k=1`, with zero
+attempts. No other experiments are queued or running. A one-shot worker pass
+did not claim it: the acceptance API container has no Podman executable, and
+sandbox validation failed closed with `SandboxUnavailable: Podman executable
+is unavailable`. The stopped worker image also contains no Podman executable.
+The API container has no external holdout evaluator URL configured. Therefore
+no agent sandbox, model request, or evaluator request ran, and this experiment
+has no result.
+
+The live lifetime spend ledger remains `$20.00000000` maximum, `$0.00285205`
+billed, `$0.82087316` estimated, and `$0` reserved. Probe counters have no
+reserved dollars or tokens. These figures are Harnessa's ledger, not a
+provider-account-wide cost total. The €20 aggregate authorization remains the
+spend ceiling.
+
+PR #70 remains open and draft at `b407256d2a041424a0adff464d1bf2f351d8de76`.
+Both Local CI checks (`121709746503`, `121709776807`), CodeQL Python and
+JavaScript/TypeScript (`121709761110`, `121709761159`), and Documentation
+(`121709760132`) failed before execution; the Local CI annotation says the
+account is locked due to a billing issue. Deployment (`121709788518`) was
+skipped. M13 remains incomplete: sandbox execution, an
+independently administered hidden holdout, task-derived learning and rollback,
+provider-generated 429 handling, live primary/probe contention, exposed-key
+revocation, and successful required hosted checks remain unresolved. No
+protection bypass or self-approval was used.
+
+### Disposable GitHub App replacement and rebind follow-up (2026-10-26)
+
+The prior disposable M13 App was deleted at the user's direction; its settings
+URL now returns not found, its Harnessa installation is inactive, and its
+`installation.deleted` event was processed. Replacement App `Harnessa M13
+Acceptance 2026-10-26` (App ID `5483288`, hook ID `703498119`) is installed
+selected-only on `miguelenes/harnessa-m13-acceptance-20261024` (installation
+`175538738`). Harnessa's authenticated status reports the replacement ready and
+the existing repository link re-bound to it, preserving the link and GitHub
+repository IDs. The locally active PEM fingerprint matches GitHub; PEM and
+webhook secret files are mode 0600. Local copies belonging to the deleted App
+were removed. GitHub currently lists three key pairs on the replacement App
+but disables every Delete control with “You cannot delete the only private key.
+Generate a new key first”; only the fingerprint-matched key is configured
+locally. One unused key copy was found mode 0644 and removed, but its GitHub row
+remains; a second extra row has no local copy known. A user-authorized attempt to
+delete the replacement App was rejected with “You can’t perform that action at
+this time.” Invalidating those extra replacement-App keys remains open.
+
+A local signed `ping` was accepted and replayed as a duplicate; this is not a
+GitHub-originated delivery. A replacement-installation rebind regression passed
+(1 PostgreSQL integration test), with Ruff, strict mypy, and `git diff --check`
+passing. PR #70 remains open and draft at `4759bcb2d3dd07d8abe638edf2eb091f133a826f`.
+Local CI, CodeQL, and Documentation again failed before job steps due GitHub's
+account billing lock. The queued M13 experiment still has zero attempts because
+the API container lacks Podman; no independent holdout is configured. No
+provider/evaluator request or spend occurred. These results do not complete M13;
+required hosted checks, safe agent execution, independent evaluation, task-derived
+promotion/rollback, provider-generated rate limiting, and live primary/probe
+contention remain open.
+
+### Host runner and independent evaluator discovery (2026-10-26)
+
+The API container still lacks Podman. On the host, rootless Podman reports
+`rootless=true` with `crun`, the exact digest-pinned OpenCode 2.0.32 image is
+present, and the existing `PodmanSandboxBackend.validate()` passes without
+starting a task or container. The host worker has not been configured against
+the acceptance database; the queued experiment remains untouched.
+
+Official SWE-bench materials describe private Multimodal test evaluation via
+`sb-cli`; key generation requires email verification, and quota lookup precedes
+submission. Its README has conflicting split wording, while the dedicated
+submission guide and FAQ identify the API route. This remains an unprovisioned
+candidate, not an Harnessa integration or result. `SWEBENCH_API_KEY` is absent
+from the login environment; there was no key request, quota query, submission,
+provider request, or spend. Account access, quota, authorized instances, and a
+bounded Harnessa adapter/receipt mapping remain open. See the official
+[sb-cli README](https://github.com/swe-bench/sb-cli/blob/main/README.md),
+[Multimodal submission guide](https://www.swebench.com/sb-cli/submit-to-leaderboard/),
+[quota guide](https://www.swebench.com/sb-cli/user-guide/get-quotas/), and
+[SWE-bench FAQ](https://www.swebench.com/SWE-bench/faq/).
+
+### GitHub App recreation and live webhook recovery (2026-10-26)
+
+The user authorized deleting and recreating the disposable App. GitHub now lists
+only `Harnessa M13 20261026 R2` (App ID `5485689`) with one key pair, installed
+selected-only on `miguelenes/harnessa-m13-acceptance-20261024` (installation
+`175591814`). The new private key authenticated against GitHub's App API. The
+new webhook secret and key are in protected mode-0600 local files, and the API
+container was recreated to load them; readiness returned HTTP 200.
+
+Harnessa registered the new App and installation, verified required permissions,
+rebound the existing repository link while preserving its link and repository
+IDs, and mapped the `miguelenes` actor on the new installation. The real GitHub
+`installation.created` delivery was redelivered after setup, returned HTTP 202,
+and was processed by the webhook-only outbox pass. The two obsolete Harnessa App
+records and installations were disabled/inactivated after checking GitHub's
+current App inventory. No agent worker or model/evaluator request ran. This
+does not close the independent holdout or M13 execution gates. No provider or
+evaluator spend occurred during this recovery.
+
+### Bounded Harness² rerun and local browser-write repair (2026-10-27)
+
+The repaired adapter ran one queued experiment, `fc3d3b0f-d7a8-4391-9f3f-104a52125e22`, for task `26d01f9b-29d6-472a-85c9-36396da7edd2` using the `deepseek-flash` route and the owner-authored local evaluator. The worker recorded five successful probe phases: one baseline, three candidate probes, and one composed probe. The comparison fields report success, but `holdout_evaluation.status` is `unknown` and the experiment is `blocked` with `Independent holdout grading is unavailable`; no learning candidate, acceptance score, promotion, or independent result was created. The probe rows record 162,526 tokens and $0.05084670. A separate global budget readback reports $0.00574385 billed, $0.90121383 estimated, and zero reserved against $20. Those accounting views disagree and are not reconciled; the aggregate €20 ceiling remains in force, and no more provider attempts were made.
+
+The live browser's authenticated writes initially failed because Starlette rejected Chrome's Private Network Access preflight from the configured loopback origin. The API CORS middleware now enables private-network preflight while retaining the explicit configured-origin allowlist, with a regression test that allows the configured origin and rejects an unconfigured origin. After rebuilding only the API container, the preflight returned HTTP 200 with the configured `Access-Control-Allow-Origin`, credentials, and `Access-Control-Allow-Private-Network: true`. Authenticated budget GET/PUT and experiment creation then succeeded through the browser session. The temporary raised token policy was restored to project/task/run limits 2,500,000/1,000,000/500,000, probe limits 1,800,000/700,000/200,000, and `max_steps=10`; dollar caps remain $2/$0.50/$0.25 and probe $0.50/$0.50/$0.25. The database now has zero queued/running experiments, and no managed ACP container remains. `tests/test_cors.py` passed (1 test); Ruff, strict mypy for the middleware module, and `git diff --check` passed. A new documentation build was not run because MkDocs is unavailable in this checkout.
+
+PR #70 remains open and draft. The latest hosted-check evidence is from the prior head and shows required jobs failing before execution due GitHub's account billing lock. This work has not been independently reviewed at its new exact head, and required hosted checks, independent holdout access, task-derived learning with rollback, provider-generated 429, and live primary/probe contention remain open. No protection bypass or merge is claimed.

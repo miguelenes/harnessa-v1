@@ -22,6 +22,17 @@ The queue worker refreshes a database heartbeat while an experiment is active. A
 
 The deterministic upstream demo uses the upstream `DemoAdapter` and `DemoProposer`, not a provider or hidden grader. It executes aggregate and sequential recursion with `k=1`. The product worker has an exact-revision ACP sandbox and probe budget broker, plus an injected, post-finalization evaluator port. Offline integration tests provide a deterministic evaluator fixture and verify it sees finalized CAS references, that the sanitized receipt is persisted, and that private feedback is excluded. The HTTP evaluator adapter is configured only in the worker process with `HARNESS_HOLDOUT_EVALUATOR_URL` and `HARNESS_HOLDOUT_EVALUATOR_TOKEN`; set both or neither. Do not put holdout data, answers, or evaluator policy in the repository or worker configuration. For local development, a loopback evaluator URL is allowed. In Compose, the default worker network is internal; a production evaluator must be reachable through an explicitly managed private service/network, and the worker must not be attached to unrestricted provider egress solely for grading. A missing or misconfigured evaluator cannot satisfy acceptance or promotion. No behavioral improvement or score is claimed without accepted live evidence.
 
+For a narrow owner-authored local holdout suite, the optional `holdout-evaluator`
+Compose profile runs `harnessa.holdout_evaluator` on a dedicated no-egress network.
+It mounts only the artifact CAS and a read-only operator-owned dataset, validates
+the canonical manifest and exact task/project/base binding, applies composed Git
+patches to a checked source archive, and returns only a manifest-bound
+pass/fail receipt. The suite path must remain outside the repository and ACP
+workspace. This profile supports inert-content verifiers only; it does not run
+candidate code or replace an independent benchmark service. See
+[`development/private-holdout-evaluator.md`](development/private-holdout-evaluator.md)
+for setup and data-retention requirements.
+
 The upstream library is early-stage research software. Harnessa pins its dependency and isolates imports and schema assumptions behind one adapter. Revalidate the compatibility tests before changing the pin. Keep the host-policy and evaluator revisions immutable when updating upstream.
 
 ## Migration and recovery

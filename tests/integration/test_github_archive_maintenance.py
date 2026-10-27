@@ -1931,3 +1931,107 @@ async def test_post_merge_archive_publishes_one_tracked_pr_from_current_base(
         assert operator_status.configured_apps == []
         assert operator_status.installations == []
         assert operator_status.webhook_health == {}
+
+
+@pytest.mark.anyio
+async def test_github_repository_link_can_rebind_to_replacement_installation(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, repository_id, actor, repository, _manager = await _specification_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(
+        settings,
+        "github_secret_references_json",
+        json.dumps({"webhook-key": "GITHUB_WEBHOOK_SECRET", "app-key": "GITHUB_APP_PRIVATE_KEY"}),
+    )
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "fixture-webhook-secret")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "fixture-private-key")
+
+    class SetupClient:
+        repository_id = 4321
+
+        async def get_installation(self, *, app_id: int, **_kwargs: object) -> dict[str, object]:
+            return {
+                "app_id": app_id,
+                "account": {"id": 456, "login": "fixture", "type": "Organization"},
+                "repository_selection": "selected",
+                "permissions": APP_REQUIRED_PERMISSIONS,
+            }
+
+        async def request_installation(self, **_kwargs: object) -> dict[str, object]:
+            return {"id": self.repository_id, "full_name": repository.target_id}
+
+    monkeypatch.setattr(github_routes, "_client", SetupClient)
+    async with SessionLocal() as db:
+        old_app = await github_routes.register_github_app(
+            GitHubAppConfigurationCreate(
+                app_id=999,
+                webhook_id=123,
+                private_key_secret_ref="app-key",
+                webhook_secret_ref="webhook-key",
+            ),
+            actor,
+            db,
+        )
+        old_installation = await github_routes.register_github_installation(
+            GitHubInstallationCreate(app_configuration_id=old_app.id, installation_id=456),
+            actor,
+            db,
+        )
+        body = GitHubRepositoryOptIn(
+            installation_id=old_installation.id,
+            github_repository_id=4321,
+            required_checks=["Local CI"],
+            topic_label="harnessa",
+        )
+        link = await github_routes.opt_in_github_repository(
+            project_id, repository_id, body, actor, db
+        )
+        await github_routes.opt_out_github_repository(project_id, repository_id, actor, db)
+
+        replacement_app = await github_routes.register_github_app(
+            GitHubAppConfigurationCreate(
+                app_id=1000,
+                webhook_id=124,
+                private_key_secret_ref="app-key",
+                webhook_secret_ref="webhook-key",
+            ),
+            actor,
+            db,
+        )
+        replacement_installation = await github_routes.register_github_installation(
+            GitHubInstallationCreate(
+                app_configuration_id=replacement_app.id,
+                installation_id=457,
+            ),
+            actor,
+            db,
+        )
+        rebound = await github_routes.opt_in_github_repository(
+            project_id,
+            repository_id,
+            body.model_copy(update={"installation_id": replacement_installation.id}),
+            actor,
+            db,
+        )
+        assert rebound.id == link.id
+        assert rebound.installation_id == replacement_installation.id
+        assert rebound.github_repository_id == 4321
+        assert rebound.opted_in is True
+
+        SetupClient.repository_id = 9876
+        with pytest.raises(HTTPException) as different_target:
+            await github_routes.opt_in_github_repository(
+                project_id,
+                repository_id,
+                body.model_copy(
+                    update={
+                        "installation_id": replacement_installation.id,
+                        "github_repository_id": 9876,
+                    }
+                ),
+                actor,
+                db,
+            )
+        assert different_target.value.status_code == 409
