@@ -4,9 +4,9 @@ version = "0.1.0"
 description = "Harnessa modular control plane"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "fastapi==0.159.1",
+  "fastapi==0.162.0",
   "uvicorn[standard]==0.54.0",
-  "pydantic-settings==2.16.1",
+  "pydantic-settings==2.16.2",
   "sqlalchemy[asyncio]==2.0.55",
   "asyncpg==0.32.0",
   "alembic==1.20.1",
@@ -28,15 +28,15 @@ dependencies = [
 retrieval = [
     "llama-index-core==0.14.25",
     "llama-index-vector-stores-qdrant==0.10.4",
-    "qdrant-client==1.19.1",
+    "qdrant-client==1.20.0",
 ]
 
 [dependency-groups]
 dev = [
     "PyYAML==6.0.3",
-    "pytest==9.1.1",
-    "ruff==0.17.1",
-    "mypy==2.4.0",
+    "pytest==9.2.0",
+    "ruff==0.17.3",
+    "mypy==2.4.1",
     "pytest-cov==7.1.0",
     "pytest-xdist==3.8.0",
 ]
